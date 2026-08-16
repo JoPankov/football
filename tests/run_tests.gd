@@ -50,9 +50,15 @@ func _test_bounds() -> void:
 	print("-- bounds")
 	_assert(MatchRules.in_bounds(Vector2i(0, 0)), "origin in bounds")
 	_assert(MatchRules.in_bounds(Vector2i(11, 6)), "far corner in bounds")
-	_assert(not MatchRules.in_bounds(Vector2i(-1, 0)), "negative x out")
-	_assert(not MatchRules.in_bounds(Vector2i(12, 0)), "x=12 out")
+	_assert(MatchRules.in_bounds(MatchRules.HOME_NET), "aether net is playable")
+	_assert(MatchRules.in_bounds(MatchRules.AWAY_NET), "helix net is playable")
+	_assert(not MatchRules.in_bounds(Vector2i(-1, 0)), "negative x beside the net is out")
+	_assert(not MatchRules.in_bounds(Vector2i(12, 0)), "x=12 beside the net is out")
+	_assert(not MatchRules.in_bounds(Vector2i(-1, 2)), "net-adjacent off-pitch is out")
 	_assert(not MatchRules.in_bounds(Vector2i(0, 7)), "y=7 out")
+	var net_steps := MatchRules.move_destinations(MatchRules.HOME_NET, {})
+	_assert(net_steps.size() == 3, "keeper in the net has 3 steps onto the pitch")
+	_assert(Vector2i(0, 3) in net_steps, "net opens onto the old goal-line tile")
 
 
 func _test_adjacency() -> void:
@@ -105,6 +111,9 @@ func _test_kickoff() -> void:
 	_assert(home_st.has_ball, "home starts in possession")
 	_assert(not model.ball.is_loose(), "ball is not loose at kickoff")
 	_assert(model.ball.pos == home_st.pos, "ball starts on the kickoff taker")
+	_assert(model.player_at(MatchRules.HOME_NET).role == "GK", "aether keeper starts in the net")
+	_assert(model.player_at(MatchRules.AWAY_NET).role == "GK", "helix keeper starts in the net")
+	_assert(model.player_at(Vector2i(0, 3)) == null, "goal-line tile in front of aether net is free")
 
 
 func _test_turn_and_selection() -> void:
@@ -169,7 +178,7 @@ func _test_attributes() -> void:
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var st := model.player_at(Vector2i(5, 3))
-	var gk := model.player_at(Vector2i(0, 3))
+	var gk := model.player_at(MatchRules.HOME_NET)
 	var cm := model.player_at(Vector2i(4, 2))
 	_assert(st.accuracy == 13 and st.control == 9, "striker is accuracy/control leaning")
 	_assert(gk.defense == 13 and gk.control == 11, "keeper is defense/control leaning")
@@ -286,10 +295,10 @@ func _test_pass() -> void:
 	model.setup_kickoff()
 	var st := model.player_at(Vector2i(5, 3))
 	var near := model.player_at(Vector2i(5, 2))
-	var gk := model.player_at(Vector2i(0, 3))
+	var gk := model.player_at(MatchRules.HOME_NET)
 	var away := model.player_at(Vector2i(6, 4))
 	_assert(model.can_pass_to(st, near), "can pass to a teammate within 3")
-	_assert(MatchRules.chebyshev(st.pos, gk.pos) == 5, "keeper is 5 tiles away")
+	_assert(MatchRules.chebyshev(st.pos, gk.pos) == 6, "keeper in the net is 6 tiles away")
 	_assert(not model.can_pass_to(st, gk), "cannot pass beyond 3 tiles")
 	_assert(not model.can_pass_to(st, away), "cannot pass to an opponent")
 	_assert(not model.can_pass_to(near, st), "non-carrier cannot pass")
@@ -407,7 +416,7 @@ func _test_controller_click_flow() -> void:
 	_assert(striker != null and striker.has_ball, "click-move kept kickoff possession")
 	_assert(model.current_team == MatchRules.Team.AWAY, "click-move ended the turn")
 	_assert(controller.selected_id < 0, "selection cleared after the action")
-	var enemy_select: Dictionary = controller.handle_cell_clicked(Vector2i(0, 3))
+	var enemy_select: Dictionary = controller.handle_cell_clicked(MatchRules.HOME_NET)
 	_assert(not enemy_select.get("ok", false), "away turn cannot select aether")
 	main.queue_free()
 

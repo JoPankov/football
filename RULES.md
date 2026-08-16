@@ -4,7 +4,9 @@ This is what the game actually does today. Shooting is reserved for a later slic
 
 ## Setup
 
-- Pitch: **12×7** tiles. `x` runs goal to goal (0 = Aether goal line, 11 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing).
+- Pitch: **12×7** tiles plus **two extra goal tiles**. `x` runs goal to goal (0 = Aether goal line, 11 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing).
+- Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 3)`, Helix net `(12, 3)`. Keepers start in the net so they do not occupy a pitch tile.
+- From a net tile the keeper can step to the three adjacent pitch squares in front of goal.
 - Teams: **Aether** (home, cyan, attacks +x) vs **Helix** (away, magenta, attacks −x).
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
 - Aether **#9 ST** starts on the centre spot `(5, 3)` **with the ball**. Helix does not start in possession.

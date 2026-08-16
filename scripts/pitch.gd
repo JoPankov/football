@@ -131,9 +131,26 @@ func _draw() -> void:
 			elif x == MatchRules.GRID_WIDTH - 1:
 				draw_rect(rect, GOAL_AWAY)
 
+	_draw_net_tile(MatchRules.HOME_NET, Color("0a2430"), Color("3ecbff"))
+	_draw_net_tile(MatchRules.AWAY_NET, Color("300a18"), Color("ff4d8d"))
 	_draw_markings(tile, size)
 	_draw_interactive(tile)
 	_draw_pass_preview()
+
+
+func _draw_net_tile(cell: Vector2i, fill: Color, line: Color) -> void:
+	var tile := MatchRules.TILE_SIZE
+	var rect := Rect2(Vector2(cell) * tile, Vector2(tile, tile))
+	draw_rect(rect, fill)
+	draw_rect(rect, Color(line, 0.35))
+	var step := tile / 4.0
+	for i in range(1, 4):
+		var x := rect.position.x + step * float(i)
+		draw_line(Vector2(x, rect.position.y), Vector2(x, rect.end.y), Color(line, 0.28), 1.0)
+	for i in range(1, 4):
+		var y := rect.position.y + step * float(i)
+		draw_line(Vector2(rect.position.x, y), Vector2(rect.end.x, y), Color(line, 0.28), 1.0)
+	draw_rect(rect, line, false, 2.0)
 
 
 func _draw_markings(tile: float, size: Vector2) -> void:

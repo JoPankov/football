@@ -13,7 +13,7 @@ static func slots(team: int) -> Array[Dictionary]:
 
 static func _home() -> Array[Dictionary]:
 	return [
-		_slot(1, "GK", Vector2i(0, 3)),
+		_slot(1, "GK", MatchRules.HOME_NET),
 		_slot(2, "LB", Vector2i(2, 0)),
 		_slot(3, "LCB", Vector2i(2, 2)),
 		_slot(4, "RCB", Vector2i(2, 4)),
@@ -29,7 +29,7 @@ static func _home() -> Array[Dictionary]:
 
 static func _away() -> Array[Dictionary]:
 	return [
-		_slot(1, "GK", Vector2i(11, 3)),
+		_slot(1, "GK", MatchRules.AWAY_NET),
 		_slot(2, "RB", Vector2i(9, 0)),
 		_slot(3, "RCB", Vector2i(9, 2)),
 		_slot(4, "LCB", Vector2i(9, 4)),

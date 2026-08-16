@@ -13,6 +13,8 @@ const PASS_RANGE := 3
 const INTERCEPT_RADIUS := 1.0
 const TILE_SIZE := 72.0
 const CENTER_SPOT := Vector2i(5, 3)
+const HOME_NET := Vector2i(-1, 3)
+const AWAY_NET := Vector2i(12, 3)
 
 ## Ways to roll each 2d6 total (index = sum). 2..12.
 const WAYS_2D6: Array[int] = [0, 0, 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]
@@ -31,8 +33,16 @@ const TEAM_NAME := {
 }
 
 
-static func in_bounds(pos: Vector2i) -> bool:
+static func is_pitch_tile(pos: Vector2i) -> bool:
 	return pos.x >= 0 and pos.x < GRID_WIDTH and pos.y >= 0 and pos.y < GRID_HEIGHT
+
+
+static func is_goal_tile(pos: Vector2i) -> bool:
+	return pos == HOME_NET or pos == AWAY_NET
+
+
+static func in_bounds(pos: Vector2i) -> bool:
+	return is_pitch_tile(pos) or is_goal_tile(pos)
 
 
 static func chebyshev(a: Vector2i, b: Vector2i) -> int:

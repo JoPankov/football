@@ -189,7 +189,7 @@ func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
 		else:
 			_emphasize_stat(_card_ctr, true)
 			_emphasize_stat(_card_b_ctr, true)
-	_card.offset_bottom = 328.0 if compare else 200.0
+	_card.offset_bottom = 380.0 if compare else 216.0
 
 
 func _fill_card(
@@ -298,7 +298,7 @@ func _build_card() -> void:
 	_card.visible = false
 	_card.offset_left = 8.0
 	_card.offset_top = 108.0
-	_card.offset_right = 200.0
+	_card.offset_right = 128.0
 	_card.offset_bottom = 200.0
 	add_child(_card)
 
@@ -308,42 +308,42 @@ func _build_card() -> void:
 	edge.anchor_bottom = 1.0
 	_card.add_child(edge)
 
-	_card_title = _label("", 14, Color("3ecbff"), HORIZONTAL_ALIGNMENT_LEFT)
-	_card_title.offset_left = 12.0
-	_card_title.offset_top = 6.0
-	_card_title.offset_right = 184.0
-	_card_title.offset_bottom = 26.0
+	_card_title = _label("", 12, Color("3ecbff"), HORIZONTAL_ALIGNMENT_LEFT)
+	_card_title.offset_left = 8.0
+	_card_title.offset_top = 4.0
+	_card_title.offset_right = 116.0
+	_card_title.offset_bottom = 22.0
 	_card.add_child(_card_title)
 
-	_card_acc = _stat_label(12, 30, ACC_COLOR)
-	_card_pas = _stat_label(100, 30, PAS_COLOR)
-	_card_def = _stat_label(12, 56, DEF_COLOR)
-	_card_ctr = _stat_label(100, 56, CTR_COLOR)
+	_card_acc = _stat_label(8, 24, ACC_COLOR)
+	_card_pas = _stat_label(8, 44, PAS_COLOR)
+	_card_def = _stat_label(8, 64, DEF_COLOR)
+	_card_ctr = _stat_label(8, 84, CTR_COLOR)
 	_card.add_child(_card_acc)
 	_card.add_child(_card_pas)
 	_card.add_child(_card_def)
 	_card.add_child(_card_ctr)
 
 	_card_vs = _label("VS", 11, Color(0.85, 0.85, 0.9, 0.7), HORIZONTAL_ALIGNMENT_CENTER)
-	_card_vs.offset_left = 12.0
-	_card_vs.offset_top = 88.0
-	_card_vs.offset_right = 184.0
-	_card_vs.offset_bottom = 106.0
+	_card_vs.offset_left = 8.0
+	_card_vs.offset_top = 108.0
+	_card_vs.offset_right = 116.0
+	_card_vs.offset_bottom = 124.0
 	_card_vs.visible = false
 	_card.add_child(_card_vs)
 
-	_card_b_title = _label("", 14, Color("ff4d8d"), HORIZONTAL_ALIGNMENT_LEFT)
-	_card_b_title.offset_left = 12.0
-	_card_b_title.offset_top = 110.0
-	_card_b_title.offset_right = 184.0
-	_card_b_title.offset_bottom = 130.0
+	_card_b_title = _label("", 12, Color("ff4d8d"), HORIZONTAL_ALIGNMENT_LEFT)
+	_card_b_title.offset_left = 8.0
+	_card_b_title.offset_top = 126.0
+	_card_b_title.offset_right = 116.0
+	_card_b_title.offset_bottom = 144.0
 	_card_b_title.visible = false
 	_card.add_child(_card_b_title)
 
-	_card_b_acc = _stat_label(12, 134, ACC_COLOR)
-	_card_b_pas = _stat_label(100, 134, PAS_COLOR)
-	_card_b_def = _stat_label(12, 160, DEF_COLOR)
-	_card_b_ctr = _stat_label(100, 160, CTR_COLOR)
+	_card_b_acc = _stat_label(8, 146, ACC_COLOR)
+	_card_b_pas = _stat_label(8, 166, PAS_COLOR)
+	_card_b_def = _stat_label(8, 186, DEF_COLOR)
+	_card_b_ctr = _stat_label(8, 206, CTR_COLOR)
 	for label in [_card_b_acc, _card_b_pas, _card_b_def, _card_b_ctr]:
 		label.visible = false
 		_card.add_child(label)
@@ -363,8 +363,8 @@ func _build_forecast() -> void:
 	_forecast.visible = false
 	_forecast.anchor_left = 1.0
 	_forecast.anchor_right = 1.0
-	_forecast.offset_left = -268.0
-	_forecast.offset_right = -12.0
+	_forecast.offset_left = -220.0
+	_forecast.offset_right = -8.0
 	_forecast.offset_top = 108.0
 	_forecast.offset_bottom = 360.0
 	add_child(_forecast)
