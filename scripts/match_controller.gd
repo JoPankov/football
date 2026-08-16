@@ -1,7 +1,6 @@
 extends Node2D
 
-## First vertical slice: grid, 11v11, I-go-you-go movement, possession.
-## Pass and shoot are intentionally not implemented yet.
+## Grid, 11v11, I-go-you-go movement, possession, pass, and shoot.
 
 @onready var pitch: Pitch = $Pitch
 @onready var hud: MatchHUD = $HUD
@@ -234,7 +233,7 @@ func _present_result(result: Dictionary) -> void:
 		await tween.finished
 		pitch.sync_ball(model.ball, model.carrier())
 		return
-	if action == "move" or won:
+	if action == "move" or action == "offside" or won:
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.set_parallel(true)
@@ -334,7 +333,8 @@ func _refresh() -> void:
 		passes = model.pass_cells(selected)
 		var choices: Array[Vector2i] = model.choice_cells(selected)
 		var shots: Array[Vector2i] = model.shoot_cells(selected)
-		pitch.set_highlights(selected.pos, moves, contests, passes, choices, shots)
+		var offsides: Array[Vector2i] = model.offside_pass_cells(selected)
+		pitch.set_highlights(selected.pos, moves, contests, passes, choices, shots, offsides)
 	else:
 		pitch.clear_highlights()
 	_update_pass_preview(selected)

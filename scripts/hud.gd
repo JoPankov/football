@@ -96,7 +96,7 @@ func _hint_for(
 		if selected.has_ball:
 			if model.can_shoot(selected):
 				return "Selected %s — gold: shoot at the net. Green: move. Blue: pass." % selected.label()
-			return "Selected %s — green: move. Amber: dribble. Blue: pass to a teammate or empty square. Adjacent teammate: pass or swap." % selected.label()
+			return "Selected %s — green: move. Amber: dribble. Blue: pass. Red: offside pass. Adjacent teammate: pass or swap." % selected.label()
 		return "Selected %s — green: move. Amber: tackle the carrier (DEF vs CTR) or fight for a square (CTR vs CTR)." % selected.label()
 	if holder == null:
 		return "Click any %s player. Hover a player to inspect ACC / DEF / CTR." % acting
@@ -119,6 +119,11 @@ func _event_line(event: Dictionary) -> String:
 		if event.get("saved", false):
 			return "SAVE  %s's shot was held" % event.get("attacker_label", "shooter")
 		return "MISS  %s's shot missed the net" % event.get("attacker_label", "shooter")
+	if action == "offside":
+		return "OFFSIDE  %s  →  %s takes the restart" % [
+			event.get("defender_label", "receiver"),
+			event.get("taker_label", "defender"),
+		]
 	if action == "pass":
 		if event.get("intercepted", false):
 			return "INTERCEPT  %s %s %d+%d=%d  vs  %s %s %d+%d=%d" % [

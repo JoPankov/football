@@ -154,6 +154,51 @@ func pass_cells(passer: PlayerState) -> Array[Vector2i]:
 	return cells
 
 
+func offside_pass_cells(passer: PlayerState) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	if passer == null:
+		return cells
+	for dest in pass_cells(passer):
+		var occupant := player_at(dest)
+		if occupant != null and is_offside_receiver(passer, occupant):
+			cells.append(dest)
+	return cells
+
+
+func team_positions(team: int) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for player in players:
+		if player.team == team:
+			cells.append(player.pos)
+	return cells
+
+
+func is_offside_receiver(passer: PlayerState, receiver: PlayerState) -> bool:
+	if passer == null or receiver == null:
+		return false
+	if receiver.team != passer.team or receiver.id == passer.id:
+		return false
+	return MatchRules.is_offside_position(
+		receiver.team,
+		receiver.pos,
+		passer.pos,
+		team_positions(MatchRules.opposite_team(receiver.team))
+	)
+
+
+func closest_player(team: int, dest: Vector2i) -> PlayerState:
+	var best: PlayerState = null
+	var best_dist := 999
+	for player in players:
+		if player.team != team:
+			continue
+		var dist := MatchRules.chebyshev(player.pos, dest)
+		if best == null or dist < best_dist or (dist == best_dist and player.id < best.id):
+			best = player
+			best_dist = dist
+	return best
+
+
 func _cells_in_range(origin: Vector2i, reach: int) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
 	for x in range(origin.x - reach, origin.x + reach + 1):
@@ -187,7 +232,7 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 		if dest in valid_moves(player):
 			actions.append({id = "move", label = "Move", dest = dest})
 		if can_pass_to_cell(player, dest):
-			actions.append({id = "pass", label = "Pass", dest = dest, target_id = -1})
+			actions.append({id = "pass", label = "Pass", dest = dest, target_id = -1, offside = false})
 	elif occupant.team != player.team:
 		if dest in valid_moves(player):
 			var preview := MatchRules.contest_preview(player, occupant)
@@ -198,7 +243,14 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 			})
 	else:
 		if can_pass_to(player, occupant):
-			actions.append({id = "pass", label = "Pass", target_id = occupant.id, dest = dest})
+			var pass_label := "Pass (offside)" if is_offside_receiver(player, occupant) else "Pass"
+			actions.append({
+				id = "pass",
+				label = pass_label,
+				target_id = occupant.id,
+				dest = dest,
+				offside = is_offside_receiver(player, occupant),
+			})
 		if can_swap(player, occupant):
 			actions.append({id = "swap", label = "Swap places", target_id = occupant.id, dest = dest})
 	if can_shoot(player) and dest == MatchRules.opponent_goal(player.team):
@@ -365,11 +417,28 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 	var occupant := player_at(dest)
 	var target_name := occupant.label() if occupant != null else "open square"
 	var dist := MatchRules.chebyshev(passer.pos, dest)
+	var offside := occupant != null and is_offside_receiver(passer, occupant)
+	var taker: PlayerState = null
+	if offside:
+		taker = closest_player(MatchRules.opposite_team(passer.team), dest)
 	var header := "pass to %s (%d %s)" % [target_name, dist, "tile" if dist == 1 else "tiles"]
+	if offside:
+		header = "OFFSIDE pass to %s (%d %s)" % [target_name, dist, "tile" if dist == 1 else "tiles"]
+	if offside and taker != null:
+		lines.append(
+			"If it arrives: offside. %s takes the tile and %s act." % [
+				taker.label(),
+				MatchRules.team_name(taker.team),
+			]
+		)
 	var body := "\n".join(lines)
 	var footer := "Pass success: %d%%" % total_pct
 	if threats.is_empty():
 		footer = "No interceptors. Pass success: 100%"
+	if offside and threats.is_empty():
+		footer = "No interceptors. Offside if played."
+	elif offside:
+		footer += "  Offside if it arrives."
 	var text := header + "\n" + (body + "\n" if body != "" else "") + footer
 	return {
 		threats = threats,
@@ -377,6 +446,8 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 		total_percent = total_pct,
 		header = header,
 		text = text,
+		offside = offside,
+		taker_id = taker.id if taker != null else -1,
 	}
 
 
@@ -425,6 +496,9 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 		}
 
 	var occupant := player_at(dest)
+	if occupant != null and is_offside_receiver(passer, occupant):
+		return _apply_offside(passer, occupant)
+
 	var receiver_id := -1
 	var receiver_label := "open square"
 	if occupant != null:
@@ -505,6 +579,33 @@ func _can_land_intercept(interceptor: PlayerState, cell: Vector2i) -> bool:
 		return false
 	var occupant := player_at(cell)
 	return occupant == null or occupant.id == interceptor.id
+
+
+func _apply_offside(passer: PlayerState, receiver: PlayerState) -> Dictionary:
+	var dest := receiver.pos
+	var taker := closest_player(MatchRules.opposite_team(passer.team), dest)
+	if taker == null:
+		return {ok = false, reason = "no_taker"}
+	var origin := taker.pos
+	taker.pos = dest
+	receiver.pos = origin
+	_give_ball(taker)
+	_advance_turn()
+	return {
+		ok = true,
+		action = "offside",
+		player_id = taker.id,
+		receiver_id = taker.id,
+		displaced_id = receiver.id,
+		dest = dest,
+		origin = origin,
+		gained_possession = true,
+		lost_possession = true,
+		contest_won = true,
+		attacker_label = passer.label(),
+		defender_label = receiver.label(),
+		taker_label = taker.label(),
+	}
 
 
 func apply_shoot(player_id: int) -> Dictionary:

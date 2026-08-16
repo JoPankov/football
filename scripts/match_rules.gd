@@ -2,7 +2,6 @@ class_name MatchRules
 extends RefCounted
 
 ## Pure, side-effect-free rules for the 12×7 grid.
-## Shoot is not wired up in this slice.
 
 enum Team { HOME, AWAY }
 
@@ -123,6 +122,40 @@ static func is_attacking_third(pos: Vector2i, team: int) -> bool:
 	if team == Team.HOME:
 		return pos.x >= 8
 	return pos.x <= 3
+
+
+## Opponent's half. Halfway sits between x=5 and x=6. Home attacks +x.
+static func is_opponent_half(pos: Vector2i, team: int) -> bool:
+	if team == Team.HOME:
+		return pos.x >= GRID_WIDTH / 2
+	return pos.x < GRID_WIDTH / 2
+
+
+## Football offside: opponent's half, nearer the goal than the ball, and
+## fewer than two opponents as near the goal as this player. Level is onside.
+static func is_offside_position(
+	team: int,
+	pos: Vector2i,
+	ball_pos: Vector2i,
+	opponent_positions: Array[Vector2i]
+) -> bool:
+	if not is_opponent_half(pos, team):
+		return false
+	if team == Team.HOME:
+		if pos.x <= ball_pos.x:
+			return false
+		var covering := 0
+		for opp in opponent_positions:
+			if opp.x >= pos.x:
+				covering += 1
+		return covering < 2
+	if pos.x >= ball_pos.x:
+		return false
+	var covering := 0
+	for opp in opponent_positions:
+		if opp.x <= pos.x:
+			covering += 1
+	return covering < 2
 
 
 static func can_use_ball_action(has_ball: bool) -> bool:

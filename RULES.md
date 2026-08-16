@@ -1,6 +1,6 @@
 # Sci-Fi Football — current rules
 
-This is what the game actually does today. Shooting is reserved for a later slice and is not playable.
+This is what the game actually does today.
 
 ## Setup
 
@@ -20,7 +20,7 @@ Every player has four stats. Hover or select a player to see them.
 
 | Stat | Used for |
 |---|---|
-| **ACC** | Completing a pass against interceptors; reserved for shooting later |
+| **ACC** | Completing a pass against interceptors; hitting a shot |
 | **DEF** | Stopping a dribble; tackling the carrier; intercepting a pass |
 | **CTR** | Dribbling; holding the ball when tackled; fighting for an empty square |
 
@@ -47,6 +47,7 @@ Highlights:
 - **Green** — walk there
 - **Amber** — contest an opponent on that square
 - **Blue** — pass only
+- **Red** — pass to an offside teammate
 - **Purple** — more than one action (move/pass, pass/swap, or shoot plus move/dribble)
 - **Gold** — shoot at the opponent net
 
@@ -98,6 +99,25 @@ Highlights:
 - Adjacent empty square also allows **move** — you choose.
 - Adjacent teammate also allows **swap** — you choose.
 - 2–3 tiles away: pass happens immediately (no menu).
+- A pass to a teammate in an **offside position** is still legal. If it is not intercepted, it is offside (see below). Empty-square passes are never offside.
+
+## Offside
+
+A teammate is in an **offside position** when all of these are true at the moment the ball is played:
+
+- They are in the **opponent’s half** (Aether: `x ≥ 6`; Helix: `x ≤ 5`). The halfway line is between columns 5 and 6.
+- They are **nearer the opponent goal than the ball** (Aether: larger `x`; Helix: smaller `x`). Level with the ball is onside.
+- **Fewer than two opponents** are as near the opponent goal as they are (same `x` comparison; level counts as covering). The keeper counts.
+
+Only **receiving a pass** is an offence. Standing offside, carrying the ball yourself, swapping, or collecting a loose ball is not.
+
+If a pass is intercepted, play continues. If it arrives to an offside teammate:
+
+- The **closest opponent** (Chebyshev, then lowest id) **moves onto the offside tile** and takes the ball.
+- The offside player is swapped onto that opponent’s old tile.
+- The defending team acts next.
+
+Hover an offside teammate to see the restart. Those tiles highlight **red**. The chooser labels the pass **Pass (offside)**.
 
 ## Intercepts
 
@@ -114,7 +134,7 @@ Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s D
 - **Pass success** is the chance of beating every interceptor (independent rolls, multiplied).
 - First interceptor who wins: they **move to the cut-off tile** (nearest square to the point where their circle meets the pass line) and take the ball there. Their old tile is left empty.
 - If that landing square is occupied, they take the closest free square to the intercept point.
-- If every interceptor fails, the pass arrives as planned.
+- If every interceptor fails, the pass arrives as planned — unless the receiver is offside, in which case the offside restart happens instead.
 
 ## Contests (dice)
 
@@ -167,7 +187,7 @@ Walking or dribbling the ball onto the opponent goal tile also counts as a goal.
 
 ## Not implemented yet
 
-- Offside, fouls, stamina, and a clock.
+- Fouls, stamina, and a clock.
 - Pass misses other than intercepts (a pass that is not intercepted always arrives).
 
 ## How to run

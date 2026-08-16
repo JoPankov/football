@@ -19,6 +19,8 @@ const CHOICE_FILL := Color(0.72, 0.48, 1.0, 0.34)
 const CHOICE_LINE := Color("c9a6ff")
 const SHOOT_FILL := Color(1.0, 0.85, 0.25, 0.38)
 const SHOOT_LINE := Color("ffe27a")
+const OFFSIDE_FILL := Color(1.0, 0.28, 0.32, 0.34)
+const OFFSIDE_LINE := Color("ff6b73")
 const SELECT_FILL := Color(1.0, 0.92, 0.45, 0.22)
 const HOVER_FILL := Color(1.0, 1.0, 1.0, 0.08)
 
@@ -29,6 +31,7 @@ var contest_cells: Array[Vector2i] = []
 var pass_cells: Array[Vector2i] = []
 var choice_cells: Array[Vector2i] = []
 var shoot_cells: Array[Vector2i] = []
+var offside_cells: Array[Vector2i] = []
 var pass_lane_from: Vector2i = Vector2i(-1, -1)
 var pass_lane_to: Vector2i = Vector2i(-1, -1)
 var intercept_cells: Array[Vector2i] = []
@@ -64,7 +67,8 @@ func set_highlights(
 	contests: Array[Vector2i] = [],
 	passes: Array[Vector2i] = [],
 	choices: Array[Vector2i] = [],
-	shots: Array[Vector2i] = []
+	shots: Array[Vector2i] = [],
+	offsides: Array[Vector2i] = []
 ) -> void:
 	selected_cell = selected
 	move_cells = moves
@@ -72,6 +76,7 @@ func set_highlights(
 	pass_cells = passes
 	choice_cells = choices
 	shoot_cells = shots
+	offside_cells = offsides
 	queue_redraw()
 
 
@@ -201,11 +206,17 @@ func _draw_interactive(tile: float) -> void:
 		draw_rect(rect, CONTEST_FILL)
 		draw_rect(rect, CONTEST_LINE, false, 1.8)
 	for cell in pass_cells:
-		if cell in choice_cells:
+		if cell in choice_cells or cell in offside_cells:
 			continue
 		var rect := Rect2(Vector2(cell) * tile + Vector2(10, 10), Vector2(tile - 20, tile - 20))
 		draw_rect(rect, PASS_FILL)
 		draw_rect(rect, PASS_LINE, false, 1.8)
+	for cell in offside_cells:
+		if cell in choice_cells:
+			continue
+		var rect := Rect2(Vector2(cell) * tile + Vector2(10, 10), Vector2(tile - 20, tile - 20))
+		draw_rect(rect, OFFSIDE_FILL)
+		draw_rect(rect, OFFSIDE_LINE, false, 1.8)
 	for cell in choice_cells:
 		var rect := Rect2(Vector2(cell) * tile + Vector2(8, 8), Vector2(tile - 16, tile - 16))
 		draw_rect(rect, CHOICE_FILL)

@@ -15,6 +15,7 @@ func _run() -> void:
 	_test_adjacency()
 	_test_move_destinations()
 	_test_attacking_third()
+	_test_offside_position()
 	_test_kickoff()
 	_test_turn_and_selection()
 	_test_possession()
@@ -29,6 +30,7 @@ func _run() -> void:
 	_test_pass()
 	_test_intercepts()
 	_test_swap_and_choice()
+	_test_offside()
 	_test_shooting()
 	await _test_controller_click_flow()
 	if _failed == 0:
@@ -88,6 +90,38 @@ func _test_attacking_third() -> void:
 	_assert(MatchRules.is_attacking_third(Vector2i(3, 0), MatchRules.Team.AWAY), "away last third ends at x=3")
 	_assert(MatchRules.can_use_ball_action(true), "carrier may use ball actions later")
 	_assert(not MatchRules.can_use_ball_action(false), "non-carrier cannot use ball actions")
+
+
+func _test_offside_position() -> void:
+	print("-- offside position")
+	var line: Array[Vector2i] = [Vector2i(9, 2), Vector2i(9, 4), Vector2i(12, 3)]
+	_assert(
+		MatchRules.is_offside_position(MatchRules.Team.HOME, Vector2i(10, 3), Vector2i(8, 3), line),
+		"ahead of the ball and only the keeper covering is offside"
+	)
+	_assert(
+		not MatchRules.is_offside_position(MatchRules.Team.HOME, Vector2i(9, 3), Vector2i(8, 3), line),
+		"level with two defenders is onside"
+	)
+	_assert(
+		not MatchRules.is_offside_position(MatchRules.Team.HOME, Vector2i(10, 3), Vector2i(10, 2), line),
+		"level with the ball is onside"
+	)
+	_assert(
+		not MatchRules.is_offside_position(MatchRules.Team.HOME, Vector2i(5, 3), Vector2i(4, 3), line),
+		"own half is never offside"
+	)
+	var home_line: Array[Vector2i] = [Vector2i(2, 2), Vector2i(2, 4), Vector2i(-1, 3)]
+	_assert(
+		MatchRules.is_offside_position(MatchRules.Team.AWAY, Vector2i(1, 3), Vector2i(3, 3), home_line),
+		"helix ahead of the ball and last line is offside"
+	)
+	_assert(
+		not MatchRules.is_offside_position(MatchRules.Team.AWAY, Vector2i(2, 3), Vector2i(3, 3), home_line),
+		"helix level with two defenders is onside"
+	)
+	_assert(MatchRules.is_opponent_half(Vector2i(6, 0), MatchRules.Team.HOME), "x=6 is aether's attacking half")
+	_assert(not MatchRules.is_opponent_half(Vector2i(5, 0), MatchRules.Team.HOME), "x=5 is aether's own half")
 
 
 func _test_kickoff() -> void:
@@ -398,6 +432,81 @@ func _test_swap_and_choice() -> void:
 	_assert(model.current_team == MatchRules.Team.AWAY, "swap ends the turn")
 
 
+func _test_offside() -> void:
+	print("-- offside")
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var st := model.player_at(Vector2i(5, 3))
+	var mate := model.player_at(Vector2i(5, 2))
+	st.pos = Vector2i(9, 3)
+	model.ball.pos = st.pos
+	mate.pos = Vector2i(10, 3)
+	_assert(model.is_offside_receiver(st, mate), "teammate ahead of the last line is offside")
+	_assert(Vector2i(10, 3) in model.offside_pass_cells(st), "offside target is listed")
+	var acts := model.actions_for(st, mate.pos)
+	_assert(acts.size() == 2, "adjacent offside teammate still offers pass or swap")
+	_assert(acts[0].id == "pass" and acts[1].id == "swap", "pass and swap are both offered")
+	_assert(acts[0].get("offside", false), "pass action is marked offside")
+	_assert(str(acts[0].get("label", "")).contains("offside"), "chooser labels the offside pass")
+	var preview := model.pass_preview(st, mate.pos)
+	_assert(preview.get("offside", false), "preview flags offside")
+	_assert(preview.text.contains("OFFSIDE") or preview.header.contains("OFFSIDE"), "preview names offside")
+	var taker := model.closest_player(MatchRules.Team.AWAY, mate.pos)
+	_assert(taker != null and taker.pos == Vector2i(9, 2), "closest helix is the RCB next to the tile")
+	model.scripted_first_intercept_wins = false
+	var flagged := model.apply_pass(st.id, mate.id)
+	_assert(flagged.ok and flagged.action == "offside", "arriving pass to offside teammate is offside")
+	_assert(taker.pos == Vector2i(10, 3) and taker.has_ball, "closest opponent took the offside tile and the ball")
+	_assert(mate.pos == Vector2i(9, 2), "offside player was swapped to the taker's old tile")
+	_assert(not st.has_ball, "passer lost the ball")
+	_assert(model.current_team == MatchRules.Team.AWAY, "defending team acts after offside")
+	_assert(model.ball.pos == taker.pos, "ball sits on the restart tile")
+
+	var onside := MatchModel.new()
+	onside.setup_kickoff()
+	var kicker := onside.player_at(Vector2i(5, 3))
+	var partner := onside.player_at(Vector2i(5, 2))
+	kicker.pos = Vector2i(7, 3)
+	onside.ball.pos = kicker.pos
+	partner.pos = Vector2i(8, 3)
+	_assert(not onside.is_offside_receiver(kicker, partner), "behind the last line is onside")
+	onside.scripted_first_intercept_wins = false
+	var completed := onside.apply_pass(kicker.id, partner.id)
+	_assert(completed.ok and completed.action == "pass", "onside pass still completes")
+	_assert(partner.has_ball, "onside receiver got the ball")
+
+	var own_half := MatchModel.new()
+	own_half.setup_kickoff()
+	var holder := own_half.player_at(Vector2i(5, 3))
+	var wing := own_half.player_at(Vector2i(4, 0))
+	_assert(not own_half.is_offside_receiver(holder, wing), "own-half teammate is not offside")
+
+	var ground := MatchModel.new()
+	ground.setup_kickoff()
+	var carrier := ground.player_at(Vector2i(5, 3))
+	carrier.pos = Vector2i(8, 3)
+	ground.ball.pos = carrier.pos
+	_assert(ground.player_at(Vector2i(10, 3)) == null, "empty square has no receiver")
+	ground.scripted_first_intercept_wins = false
+	var laid := ground.apply_pass_to(carrier.id, Vector2i(10, 3))
+	_assert(laid.ok and laid.action == "pass", "pass to an empty square is not offside")
+	_assert(ground.ball.is_loose() and ground.ball.pos == Vector2i(10, 3), "empty-square pass stayed a ground pass")
+
+	var stolen := MatchModel.new()
+	stolen.setup_kickoff()
+	var passer := stolen.player_at(Vector2i(5, 3))
+	var target := stolen.player_at(Vector2i(5, 2))
+	passer.pos = Vector2i(8, 3)
+	stolen.ball.pos = passer.pos
+	target.pos = Vector2i(10, 3)
+	_assert(stolen.is_offside_receiver(passer, target), "setup is offside if the pass arrived")
+	stolen.scripted_first_intercept_wins = true
+	var cut := stolen.apply_pass_to(passer.id, target.pos)
+	_assert(cut.get("intercepted", false), "intercept happens before offside")
+	_assert(cut.action == "pass", "intercepted pass is not recorded as offside")
+	_assert(not target.has_ball, "offside teammate did not receive the intercepted pass")
+
+
 func _test_shooting() -> void:
 	print("-- shooting")
 	var box := MatchRules.penalty_tiles(MatchRules.AWAY_NET)
@@ -525,4 +634,25 @@ func _test_controller_click_flow() -> void:
 	_assert(empty_pass.get("action") == "pass", "clicking a distant empty square passes to it")
 	_assert(ground_pass.model.ball.is_loose() and ground_pass.model.ball.pos == Vector2i(3, 3), "ground pass left the ball loose")
 	ground_pass.queue_free()
+
+	var offside_main: Node = packed.instantiate()
+	root.add_child(offside_main)
+	offside_main.animate_moves = false
+	var off_model: MatchModel = offside_main.model
+	var off_st := off_model.player_at(Vector2i(5, 3))
+	var off_mate := off_model.player_at(Vector2i(5, 2))
+	off_st.pos = Vector2i(9, 3)
+	off_model.ball.pos = off_st.pos
+	off_mate.pos = Vector2i(10, 3)
+	offside_main._refresh()
+	offside_main.handle_cell_clicked(Vector2i(9, 3))
+	off_model.scripted_first_intercept_wins = false
+	var offside_choice: Dictionary = offside_main.handle_cell_clicked(Vector2i(10, 3))
+	_assert(offside_choice.get("action") == "choose", "adjacent offside teammate opens pass/swap")
+	var offside_click: Dictionary = offside_main.choose_action("pass")
+	_assert(offside_click.get("action") == "offside", "choosing the offside pass flags offside")
+	var restart := off_model.player_at(Vector2i(10, 3))
+	_assert(restart != null and restart.team == MatchRules.Team.AWAY and restart.has_ball, "closest opponent took the restart on click")
+	_assert(off_model.current_team == MatchRules.Team.AWAY, "defending team to act after the offside click")
+	offside_main.queue_free()
 	await process_frame
