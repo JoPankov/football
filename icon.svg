@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="pitch" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#06241c"/>
+      <stop offset="1" stop-color="#0a1628"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="22" fill="#071018"/>
+  <rect x="18" y="28" width="92" height="72" rx="8" fill="url(#pitch)" stroke="#3ecbff" stroke-width="3"/>
+  <line x1="64" y1="28" x2="64" y2="100" stroke="#3ecbff" stroke-width="2" opacity="0.85"/>
+  <circle cx="64" cy="64" r="12" fill="none" stroke="#3ecbff" stroke-width="2"/>
+  <rect x="18" y="48" width="10" height="32" fill="none" stroke="#3ecbff" stroke-width="2"/>
+  <rect x="100" y="48" width="10" height="32" fill="none" stroke="#ff4d8d" stroke-width="2"/>
+  <circle cx="78" cy="58" r="7" fill="#f5e6a8" stroke="#ffffff" stroke-width="1.5"/>
+</svg>

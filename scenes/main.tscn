@@ -1,0 +1,24 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/match_controller.gd" id="1_match"]
+[ext_resource type="Script" path="res://scripts/pitch.gd" id="2_pitch"]
+[ext_resource type="Script" path="res://scripts/ball_piece.gd" id="3_ball"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="4_hud"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_match")
+
+[node name="Pitch" type="Node2D" parent="."]
+script = ExtResource("2_pitch")
+
+[node name="Pieces" type="Node2D" parent="Pitch"]
+
+[node name="Ball" type="Node2D" parent="Pitch/Pieces"]
+z_index = 8
+script = ExtResource("3_ball")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(432, 252)
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("4_hud")
