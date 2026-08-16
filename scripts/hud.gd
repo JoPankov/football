@@ -2,7 +2,6 @@ class_name MatchHUD
 extends CanvasLayer
 
 const ACC_COLOR := Color("f0c14b")
-const PAS_COLOR := Color("6fd3ff")
 const DEF_COLOR := Color("7dffe0")
 const CTR_COLOR := Color("e39bff")
 
@@ -16,13 +15,11 @@ var _event: Label
 var _card: ColorRect
 var _card_title: Label
 var _card_acc: Label
-var _card_pas: Label
 var _card_def: Label
 var _card_ctr: Label
 var _card_vs: Label
 var _card_b_title: Label
 var _card_b_acc: Label
-var _card_b_pas: Label
 var _card_b_def: Label
 var _card_b_ctr: Label
 var last_event: Dictionary = {}
@@ -50,12 +47,13 @@ func refresh(
 ) -> void:
 	var acting := MatchRules.team_name(model.current_team)
 	var home_turn := model.current_team == MatchRules.Team.HOME
-	_status.text = "%s TO ACT" % acting
-	_status.add_theme_color_override(
+	_status.text = "%d   —   %d" % [model.home_score, model.away_score]
+	_status.add_theme_color_override("font_color", Color("f4fbff"))
+	_turn.text = "%s TO ACT  ·  CYCLE %d" % [acting, model.turn_index + 1]
+	_turn.add_theme_color_override(
 		"font_color",
 		Color("3ecbff") if home_turn else Color("ff4d8d")
 	)
-	_turn.text = "CYCLE %d" % (model.turn_index + 1)
 
 	var holder := model.carrier()
 	if holder == null:
@@ -82,6 +80,8 @@ func _hint_for(
 	hover_cell: Vector2i,
 	model: MatchModel
 ) -> String:
+	if selected != null and model.can_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
+		return model.shot_preview(selected).header
 	if selected != null and selected.has_ball and model.can_pass_to_cell(selected, hover_cell):
 		var preview := model.pass_preview(selected, hover_cell)
 		if hovered != null and hovered.team == selected.team and MatchRules.is_adjacent(selected.pos, hovered.pos):
@@ -94,10 +94,12 @@ func _hint_for(
 			return MatchRules.contest_preview(selected, hovered).text
 	if selected != null:
 		if selected.has_ball:
+			if model.can_shoot(selected):
+				return "Selected %s — gold: shoot at the net. Green: move. Blue: pass." % selected.label()
 			return "Selected %s — green: move. Amber: dribble. Blue: pass to a teammate or empty square. Adjacent teammate: pass or swap." % selected.label()
 		return "Selected %s — green: move. Amber: tackle the carrier (DEF vs CTR) or fight for a square (CTR vs CTR)." % selected.label()
 	if holder == null:
-		return "Click any %s player. Hover a player to inspect ACC / PAS / DEF / CTR." % acting
+		return "Click any %s player. Hover a player to inspect ACC / DEF / CTR." % acting
 	return "Click any %s player. The ball stays with the carrier when they move." % acting
 
 
@@ -105,11 +107,23 @@ func _event_line(event: Dictionary) -> String:
 	if event.is_empty() or not event.get("ok", false):
 		return ""
 	var action: String = event.get("action", "move")
+	if event.get("goal", false) and action != "shoot":
+		return "GOAL  walked in  %d—%d" % [event.get("home_score", 0), event.get("away_score", 0)]
+	if action == "shoot":
+		if event.get("goal", false):
+			return "GOAL  %s  %d—%d" % [
+				event.get("attacker_label", "shooter"),
+				event.get("home_score", 0),
+				event.get("away_score", 0),
+			]
+		if event.get("saved", false):
+			return "SAVE  %s's shot was held" % event.get("attacker_label", "shooter")
+		return "MISS  %s's shot missed the net" % event.get("attacker_label", "shooter")
 	if action == "pass":
 		if event.get("intercepted", false):
 			return "INTERCEPT  %s %s %d+%d=%d  vs  %s %s %d+%d=%d" % [
 				event.get("attacker_label", "passer"),
-				event.get("attacker_stat_name", "PAS"),
+				event.get("attacker_stat_name", "ACC"),
 				event.get("attacker_stat", 0),
 				event.get("attacker_dice", 0),
 				event.get("attacker_total", 0),
@@ -158,7 +172,7 @@ func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
 		_card.visible = false
 		return
 	_card.visible = true
-	_fill_card(primary, _card_title, _card_acc, _card_pas, _card_def, _card_ctr, "")
+	_fill_card(primary, _card_title, _card_acc, _card_def, _card_ctr, "")
 
 	var compare := (
 		hovered != null
@@ -170,7 +184,6 @@ func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
 	_card_vs.visible = compare
 	_card_b_title.visible = compare
 	_card_b_acc.visible = compare
-	_card_b_pas.visible = compare
 	_card_b_def.visible = compare
 	_card_b_ctr.visible = compare
 	if compare:
@@ -179,7 +192,7 @@ func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
 			kind = "dribble"
 		elif hovered.has_ball:
 			kind = "tackle"
-		_fill_card(hovered, _card_b_title, _card_b_acc, _card_b_pas, _card_b_def, _card_b_ctr, kind)
+		_fill_card(hovered, _card_b_title, _card_b_acc, _card_b_def, _card_b_ctr, kind)
 		if kind == "dribble":
 			_emphasize_stat(_card_ctr, true)
 			_emphasize_stat(_card_b_def, true)
@@ -189,14 +202,13 @@ func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
 		else:
 			_emphasize_stat(_card_ctr, true)
 			_emphasize_stat(_card_b_ctr, true)
-	_card.offset_bottom = 380.0 if compare else 216.0
+	_card.offset_bottom = 348.0 if compare else 196.0
 
 
 func _fill_card(
 	player: PlayerState,
 	title: Label,
 	acc: Label,
-	pas: Label,
 	defense: Label,
 	ctr: Label,
 	_kind: String
@@ -207,11 +219,9 @@ func _fill_card(
 		Color("3ecbff") if player.team == MatchRules.Team.HOME else Color("ff4d8d")
 	)
 	acc.text = "ACC  %d" % player.accuracy
-	pas.text = "PAS  %d" % player.passing
 	defense.text = "DEF  %d" % player.defense
 	ctr.text = "CTR  %d" % player.control
 	acc.add_theme_color_override("font_color", ACC_COLOR)
-	pas.add_theme_color_override("font_color", PAS_COLOR)
 	defense.add_theme_color_override("font_color", DEF_COLOR)
 	ctr.add_theme_color_override("font_color", CTR_COLOR)
 
@@ -316,40 +326,41 @@ func _build_card() -> void:
 	_card.add_child(_card_title)
 
 	_card_acc = _stat_label(8, 24, ACC_COLOR)
-	_card_pas = _stat_label(8, 44, PAS_COLOR)
-	_card_def = _stat_label(8, 64, DEF_COLOR)
-	_card_ctr = _stat_label(8, 84, CTR_COLOR)
+	_card_def = _stat_label(8, 44, DEF_COLOR)
+	_card_ctr = _stat_label(8, 64, CTR_COLOR)
 	_card.add_child(_card_acc)
-	_card.add_child(_card_pas)
 	_card.add_child(_card_def)
 	_card.add_child(_card_ctr)
 
 	_card_vs = _label("VS", 11, Color(0.85, 0.85, 0.9, 0.7), HORIZONTAL_ALIGNMENT_CENTER)
 	_card_vs.offset_left = 8.0
-	_card_vs.offset_top = 108.0
+	_card_vs.offset_top = 88.0
 	_card_vs.offset_right = 116.0
-	_card_vs.offset_bottom = 124.0
+	_card_vs.offset_bottom = 104.0
 	_card_vs.visible = false
 	_card.add_child(_card_vs)
 
 	_card_b_title = _label("", 12, Color("ff4d8d"), HORIZONTAL_ALIGNMENT_LEFT)
 	_card_b_title.offset_left = 8.0
-	_card_b_title.offset_top = 126.0
+	_card_b_title.offset_top = 106.0
 	_card_b_title.offset_right = 116.0
-	_card_b_title.offset_bottom = 144.0
+	_card_b_title.offset_bottom = 124.0
 	_card_b_title.visible = false
 	_card.add_child(_card_b_title)
 
-	_card_b_acc = _stat_label(8, 146, ACC_COLOR)
-	_card_b_pas = _stat_label(8, 166, PAS_COLOR)
-	_card_b_def = _stat_label(8, 186, DEF_COLOR)
-	_card_b_ctr = _stat_label(8, 206, CTR_COLOR)
-	for label in [_card_b_acc, _card_b_pas, _card_b_def, _card_b_ctr]:
+	_card_b_acc = _stat_label(8, 126, ACC_COLOR)
+	_card_b_def = _stat_label(8, 146, DEF_COLOR)
+	_card_b_ctr = _stat_label(8, 166, CTR_COLOR)
+	for label in [_card_b_acc, _card_b_def, _card_b_ctr]:
 		label.visible = false
 		_card.add_child(label)
 
 
 func _show_forecast(model: MatchModel, selected: PlayerState, hover_cell: Vector2i) -> void:
+	if selected != null and model.can_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
+		_forecast_label.text = model.shot_preview(selected).text
+		_forecast.visible = true
+		return
 	if selected == null or not selected.has_ball or not model.can_pass_to_cell(selected, hover_cell):
 		_forecast.visible = false
 		return

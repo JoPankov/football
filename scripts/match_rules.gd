@@ -15,6 +15,9 @@ const TILE_SIZE := 72.0
 const CENTER_SPOT := Vector2i(5, 3)
 const HOME_NET := Vector2i(-1, 3)
 const AWAY_NET := Vector2i(12, 3)
+const SHOT_ACC_BIAS := 1
+const SHOT_RANGE_K := 0.35
+const SHOT_ANGLE_FLOOR := 0.15
 
 ## Ways to roll each 2d6 total (index = sum). 2..12.
 const WAYS_2D6: Array[int] = [0, 0, 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]
@@ -39,6 +42,60 @@ static func is_pitch_tile(pos: Vector2i) -> bool:
 
 static func is_goal_tile(pos: Vector2i) -> bool:
 	return pos == HOME_NET or pos == AWAY_NET
+
+
+static func opponent_goal(team: int) -> Vector2i:
+	return AWAY_NET if team == Team.HOME else HOME_NET
+
+
+static func goal_axis(goal: Vector2i) -> Vector2:
+	return Vector2(-1, 0) if goal == HOME_NET else Vector2(1, 0)
+
+
+static func penalty_tiles(goal: Vector2i) -> Array[Vector2i]:
+	var tiles: Array[Vector2i] = []
+	for dir in DIRECTIONS:
+		var cell: Vector2i = goal + dir
+		if is_pitch_tile(cell):
+			tiles.append(cell)
+	return tiles
+
+
+static func is_in_shooting_zone(pos: Vector2i, goal: Vector2i) -> bool:
+	if pos == goal or is_goal_tile(pos) or not in_bounds(pos):
+		return false
+	var box := penalty_tiles(goal)
+	if pos in box:
+		return true
+	for cell in box:
+		if is_adjacent(pos, cell):
+			return true
+	return false
+
+
+static func shot_geometry(from: Vector2i, goal: Vector2i) -> Dictionary:
+	var shot := tile_center(goal) - tile_center(from)
+	var distance := shot.length()
+	var angle := 0.0
+	if distance > 0.0001:
+		var dir := shot / distance
+		var cos_a := clampf(dir.dot(goal_axis(goal)), -1.0, 1.0)
+		angle = acos(cos_a)
+	return {distance = distance, angle = angle, angle_deg = rad_to_deg(angle)}
+
+
+static func shot_range_factor(distance: float) -> float:
+	return 1.0 / (1.0 + SHOT_RANGE_K * maxf(0.0, distance - 1.0))
+
+
+static func shot_angle_factor(angle_rad: float) -> float:
+	return maxf(SHOT_ANGLE_FLOOR, cos(angle_rad))
+
+
+static func shot_hit_chance(accuracy: int, distance: float, angle_rad: float) -> float:
+	var acc_term := float(accuracy) / float(accuracy + SHOT_ACC_BIAS)
+	var hit := acc_term * shot_range_factor(distance) * shot_angle_factor(angle_rad)
+	return clampf(hit, 0.05, 0.98)
 
 
 static func in_bounds(pos: Vector2i) -> bool:

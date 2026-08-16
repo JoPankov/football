@@ -8,7 +8,6 @@ var role: String
 var pos: Vector2i
 var has_ball: bool = false
 var accuracy: int = 8
-var passing: int = 8
 var defense: int = 8
 var control: int = 8
 
@@ -29,7 +28,6 @@ func _init(
 
 func apply_stats(stats: Dictionary) -> void:
 	accuracy = int(stats.get("accuracy", accuracy))
-	passing = int(stats.get("passing", passing))
 	defense = int(stats.get("defense", defense))
 	control = int(stats.get("control", control))
 
@@ -39,4 +37,4 @@ func label() -> String:
 
 
 func stats_line() -> String:
-	return "ACC %d   PAS %d   DEF %d   CTR %d" % [accuracy, passing, defense, control]
+	return "ACC %d   DEF %d   CTR %d" % [accuracy, defense, control]

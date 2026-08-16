@@ -17,6 +17,8 @@ const PASS_FILL := Color(0.44, 0.72, 1.0, 0.32)
 const PASS_LINE := Color("6fd3ff")
 const CHOICE_FILL := Color(0.72, 0.48, 1.0, 0.34)
 const CHOICE_LINE := Color("c9a6ff")
+const SHOOT_FILL := Color(1.0, 0.85, 0.25, 0.38)
+const SHOOT_LINE := Color("ffe27a")
 const SELECT_FILL := Color(1.0, 0.92, 0.45, 0.22)
 const HOVER_FILL := Color(1.0, 1.0, 1.0, 0.08)
 
@@ -26,6 +28,7 @@ var move_cells: Array[Vector2i] = []
 var contest_cells: Array[Vector2i] = []
 var pass_cells: Array[Vector2i] = []
 var choice_cells: Array[Vector2i] = []
+var shoot_cells: Array[Vector2i] = []
 var pass_lane_from: Vector2i = Vector2i(-1, -1)
 var pass_lane_to: Vector2i = Vector2i(-1, -1)
 var intercept_cells: Array[Vector2i] = []
@@ -60,13 +63,15 @@ func set_highlights(
 	moves: Array[Vector2i],
 	contests: Array[Vector2i] = [],
 	passes: Array[Vector2i] = [],
-	choices: Array[Vector2i] = []
+	choices: Array[Vector2i] = [],
+	shots: Array[Vector2i] = []
 ) -> void:
 	selected_cell = selected
 	move_cells = moves
 	contest_cells = contests
 	pass_cells = passes
 	choice_cells = choices
+	shoot_cells = shots
 	queue_redraw()
 
 
@@ -205,6 +210,10 @@ func _draw_interactive(tile: float) -> void:
 		var rect := Rect2(Vector2(cell) * tile + Vector2(8, 8), Vector2(tile - 16, tile - 16))
 		draw_rect(rect, CHOICE_FILL)
 		draw_rect(rect, CHOICE_LINE, false, 2.0)
+	for cell in shoot_cells:
+		var rect := Rect2(Vector2(cell) * tile + Vector2(4, 4), Vector2(tile - 8, tile - 8))
+		draw_rect(rect, SHOOT_FILL)
+		draw_rect(rect, SHOOT_LINE, false, 2.4)
 
 
 func _draw_pass_preview() -> void:

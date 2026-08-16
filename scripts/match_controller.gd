@@ -139,6 +139,8 @@ func perform_action(action: Dictionary) -> Dictionary:
 			return _try_swap(selected, teammate)
 		"move", "dribble", "tackle", "challenge":
 			return _try_move(selected, action.get("dest", hover_cell))
+		"shoot":
+			return _try_shoot(selected)
 		_:
 			return {ok = false, reason = "unknown_action"}
 
@@ -147,10 +149,23 @@ func _try_move(player: PlayerState, dest: Vector2i) -> Dictionary:
 	var result := model.apply_move(player.id, dest)
 	if not result.ok:
 		return result
+	return _finish_action(result)
+
+
+func _try_shoot(player: PlayerState) -> Dictionary:
+	var result := model.apply_shoot(player.id)
+	if not result.ok:
+		return result
+	return _finish_action(result)
+
+
+func _finish_action(result: Dictionary) -> Dictionary:
 	hud.last_event = result
 	if animate_moves:
 		_play_move(result)
 	else:
+		if result.get("reset", false):
+			_spawn_visuals()
 		_deselect()
 	return result
 
@@ -184,6 +199,8 @@ func _try_pass_to(passer: PlayerState, dest: Vector2i) -> Dictionary:
 func _play_move(result: Dictionary) -> void:
 	busy = true
 	await _present_result(result)
+	if result.get("reset", false):
+		_spawn_visuals()
 	_deselect()
 	busy = false
 
@@ -195,6 +212,12 @@ func _present_result(result: Dictionary) -> void:
 	var dest: Vector2i = result.dest
 	var won: bool = result.get("contest_won", true)
 	var action: String = result.get("action", "move")
+	if action == "shoot":
+		var tween := create_tween()
+		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tween.tween_property(pitch.ball_piece, "position", pitch.grid_to_world(dest), 0.28)
+		await tween.finished
+		return
 	if action == "pass":
 		var receiver := model.player_by_id(result.get("receiver_id", -1))
 		var tween := create_tween()
@@ -310,7 +333,8 @@ func _refresh() -> void:
 		contests = model.contest_moves(selected)
 		passes = model.pass_cells(selected)
 		var choices: Array[Vector2i] = model.choice_cells(selected)
-		pitch.set_highlights(selected.pos, moves, contests, passes, choices)
+		var shots: Array[Vector2i] = model.shoot_cells(selected)
+		pitch.set_highlights(selected.pos, moves, contests, passes, choices, shots)
 	else:
 		pitch.clear_highlights()
 	_update_pass_preview(selected)

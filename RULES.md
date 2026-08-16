@@ -20,21 +20,20 @@ Every player has four stats. Hover or select a player to see them.
 
 | Stat | Used for |
 |---|---|
-| **ACC** | Reserved for shooting (not implemented) |
-| **PAS** | Completing a pass against interceptors |
+| **ACC** | Completing a pass against interceptors; reserved for shooting later |
 | **DEF** | Stopping a dribble; tackling the carrier; intercepting a pass |
 | **CTR** | Dribbling; holding the ball when tackled; fighting for an empty square |
 
 Kickoff values by role:
 
-| Role | ACC | PAS | DEF | CTR |
-|---|---|---|---|---|
-| ST | 13 | 6 | 4 | 9 |
-| Central mid (LCM/RCM) | 6 | 12 | 8 | 7 |
-| Wide mid (LM/RM) | 8 | 10 | 6 | 9 |
-| Centre back (LCB/RCB) | 4 | 6 | 13 | 7 |
-| Full back (LB/RB) | 5 | 7 | 11 | 8 |
-| GK | 4 | 6 | 13 | 11 |
+| Role | ACC | DEF | CTR |
+|---|---|---|---|
+| ST | 13 | 4 | 9 |
+| Central mid (LCM/RCM) | 6 | 8 | 7 |
+| Wide mid (LM/RM) | 8 | 6 | 9 |
+| Centre back (LCB/RCB) | 4 | 13 | 7 |
+| Full back (LB/RB) | 5 | 11 | 8 |
+| GK | 4 | 13 | 11 |
 
 ## How to take a turn
 
@@ -48,7 +47,8 @@ Highlights:
 - **Green** — walk there
 - **Amber** — contest an opponent on that square
 - **Blue** — pass only
-- **Purple** — more than one action (move/pass, or pass/swap)
+- **Purple** — more than one action (move/pass, pass/swap, or shoot plus move/dribble)
+- **Gold** — shoot at the opponent net
 
 ## Actions
 
@@ -108,7 +108,7 @@ When the carrier is selected and you hover a legal pass tile:
 - Standing only next to the passer (not along the lane) does not count.
 - Teammates and the intended receiver never intercept.
 
-Each interceptor is a **PAS vs DEF** contest (passer’s PAS, interceptor’s DEF), checked in order along the pass. Ties go to the interceptor.
+Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass. Ties go to the interceptor.
 
 - Preview lists each interceptor’s intercept / through chance.
 - **Pass success** is the chance of beating every interceptor (independent rolls, multiplied).
@@ -134,12 +134,41 @@ Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 - A completed pass to a teammate gives it to them.
 - A failed dribble or a successful tackle / intercept changes the carrier.
 
+### Shoot
+
+You may shoot if you have the ball and stand in the **shooting zone** of the opponent net:
+
+- The **penalty box**: the three pitch tiles adjacent to that goal tile. Aether box `(0, 2) (0, 3) (0, 4)`. Helix box `(11, 2) (11, 3) (11, 4)`.
+- The **ring** around the box: every pitch tile that touches the box, including by a corner.
+
+The goal tile highlights gold. Click it to shoot. If the tile also allows move or dribble, a chooser appears.
+
+Hover the goal to see:
+
+```
+hit = ACC/(ACC+1) x range x angle
+range = 1 / (1 + 0.35 x (d-1))
+angle = max(0.15, cos theta)
+save = P(keeper DEF+2d6 >= ACC+2d6)   if a keeper is on the goal tile, else 0
+goal = hit x (1 - save)
+```
+
+`d` is Euclidean distance in tiles from shooter centre to goal centre. `theta` is the angle between the shot and the goal axis (0 degrees = straight in).
+
+Resolution:
+
+1. Roll hit against `hit`.
+2. If it hits and a keeper is in the net, they try a save (ACC vs DEF, ties to the keeper).
+3. Goal: score +1, kickoff reset, the team that conceded starts with the ball.
+4. Save: the keeper has the ball.
+5. Miss: the ball is loose on the goal tile.
+
+Walking or dribbling the ball onto the opponent goal tile also counts as a goal.
+
 ## Not implemented yet
 
-- **Shoot** (planned: only in the opponent’s last third, two rolls — shooter ACC to hit the net, then keeper to save).
-- Last thirds are already marked: Aether attacks `x ≥ 8`, Helix attacks `x ≤ 3`.
+- Offside, fouls, stamina, and a clock.
 - Pass misses other than intercepts (a pass that is not intercepted always arrives).
-- Goals, offside, fouls, stamina, and time.
 
 ## How to run
 

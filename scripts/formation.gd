@@ -46,23 +46,23 @@ static func _away() -> Array[Dictionary]:
 static func base_stats(role: String) -> Dictionary:
 	match role:
 		"GK":
-			return _stats(4, 6, 13, 11)
+			return _stats(4, 13, 11)
 		"LB", "RB":
-			return _stats(5, 7, 11, 8)
+			return _stats(5, 11, 8)
 		"LCB", "RCB":
-			return _stats(4, 6, 13, 7)
+			return _stats(4, 13, 7)
 		"LM", "RM":
-			return _stats(8, 10, 6, 9)
+			return _stats(8, 6, 9)
 		"LCM", "RCM":
-			return _stats(6, 12, 8, 7)
+			return _stats(6, 8, 7)
 		"ST":
-			return _stats(13, 6, 4, 9)
+			return _stats(13, 4, 9)
 		_:
-			return _stats(8, 8, 8, 8)
+			return _stats(8, 8, 8)
 
 
-static func _stats(accuracy: int, passing: int, defense: int, control: int) -> Dictionary:
-	return {accuracy = accuracy, passing = passing, defense = defense, control = control}
+static func _stats(accuracy: int, defense: int, control: int) -> Dictionary:
+	return {accuracy = accuracy, defense = defense, control = control}
 
 
 static func _slot(number: int, role: String, pos: Vector2i) -> Dictionary:
@@ -72,7 +72,6 @@ static func _slot(number: int, role: String, pos: Vector2i) -> Dictionary:
 		role = role,
 		pos = pos,
 		accuracy = stats.accuracy,
-		passing = stats.passing,
 		defense = stats.defense,
 		control = stats.control,
 	}

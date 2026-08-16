@@ -29,6 +29,7 @@ func _run() -> void:
 	_test_pass()
 	_test_intercepts()
 	_test_swap_and_choice()
+	_test_shooting()
 	await _test_controller_click_flow()
 	if _failed == 0:
 		print("ALL TESTS PASSED")
@@ -182,7 +183,7 @@ func _test_attributes() -> void:
 	var cm := model.player_at(Vector2i(4, 2))
 	_assert(st.accuracy == 13 and st.control == 9, "striker is accuracy/control leaning")
 	_assert(gk.defense == 13 and gk.control == 11, "keeper is defense/control leaning")
-	_assert(cm.passing == 12, "central mid is passing leaning")
+	_assert(cm.accuracy == 6 and cm.defense == 8, "central mid keeps midfield ACC/DEF")
 	var away := model.player_at(Vector2i(6, 4))
 	_assert(away.pos in model.valid_moves(st), "opponent tile is a legal contest dest")
 	_assert(away.pos in model.contest_moves(st), "opponent tile is listed as a contest")
@@ -349,7 +350,7 @@ func _test_intercepts() -> void:
 	var threats := model.interceptors_for_pass(st, Vector2i(8, 3))
 	_assert(threats.size() >= 2, "a lane through midfield has interceptors")
 	var preview := model.pass_preview(st, Vector2i(8, 3))
-	_assert(preview.text.contains("PAS vs"), "preview lists PAS vs DEF")
+	_assert(preview.text.contains("ACC vs"), "preview lists ACC vs DEF")
 	_assert(preview.text.contains("Pass success:"), "preview shows total pass success")
 	_assert(preview.total < 1.0, "at least one interceptor lowers pass success")
 
@@ -395,6 +396,64 @@ func _test_swap_and_choice() -> void:
 	_assert(st.has_ball and not near.has_ball, "carrier kept the ball")
 	_assert(model.ball.pos == st.pos, "ball followed the carrier")
 	_assert(model.current_team == MatchRules.Team.AWAY, "swap ends the turn")
+
+
+func _test_shooting() -> void:
+	print("-- shooting")
+	var box := MatchRules.penalty_tiles(MatchRules.AWAY_NET)
+	_assert(box.size() == 3, "penalty box is the three tiles on the goal line")
+	_assert(Vector2i(11, 3) in box, "centre goal-line tile is in the box")
+	_assert(MatchRules.is_in_shooting_zone(Vector2i(11, 3), MatchRules.AWAY_NET), "box is a shooting zone")
+	_assert(MatchRules.is_in_shooting_zone(Vector2i(10, 1), MatchRules.AWAY_NET), "corner-touching ring can shoot")
+	_assert(not MatchRules.is_in_shooting_zone(Vector2i(9, 3), MatchRules.AWAY_NET), "one tile further is too far")
+	_assert(not MatchRules.is_in_shooting_zone(Vector2i(5, 3), MatchRules.AWAY_NET), "midfield cannot shoot")
+
+	var close := MatchRules.shot_geometry(Vector2i(11, 3), MatchRules.AWAY_NET)
+	var deep := MatchRules.shot_geometry(Vector2i(10, 3), MatchRules.AWAY_NET)
+	var wide := MatchRules.shot_geometry(Vector2i(11, 1), MatchRules.AWAY_NET)
+	_assert(close.distance < deep.distance, "the six-yard tile is closer than the ring")
+	_assert(close.angle_deg < 1.0, "shot from centre is straight on")
+	_assert(wide.angle_deg > close.angle_deg, "shot from the corner is angled")
+	var hit_close := MatchRules.shot_hit_chance(13, close.distance, close.angle)
+	var hit_deep := MatchRules.shot_hit_chance(13, deep.distance, deep.angle)
+	var hit_wide := MatchRules.shot_hit_chance(13, wide.distance, wide.angle)
+	_assert(hit_close > hit_deep, "closer shots hit more often")
+	_assert(hit_close > hit_wide, "straighter shots hit more often")
+
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var st := model.player_at(Vector2i(5, 3))
+	_assert(not model.can_shoot(st), "cannot shoot from kickoff")
+	st.pos = Vector2i(11, 3)
+	model.ball.pos = st.pos
+	_assert(model.can_shoot(st), "can shoot from the penalty box")
+	var acts := model.actions_for(st, MatchRules.AWAY_NET)
+	var ids: Array = []
+	for act in acts:
+		ids.append(act.id)
+	_assert("shoot" in ids, "clicking the net offers shoot")
+	var preview := model.shot_preview(st)
+	_assert(preview.text.contains("hit = ACC/(ACC+"), "preview shows the hit formula")
+	_assert(preview.text.contains("goal = hit"), "preview shows the goal product")
+	_assert(preview.keeper_in_net, "helix keeper starts in the net")
+
+	model.scripted_shot_outcome = "goal"
+	var scored := model.apply_shoot(st.id)
+	_assert(scored.goal, "scripted shot is a goal")
+	_assert(model.home_score == 1 and model.away_score == 0, "aether leads 1-0")
+	_assert(model.current_team == MatchRules.Team.AWAY, "conceding team kicks off")
+	_assert(model.player_at(Vector2i(6, 4)).has_ball, "helix striker takes the restart")
+
+	var miss_model := MatchModel.new()
+	miss_model.setup_kickoff()
+	var shooter := miss_model.player_at(Vector2i(5, 3))
+	shooter.pos = Vector2i(11, 3)
+	miss_model.ball.pos = shooter.pos
+	miss_model.scripted_shot_outcome = "miss"
+	var missed := miss_model.apply_shoot(shooter.id)
+	_assert(not missed.goal and not missed.hit, "scripted miss does not score")
+	_assert(miss_model.home_score == 0, "score unchanged on a miss")
+	_assert(miss_model.ball.is_loose() and miss_model.ball.pos == MatchRules.AWAY_NET, "missed shot is loose in the net")
 
 
 func _test_controller_click_flow() -> void:
