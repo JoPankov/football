@@ -10,7 +10,7 @@ This is what the game actually does today.
 - Teams: **Aether** (home, cyan, attacks +x) vs **Helix** (away, magenta, attacks −x).
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
 - Aether **#9 ST** starts on the centre spot `(5, 3)` **with the ball**. Helix does not start in possession.
-- Turns alternate. Aether kicks off. One action ends the turn.
+- **Simultaneous cycles.** Aether plans **up to 3 actions** (one per player). The third action ends the turn automatically; **End Turn** can finish early with fewer. Helix then plans the same way. All queued actions then resolve together. Then Aether plans again.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
 
@@ -37,10 +37,16 @@ Kickoff values by role:
 
 ## How to take a turn
 
-1. Click any player on the team whose turn it is.
-2. Click a highlighted tile.
-3. If that tile has more than one legal action, pick from the menu.
-4. Right-click or Escape cancels a menu or deselects.
+1. Click any player on the team that is planning.
+2. Click a highlighted tile (or pick from the menu). That **queues** the action — nothing moves yet.
+3. Repeat for up to **3 different players**. A gold ring marks a planned player; an arrow shows their destination.
+4. The **third** action ends the turn automatically. Click **End Turn** (or press Enter) to finish with fewer than 3.
+5. After Helix’s turn ends (third action or End Turn), all queued actions resolve. The match log lists every public event and roll (tackles, contests, moves, passes, shots).
+6. Click a planned player twice to clear their action and pick someone else — do this before the third action if you want to change who acts. Right-click or Escape cancels a menu or deselects.
+
+You cannot pick a fourth player. The third action locks the turn.
+
+Hotseat: plan arrows, gold rings, and plan log lines are visible only to the team that queued them — including past cycles. Resolution events (who tackled whom, rolls, and results) are public.
 
 Highlights:
 
@@ -98,8 +104,27 @@ Highlights:
 - Teammate: they receive it and become the carrier.
 - Adjacent empty square also allows **move** — you choose.
 - Adjacent teammate also allows **swap** — you choose.
-- 2–3 tiles away: pass happens immediately (no menu).
+- 2–3 tiles away: pass is queued immediately (no menu).
 - A pass to a teammate in an **offside position** is still legal. If it is not intercepted, it is offside (see below). Empty-square passes are never offside.
+
+## Simultaneous resolution
+
+Actions are planned against the current board, then resolve in this order:
+
+1. **Tackles**
+2. **Dribbles**
+3. **Square fights**
+4. **Destination clashes** — if two or more remaining **moves** target the same empty square, those players roll **CTR + 2d6**. The higher total takes the square; a tie leaves the lower-id player (first claimer). Losers stay put.
+5. **Moves and swaps**
+6. **Passes and shots**
+
+So if Aether tackles the Helix carrier and that carrier also queued a pass, the tackle is resolved first. If the tackle wins the ball, the pass is cancelled and the log says why.
+
+If a player was shoved before their action, the action is tried from their new tile when it is still legal; otherwise it is cancelled.
+
+A **goal** stops the rest of the cycle. Remaining planned actions are cancelled. The team that conceded then plans first from the new kickoff.
+
+The **match log** (right panel) lists every plan, clash, contest roll, pass, intercept, offside, shot, and cancellation — in the order they resolved.
 
 ## Offside
 
@@ -115,7 +140,7 @@ If a pass is intercepted, play continues. If it arrives to an offside teammate:
 
 - The **closest opponent** (Chebyshev, then lowest id) **moves onto the offside tile** and takes the ball.
 - The offside player is swapped onto that opponent’s old tile.
-- The defending team acts next.
+- Remaining planned actions in the cycle continue from the new state.
 
 Hover an offside teammate to see the restart. Those tiles highlight **red**. The chooser labels the pass **Pass (offside)**.
 

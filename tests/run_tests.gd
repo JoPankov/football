@@ -32,6 +32,7 @@ func _run() -> void:
 	_test_swap_and_choice()
 	_test_offside()
 	_test_shooting()
+	_test_planning_and_resolve()
 	await _test_controller_click_flow()
 	if _failed == 0:
 		print("ALL TESTS PASSED")
@@ -160,12 +161,13 @@ func _test_turn_and_selection() -> void:
 	_assert(model.can_select(home), "home can select own player")
 	_assert(not model.can_select(away), "home cannot select helix")
 	var illegal := model.apply_move(away.id, Vector2i(6, 3))
-	_assert(not illegal.ok, "away cannot move on home turn")
+	_assert(not illegal.ok, "away cannot move during aether planning")
 	var ok := model.apply_move(home.id, Vector2i(5, 4))
 	_assert(ok.ok, "home ST can move with the ball")
 	_assert(home.has_ball, "kickoff taker still has the ball after moving")
-	_assert(model.current_team == MatchRules.Team.AWAY, "turn passed to away")
-	_assert(model.can_select(away), "away can select after the turn")
+	_assert(model.current_team == MatchRules.Team.HOME, "planning team stays until End Turn")
+	_assert(not model.can_select(away), "helix still cannot be selected")
+	_assert(not model.can_end_planning(), "end turn needs at least one plan")
 
 
 func _test_possession() -> void:
@@ -187,7 +189,7 @@ func _test_ball_travels_with_carrier() -> void:
 	model.setup_kickoff()
 	var striker := model.player_at(Vector2i(5, 3))
 	model.apply_move(striker.id, Vector2i(5, 4))
-	# Skip away turn by moving a dummy adjacent away player that does not contest.
+	model.ignore_team_gate = true
 	var away := model.player_at(Vector2i(6, 4))
 	model.apply_move(away.id, Vector2i(6, 5))
 	var carry := model.apply_move(striker.id, Vector2i(4, 3))
@@ -272,6 +274,7 @@ func _test_square_fight() -> void:
 	_assert(not home.has_ball and not away.has_ball, "no ball changed hands")
 
 	model.scripted_attacker_wins = false
+	model.ignore_team_gate = true
 	var origin := away.pos
 	var dest := home.pos
 	var lose := model.apply_move(away.id, dest)
@@ -290,6 +293,7 @@ func _test_challenge_takes_ball() -> void:
 	model.apply_move(decoy.id, Vector2i(5, 0))
 	var away := model.player_at(Vector2i(6, 4))
 	model.scripted_attacker_wins = true
+	model.ignore_team_gate = true
 	var result := model.apply_move(away.id, Vector2i(5, 3))
 	_assert(result.get("action") == "tackle", "off-ball step onto the carrier is a tackle")
 	_assert(result.get("attacker_stat_name") == "DEF" and result.get("defender_stat_name") == "CTR", "tackle is DEF vs CTR")
@@ -343,9 +347,8 @@ func _test_pass() -> void:
 	_assert(near.has_ball and not st.has_ball, "receiver has the ball")
 	_assert(model.ball.pos == near.pos, "ball moved to the receiver")
 	_assert(st.pos == Vector2i(5, 3) and near.pos == Vector2i(5, 2), "neither player moved")
-	_assert(model.current_team == MatchRules.Team.AWAY, "pass ends the turn")
-	var illegal := model.apply_pass(near.id, st.id)
-	_assert(not illegal.ok, "cannot pass on the opponent's turn")
+	_assert(model.current_team == MatchRules.Team.HOME, "a pass does not switch the planning team")
+	_assert(not model.can_queue(away), "helix still cannot queue during aether planning")
 
 	var open := MatchModel.new()
 	open.setup_kickoff()
@@ -361,6 +364,8 @@ func _test_pass() -> void:
 	open.scripted_first_intercept_wins = false
 	var laid := open.apply_pass_to(kicker.id, Vector2i(3, 3))
 	_assert(laid.ok and laid.action == "pass", "pass to empty square succeeds")
+	_assert(int(laid.get("receiver_id", 0)) < 0, "empty-square pass has no receiver")
+	_assert(laid.dest == Vector2i(3, 3), "empty-square pass records the landing tile")
 	_assert(not kicker.has_ball, "passer released the ball")
 	_assert(open.ball.is_loose() and open.ball.pos == Vector2i(3, 3), "ball sits loose on the target square")
 	_assert(kicker.pos == Vector2i(5, 3), "passer stayed put")
@@ -429,7 +434,7 @@ func _test_swap_and_choice() -> void:
 	_assert(st.pos == Vector2i(5, 2) and near.pos == Vector2i(5, 3), "players swapped places")
 	_assert(st.has_ball and not near.has_ball, "carrier kept the ball")
 	_assert(model.ball.pos == st.pos, "ball followed the carrier")
-	_assert(model.current_team == MatchRules.Team.AWAY, "swap ends the turn")
+	_assert(model.current_team == MatchRules.Team.HOME, "a swap does not switch the planning team")
 
 
 func _test_offside() -> void:
@@ -459,7 +464,7 @@ func _test_offside() -> void:
 	_assert(taker.pos == Vector2i(10, 3) and taker.has_ball, "closest opponent took the offside tile and the ball")
 	_assert(mate.pos == Vector2i(9, 2), "offside player was swapped to the taker's old tile")
 	_assert(not st.has_ball, "passer lost the ball")
-	_assert(model.current_team == MatchRules.Team.AWAY, "defending team acts after offside")
+	_assert(model.current_team == MatchRules.Team.HOME, "offside does not switch the planning team")
 	_assert(model.ball.pos == taker.pos, "ball sits on the restart tile")
 
 	var onside := MatchModel.new()
@@ -505,6 +510,163 @@ func _test_offside() -> void:
 	_assert(cut.get("intercepted", false), "intercept happens before offside")
 	_assert(cut.action == "pass", "intercepted pass is not recorded as offside")
 	_assert(not target.has_ball, "offside teammate did not receive the intercepted pass")
+
+
+func _dummy_empty_move(model: MatchModel, team: int, except: Dictionary) -> Dictionary:
+	for player in model.players:
+		if player.team != team or except.has(player.id):
+			continue
+		for dest in model.valid_moves(player):
+			if model.player_at(dest) == null:
+				return {player = player, dest = dest}
+	return {}
+
+
+func _fill_plans(model: MatchModel, extras: Array) -> void:
+	var except := {}
+	for extra in extras:
+		var player_id := int(extra.get("player_id", extra.get("id", -1)))
+		var action: Dictionary = extra.get("action", extra)
+		model.queue_plan(player_id, action)
+		except[player_id] = true
+	for existing in model.plans_for(model.current_team):
+		except[int(existing.get("player_id", -1))] = true
+	while model.plan_count() < MatchRules.ACTIONS_PER_SIDE:
+		var dummy := _dummy_empty_move(model, model.current_team, except)
+		if dummy.is_empty():
+			_assert(false, "needed a dummy empty move")
+			return
+		var mover: PlayerState = dummy.player
+		model.queue_plan(mover.id, {id = "move", dest = dummy.dest, label = "Move"})
+		except[mover.id] = true
+
+
+func _test_planning_and_resolve() -> void:
+	print("-- planning and resolve")
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var st := model.player_at(Vector2i(5, 3))
+	var queued := model.queue_plan(st.id, {id = "move", dest = Vector2i(5, 4), label = "Move"})
+	_assert(queued.ok and queued.action == "queue", "carrier can queue a move")
+	_assert(st.pos == Vector2i(5, 3), "queued move does not apply yet")
+	_assert(model.plan_count() == 1, "one plan stored")
+	_assert(model.can_end_planning(), "end turn is allowed after the first plan")
+	_assert(not model.planning_complete(), "one plan is not a full side")
+	var away := model.player_at(Vector2i(6, 4))
+	_assert(not model.can_queue(away), "cannot queue a helix player during aether planning")
+	_fill_plans(model, [])
+	_assert(model.plan_count() == 3, "three aether plans")
+	_assert(model.planning_complete(), "three plans fill the side")
+	var extra: PlayerState = null
+	for player in model.players:
+		if player.team == MatchRules.Team.HOME and model.plan_of(player.id).is_empty():
+			extra = player
+			break
+	_assert(extra != null, "an unplanned aether player remains")
+	_assert(not model.can_select(extra), "a fourth aether player cannot be selected")
+	var locked := model.end_planning()
+	_assert(locked.ok and locked.action == "end_planning", "aether end turn hands planning to helix")
+	_assert(model.current_team == MatchRules.Team.AWAY, "helix plans second")
+	_assert(st.pos == Vector2i(5, 3), "board is unchanged after aether locks in")
+	_assert(model.combat_log.as_text().contains("PLAN  "), "full log still stores aether plans")
+	_assert(
+		model.combat_log.as_text(MatchRules.Team.HOME).contains("PLAN  "),
+		"aether still sees own plan lines"
+	)
+	var helix_view := model.combat_log.as_text(MatchRules.Team.AWAY)
+	_assert(not helix_view.contains("PLAN  "), "helix log hides aether plan lines")
+	_assert(not helix_view.contains("locked in"), "helix log hides aether lock-in")
+
+	var helix_st := model.player_at(Vector2i(6, 4))
+	_fill_plans(model, [])
+	var resolved := model.end_planning()
+	_assert(resolved.ok and resolved.action == "resolve", "helix end turn resolves the cycle")
+	_assert(model.current_team == MatchRules.Team.HOME, "aether plans the next cycle")
+	_assert(st.pos == Vector2i(5, 4), "queued aether move applied on resolve")
+	_assert(model.home_plans.is_empty() and model.away_plans.is_empty(), "plans clear after resolve")
+	_assert(model.combat_log.as_text().contains("Resolve cycle"), "log has a resolve header")
+	var aether_after := model.combat_log.as_text(MatchRules.Team.HOME)
+	var helix_after := model.combat_log.as_text(MatchRules.Team.AWAY)
+	var public_after := model.combat_log.as_text(CombatLog.VIEWER_PUBLIC)
+	_assert(aether_after.contains("PLAN  AETHER"), "aether still sees own past plans after resolve")
+	_assert(not aether_after.contains("PLAN  HELIX"), "aether does not see helix plans")
+	_assert(aether_after.contains("MOVE"), "aether sees public resolution results")
+	_assert(helix_after.contains("PLAN  HELIX"), "helix still sees own past plans after resolve")
+	_assert(not helix_after.contains("PLAN  AETHER"), "helix never sees aether plan lines")
+	_assert(helix_after.contains("Resolve cycle"), "helix sees the public resolve header")
+	_assert(helix_after.contains("MOVE"), "helix sees the public move result")
+	_assert(not public_after.contains("PLAN  "), "resolution view hides every team's plans")
+	_assert(public_after.contains("MOVE"), "resolution view shows the public move")
+
+	var clash := MatchModel.new()
+	clash.setup_kickoff()
+	var home_st := clash.player_at(Vector2i(5, 3))
+	var away_st := clash.player_at(Vector2i(6, 4))
+	clash.scripted_attacker_wins = true
+	_fill_plans(clash, [{
+		player_id = home_st.id,
+		id = "move",
+		dest = Vector2i(5, 4),
+		label = "Move",
+	}])
+	clash.end_planning()
+	_fill_plans(clash, [{
+		player_id = away_st.id,
+		id = "move",
+		dest = Vector2i(5, 4),
+		label = "Move",
+	}])
+	var clash_result := clash.end_planning()
+	_assert(clash_result.action == "resolve", "clash cycle resolved")
+	_assert(home_st.pos == Vector2i(5, 4), "lower-id mover won the CTR clash")
+	_assert(away_st.pos == Vector2i(6, 4), "clash loser stayed put")
+	_assert(clash.combat_log.as_text().contains("CLASH"), "log records the square fight")
+
+	var interrupt := MatchModel.new()
+	interrupt.setup_kickoff()
+	var carrier := interrupt.player_at(Vector2i(5, 3))
+	var mate := interrupt.player_at(Vector2i(5, 2))
+	var tackler := interrupt.player_at(Vector2i(6, 4))
+	interrupt.scripted_attacker_wins = true
+	interrupt.scripted_first_intercept_wins = false
+	_fill_plans(interrupt, [{
+		player_id = carrier.id,
+		id = "pass",
+		dest = mate.pos,
+		target_id = mate.id,
+		label = "Pass",
+	}])
+	interrupt.end_planning()
+	_fill_plans(interrupt, [{
+		player_id = tackler.id,
+		id = "tackle",
+		dest = Vector2i(5, 3),
+		label = "Tackle",
+	}])
+	var fight := interrupt.end_planning()
+	_assert(fight.action == "resolve", "tackle-then-pass cycle resolved")
+	_assert(tackler.has_ball and tackler.pos == Vector2i(5, 3), "tackle resolved first and won the ball")
+	_assert(not carrier.has_ball, "passer lost the ball")
+	_assert(not mate.has_ball, "pass did not arrive after the tackle")
+	var log_text := interrupt.combat_log.as_text()
+	_assert(log_text.contains("TACKLE"), "log shows the tackle")
+	_assert(log_text.contains("CANCEL") and log_text.contains("lost the ball"), "log shows the cancelled pass")
+
+	var early := MatchModel.new()
+	early.setup_kickoff()
+	var early_st := early.player_at(Vector2i(5, 3))
+	early.queue_plan(early_st.id, {id = "move", dest = Vector2i(5, 4), label = "Move"})
+	var early_lock := early.end_planning()
+	_assert(early_lock.ok and early_lock.action == "end_planning", "end turn with one plan hands to helix")
+	_assert(early.current_team == MatchRules.Team.AWAY, "helix plans after a premature aether end")
+	_assert(early.home_plans.size() == 1, "aether's single plan is kept")
+	_assert(early_st.pos == Vector2i(5, 3), "premature end does not resolve yet")
+	var early_helix := early.player_at(Vector2i(6, 4))
+	early.queue_plan(early_helix.id, {id = "move", dest = Vector2i(6, 5), label = "Move"})
+	var early_resolve := early.end_planning()
+	_assert(early_resolve.ok and early_resolve.action == "resolve", "helix can also end early")
+	_assert(early_st.pos == Vector2i(5, 4), "lone aether plan still resolved")
+	_assert(early_helix.pos == Vector2i(6, 5), "lone helix plan still resolved")
 
 
 func _test_shooting() -> void:
@@ -570,22 +732,36 @@ func _test_controller_click_flow() -> void:
 	var packed: PackedScene = load("res://scenes/main.tscn")
 	var main: Node = packed.instantiate()
 	root.add_child(main)
+	await process_frame
 	var controller: Node = main
 	controller.animate_moves = false
+	controller._frame_camera()
+	await process_frame
+	var play: Rect2 = controller.hud.play_area()
+	var aether_net: Vector2 = controller._cell_to_screen(MatchRules.HOME_NET)
+	var helix_net: Vector2 = controller._cell_to_screen(MatchRules.AWAY_NET)
+	_assert(aether_net.x >= play.position.x - 2.0, "aether net sits in the left play area")
+	_assert(helix_net.x <= play.end.x + 2.0, "helix net is left of the match log")
+	_assert(helix_net.x > aether_net.x, "pitch still runs left to right")
 	var select_result: Dictionary = controller.handle_cell_clicked(Vector2i(5, 3))
 	_assert(select_result.get("action") == "select", "clicking own player selects")
 	_assert(controller.selected_id >= 0, "selection stored")
 	var move_choice: Dictionary = controller.handle_cell_clicked(Vector2i(5, 4))
 	_assert(move_choice.get("action") == "choose", "adjacent empty tile offers move or pass")
 	var move_result: Dictionary = controller.choose_action("move")
-	_assert(move_result.get("ok", false), "selected carrier can move to an empty tile")
+	_assert(move_result.get("action") == "queue", "choosing move queues the action")
 	var model: MatchModel = controller.model
-	var striker := model.player_at(Vector2i(5, 4))
-	_assert(striker != null and striker.has_ball, "click-move kept kickoff possession")
-	_assert(model.current_team == MatchRules.Team.AWAY, "click-move ended the turn")
-	_assert(controller.selected_id < 0, "selection cleared after the action")
-	var enemy_select: Dictionary = controller.handle_cell_clicked(MatchRules.HOME_NET)
-	_assert(not enemy_select.get("ok", false), "away turn cannot select aether")
+	var striker := model.player_at(Vector2i(5, 3))
+	_assert(striker != null and striker.has_ball, "queued move left the board unchanged")
+	_assert(model.plan_count() == 1, "one aether plan after the click")
+	_assert(model.current_team == MatchRules.Team.HOME, "planning stays with aether")
+	_assert(controller.selected_id < 0, "selection cleared after the queue")
+	_assert(controller._plan_markers().size() == 1, "own plan arrow is visible")
+	_assert(controller.pieces[striker.id].planned, "own gold ring is visible")
+	_assert(controller.hud._phase.text.contains("AETHER"), "banner names the planning team")
+	_assert(controller.hud._turn.text.contains("2 ACTIONS LEFT"), "banner shows remaining actions")
+	var enemy_select: Dictionary = controller.handle_cell_clicked(MatchRules.AWAY_NET)
+	_assert(not enemy_select.get("ok", false), "cannot select helix during aether planning")
 	main.queue_free()
 
 	var pass_main: Node = packed.instantiate()
@@ -600,8 +776,8 @@ func _test_controller_click_flow() -> void:
 		option_ids.append(option.get("id", ""))
 	_assert("pass" in option_ids and "swap" in option_ids, "chooser lists pass and swap")
 	var chosen_pass: Dictionary = pass_main.choose_action("pass")
-	_assert(chosen_pass.get("action") == "pass", "choosing pass completes the pass")
-	_assert(pass_main.model.player_at(Vector2i(5, 2)).has_ball, "chosen pass delivered the ball")
+	_assert(chosen_pass.get("action") == "queue", "choosing pass queues the pass")
+	_assert(pass_main.model.player_at(Vector2i(5, 3)).has_ball, "queued pass has not moved the ball")
 	pass_main.queue_free()
 
 	var swap_main: Node = packed.instantiate()
@@ -610,9 +786,8 @@ func _test_controller_click_flow() -> void:
 	swap_main.handle_cell_clicked(Vector2i(5, 3))
 	swap_main.handle_cell_clicked(Vector2i(5, 2))
 	var chosen_swap: Dictionary = swap_main.choose_action("swap")
-	_assert(chosen_swap.get("action") == "swap", "choosing swap swaps places")
-	_assert(swap_main.model.player_at(Vector2i(5, 2)).has_ball, "carrier kept the ball after swap")
-	_assert(swap_main.model.player_at(Vector2i(5, 2)).number == 9, "Aether #9 moved onto the teammate tile")
+	_assert(chosen_swap.get("action") == "queue", "choosing swap queues the swap")
+	_assert(swap_main.model.player_at(Vector2i(5, 3)).number == 9, "queued swap left #9 in place")
 	swap_main.queue_free()
 
 	var auto_pass: Node = packed.instantiate()
@@ -621,8 +796,8 @@ func _test_controller_click_flow() -> void:
 	auto_pass.handle_cell_clicked(Vector2i(5, 3))
 	auto_pass.model.scripted_first_intercept_wins = false
 	var far_pass: Dictionary = auto_pass.handle_cell_clicked(Vector2i(4, 0))
-	_assert(far_pass.get("action") == "pass", "non-adjacent in-range teammate still auto-passes")
-	_assert(auto_pass.model.player_at(Vector2i(4, 0)).has_ball, "auto-pass delivered the ball")
+	_assert(far_pass.get("action") == "queue", "non-adjacent in-range teammate queues a pass")
+	_assert(auto_pass.model.player_at(Vector2i(5, 3)).has_ball, "auto-pass is only queued")
 	auto_pass.queue_free()
 
 	var ground_pass: Node = packed.instantiate()
@@ -631,9 +806,85 @@ func _test_controller_click_flow() -> void:
 	ground_pass.handle_cell_clicked(Vector2i(5, 3))
 	ground_pass.model.scripted_first_intercept_wins = false
 	var empty_pass: Dictionary = ground_pass.handle_cell_clicked(Vector2i(3, 3))
-	_assert(empty_pass.get("action") == "pass", "clicking a distant empty square passes to it")
-	_assert(ground_pass.model.ball.is_loose() and ground_pass.model.ball.pos == Vector2i(3, 3), "ground pass left the ball loose")
+	_assert(empty_pass.get("action") == "queue", "clicking a distant empty square queues a pass")
+	_assert(not ground_pass.model.ball.is_loose(), "queued ground pass has not released the ball")
 	ground_pass.queue_free()
+
+	var cycle_main: Node = packed.instantiate()
+	root.add_child(cycle_main)
+	cycle_main.animate_moves = false
+	var cycle: MatchModel = cycle_main.model
+	var cycle_st := cycle.player_at(Vector2i(5, 3))
+	_fill_plans(cycle, [{
+		player_id = cycle_st.id,
+		id = "move",
+		dest = Vector2i(5, 4),
+		label = "Move",
+	}])
+	var aether_end: Dictionary = cycle_main.end_planning()
+	_assert(aether_end.get("action") == "end_planning", "controller end turn locks aether")
+	_assert(cycle.current_team == MatchRules.Team.AWAY, "helix plans after aether ends")
+	_assert(cycle_main.hud._phase.text.contains("HELIX"), "banner switches to helix planning")
+	_assert(cycle_main.hud._turn.text.contains("3 ACTIONS LEFT"), "helix starts with three actions left")
+	_assert(cycle_main._plan_markers().is_empty(), "aether arrows hidden while helix plans")
+	var aether_ring_visible := false
+	for player in cycle.players:
+		if player.team != MatchRules.Team.HOME:
+			continue
+		var piece: PlayerPiece = cycle_main.pieces.get(player.id)
+		if piece != null and piece.planned:
+			aether_ring_visible = true
+	_assert(not aether_ring_visible, "aether gold rings hidden while helix plans")
+	_assert(
+		not cycle.combat_log.as_text(MatchRules.Team.AWAY).contains("PLAN  "),
+		"helix match log hides aether plans"
+	)
+	_fill_plans(cycle, [])
+	var helix_end: Dictionary = cycle_main.end_planning()
+	_assert(helix_end.get("action") == "resolve", "controller end turn resolves after helix")
+	_assert(cycle.player_at(Vector2i(5, 4)) != null, "queued move applied on resolve")
+	_assert(cycle.combat_log.as_text().contains("MOVE"), "match log recorded the move")
+	cycle_main.queue_free()
+
+	var auto_main: Node = packed.instantiate()
+	root.add_child(auto_main)
+	auto_main.animate_moves = false
+	var auto_model: MatchModel = auto_main.model
+	var auto_except := {}
+	var last_queue: Dictionary = {}
+	for home_i in range(MatchRules.ACTIONS_PER_SIDE):
+		var dummy := _dummy_empty_move(auto_model, MatchRules.Team.HOME, auto_except)
+		_assert(not dummy.is_empty(), "needed an aether dummy move for auto-end")
+		var mover: PlayerState = dummy.player
+		auto_except[mover.id] = true
+		auto_main.selected_id = mover.id
+		last_queue = auto_main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
+	_assert(last_queue.get("action") == "end_planning", "third aether action ends the turn")
+	_assert(auto_model.current_team == MatchRules.Team.AWAY, "helix plans after the third aether action")
+	auto_except = {}
+	for away_i in range(MatchRules.ACTIONS_PER_SIDE):
+		var dummy := _dummy_empty_move(auto_model, MatchRules.Team.AWAY, auto_except)
+		_assert(not dummy.is_empty(), "needed a helix dummy move for auto-resolve")
+		var mover: PlayerState = dummy.player
+		auto_except[mover.id] = true
+		auto_main.selected_id = mover.id
+		last_queue = auto_main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
+	_assert(last_queue.get("action") == "resolve", "third helix action resolves the cycle")
+	_assert(auto_model.current_team == MatchRules.Team.HOME, "aether plans the next cycle after auto-resolve")
+	auto_main.queue_free()
+
+	var early_main: Node = packed.instantiate()
+	root.add_child(early_main)
+	early_main.animate_moves = false
+	early_main.handle_cell_clicked(Vector2i(5, 3))
+	early_main.handle_cell_clicked(Vector2i(5, 4))
+	var early_choice: Dictionary = early_main.choose_action("move")
+	_assert(early_choice.get("action") == "queue", "first action only queues")
+	_assert(early_main.model.current_team == MatchRules.Team.HOME, "one action does not auto-end")
+	var early_end: Dictionary = early_main.end_planning()
+	_assert(early_end.get("action") == "end_planning", "end turn with one queued action is allowed")
+	_assert(early_main.model.current_team == MatchRules.Team.AWAY, "helix plans after a premature end turn")
+	early_main.queue_free()
 
 	var offside_main: Node = packed.instantiate()
 	root.add_child(offside_main)
@@ -650,9 +901,7 @@ func _test_controller_click_flow() -> void:
 	var offside_choice: Dictionary = offside_main.handle_cell_clicked(Vector2i(10, 3))
 	_assert(offside_choice.get("action") == "choose", "adjacent offside teammate opens pass/swap")
 	var offside_click: Dictionary = offside_main.choose_action("pass")
-	_assert(offside_click.get("action") == "offside", "choosing the offside pass flags offside")
-	var restart := off_model.player_at(Vector2i(10, 3))
-	_assert(restart != null and restart.team == MatchRules.Team.AWAY and restart.has_ball, "closest opponent took the restart on click")
-	_assert(off_model.current_team == MatchRules.Team.AWAY, "defending team to act after the offside click")
+	_assert(offside_click.get("action") == "queue", "choosing the offside pass queues it")
+	_assert(off_st.has_ball, "offside pass has not resolved yet")
 	offside_main.queue_free()
 	await process_frame

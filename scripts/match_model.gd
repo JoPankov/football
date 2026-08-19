@@ -1,6 +1,9 @@
 class_name MatchModel
 extends RefCounted
 
+const _CombatLog := preload("res://scripts/combat_log.gd")
+const _TurnResolver := preload("res://scripts/turn_resolver.gd")
+
 ## Authoritative match state. No nodes, no visuals.
 
 var current_team: int = MatchRules.Team.HOME
@@ -10,6 +13,11 @@ var away_score: int = 0
 var players: Array[PlayerState] = []
 var ball: BallState = BallState.new()
 var rng := RandomNumberGenerator.new()
+var home_plans: Array[Dictionary] = []
+var away_plans: Array[Dictionary] = []
+var combat_log := _CombatLog.new()
+## Resolver sets this so Helix actions can apply during a simultaneous resolve.
+var ignore_team_gate: bool = false
 ## null = roll; true = attacker wins; false = occupant wins. Tests use this.
 var scripted_attacker_wins = null
 ## null = roll; true = first interceptor wins the ball; false = passer beats every interceptor.
@@ -34,9 +42,13 @@ func setup_kickoff(kicking_team: int = MatchRules.Team.HOME) -> void:
 			players.append(player)
 			next_id += 1
 	ball = BallState.new()
+	home_plans.clear()
+	away_plans.clear()
 	current_team = kicking_team
 	turn_index = 0
+	ignore_team_gate = false
 	rng.randomize()
+	combat_log.header("Kickoff — %s plans first." % MatchRules.team_name(kicking_team))
 	var kicker: PlayerState = null
 	if kicking_team == MatchRules.Team.HOME:
 		kicker = player_at(Vector2i(5, 3))
@@ -106,7 +118,114 @@ func contest_moves(player: PlayerState) -> Array[Vector2i]:
 
 
 func can_select(player: PlayerState) -> bool:
-	return player != null and player.team == current_team
+	if player == null or player.team != current_team:
+		return false
+	if not plan_of(player.id).is_empty():
+		return true
+	return plan_count(current_team) < MatchRules.ACTIONS_PER_SIDE
+
+
+func _acting_allowed(player: PlayerState) -> bool:
+	return player != null and (ignore_team_gate or player.team == current_team)
+
+
+func plans_for(team: int) -> Array[Dictionary]:
+	return home_plans if team == MatchRules.Team.HOME else away_plans
+
+
+func plan_count(team: int = -1) -> int:
+	if team < 0:
+		team = current_team
+	return plans_for(team).size()
+
+
+func plan_of(player_id: int) -> Dictionary:
+	for plan in home_plans:
+		if int(plan.get("player_id", -1)) == player_id:
+			return plan
+	for plan in away_plans:
+		if int(plan.get("player_id", -1)) == player_id:
+			return plan
+	return {}
+
+
+func clear_plan(player_id: int) -> Dictionary:
+	var plan := plan_of(player_id)
+	if plan.is_empty():
+		return {ok = false, reason = "no_plan"}
+	var bucket := plans_for(int(plan.get("team", current_team)))
+	for i in range(bucket.size() - 1, -1, -1):
+		if int(bucket[i].get("player_id", -1)) == player_id:
+			bucket.remove_at(i)
+	var player := player_by_id(player_id)
+	combat_log.note(
+		"Cleared plan for %s." % (player.label() if player != null else "player"),
+		int(plan.get("team", current_team))
+	)
+	return {ok = true, action = "clear_plan", player_id = player_id}
+
+
+func can_queue(player: PlayerState) -> bool:
+	if not _acting_allowed(player):
+		return false
+	if not plan_of(player.id).is_empty():
+		return true
+	return plan_count(player.team) < MatchRules.ACTIONS_PER_SIDE
+
+
+func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
+	var player := player_by_id(player_id)
+	if not can_queue(player):
+		return {ok = false, reason = "cannot_queue"}
+	var action_id := str(action.get("id", ""))
+	if action_id == "":
+		return {ok = false, reason = "no_action"}
+	clear_plan(player_id)
+	var dest: Vector2i = action.get("dest", player.pos)
+	var plan := {
+		player_id = player_id,
+		team = player.team,
+		action = action_id,
+		dest = dest,
+		target_id = int(action.get("target_id", -1)),
+		origin = player.pos,
+		label = str(action.get("label", action_id)),
+	}
+	plans_for(player.team).append(plan)
+	var result := {
+		ok = true,
+		action = "queue",
+		player_id = player_id,
+		team = player.team,
+		plan = plan,
+		attacker_label = player.label(),
+		label = plan.label,
+		plan_text = _CombatLog.plan_summary(plan),
+		dest = dest,
+	}
+	combat_log.event(result)
+	return result
+
+
+func can_end_planning() -> bool:
+	return plan_count(current_team) > 0
+
+
+func planning_complete() -> bool:
+	return plan_count(current_team) >= MatchRules.ACTIONS_PER_SIDE
+
+
+func end_planning() -> Dictionary:
+	if not can_end_planning():
+		return {ok = false, reason = "need_an_action"}
+	combat_log.note("%s locked in %d actions." % [
+		MatchRules.team_name(current_team),
+		plan_count(current_team),
+	], current_team)
+	if current_team == MatchRules.Team.HOME:
+		current_team = MatchRules.Team.AWAY
+		return {ok = true, action = "end_planning", next_team = current_team}
+	return _TurnResolver.resolve(self)
 
 
 func can_pass_to(passer: PlayerState, target: PlayerState) -> bool:
@@ -120,7 +239,7 @@ func can_pass_to(passer: PlayerState, target: PlayerState) -> bool:
 func can_pass_to_cell(passer: PlayerState, dest: Vector2i) -> bool:
 	if passer == null or not passer.has_ball:
 		return false
-	if passer.team != current_team:
+	if not _acting_allowed(passer):
 		return false
 	if not MatchRules.in_bounds(dest) or dest == passer.pos:
 		return false
@@ -214,7 +333,7 @@ func _cells_in_range(origin: Vector2i, reach: int) -> Array[Vector2i]:
 func can_swap(player: PlayerState, teammate: PlayerState) -> bool:
 	if player == null or teammate == null:
 		return false
-	if player.team != current_team or teammate.team != player.team:
+	if not _acting_allowed(player) or teammate.team != player.team:
 		return false
 	if teammate.id == player.id:
 		return false
@@ -223,7 +342,7 @@ func can_swap(player: PlayerState, teammate: PlayerState) -> bool:
 
 func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 	var actions: Array[Dictionary] = []
-	if player == null or player.team != current_team:
+	if not _acting_allowed(player):
 		return actions
 	if not MatchRules.in_bounds(dest):
 		return actions
@@ -259,7 +378,7 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 
 
 func can_shoot(player: PlayerState) -> bool:
-	if player == null or not player.has_ball or player.team != current_team:
+	if player == null or not player.has_ball or not _acting_allowed(player):
 		return false
 	return MatchRules.is_in_shooting_zone(player.pos, MatchRules.opponent_goal(player.team))
 
@@ -347,7 +466,6 @@ func apply_swap(player_id: int, teammate_id: int) -> Dictionary:
 		ball.pos = dest
 	elif teammate.has_ball:
 		ball.pos = origin
-	_advance_turn()
 	return {
 		ok = true,
 		action = "swap",
@@ -359,6 +477,9 @@ func apply_swap(player_id: int, teammate_id: int) -> Dictionary:
 		gained_possession = false,
 		lost_possession = false,
 		contest_won = true,
+		ball_holder_id = (
+			player.id if player.has_ball else (teammate.id if teammate.has_ball else -1)
+		),
 		attacker_label = player.label(),
 		defender_label = teammate.label(),
 	}
@@ -426,10 +547,7 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 		header = "OFFSIDE pass to %s (%d %s)" % [target_name, dist, "tile" if dist == 1 else "tiles"]
 	if offside and taker != null:
 		lines.append(
-			"If it arrives: offside. %s takes the tile and %s act." % [
-				taker.label(),
-				MatchRules.team_name(taker.team),
-			]
+			"If it arrives: offside. %s takes the tile and the ball." % taker.label()
 		)
 	var body := "\n".join(lines)
 	var footer := "Pass success: %d%%" % total_pct
@@ -470,7 +588,6 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 		var from_tile := thief.pos
 		thief.pos = landing
 		_give_ball(thief)
-		_advance_turn()
 		return {
 			ok = true,
 			action = "pass",
@@ -507,7 +624,6 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 		receiver_label = occupant.label()
 	else:
 		_release_ball(dest)
-	_advance_turn()
 	return {
 		ok = true,
 		action = "pass",
@@ -590,7 +706,6 @@ func _apply_offside(passer: PlayerState, receiver: PlayerState) -> Dictionary:
 	taker.pos = dest
 	receiver.pos = origin
 	_give_ball(taker)
-	_advance_turn()
 	return {
 		ok = true,
 		action = "offside",
@@ -650,7 +765,6 @@ func apply_shoot(player_id: int) -> Dictionary:
 	}
 	if not hit:
 		_release_ball(goal)
-		_advance_turn()
 		return result
 	if saved:
 		var keeper := player_at(goal)
@@ -658,7 +772,6 @@ func apply_shoot(player_id: int) -> Dictionary:
 			_give_ball(keeper)
 		else:
 			_release_ball(goal)
-		_advance_turn()
 		return result
 	result.goal = true
 	_award_goal(player.team)
@@ -672,7 +785,7 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 	var player := player_by_id(player_id)
 	if player == null:
 		return {ok = false, reason = "no_player"}
-	if player.team != current_team:
+	if not _acting_allowed(player):
 		return {ok = false, reason = "wrong_team"}
 	if dest not in valid_moves(player):
 		return {ok = false, reason = "illegal_dest"}
@@ -695,11 +808,13 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 		action = "move",
 		gained_possession = gained,
 		lost_possession = false,
+		carried = player.has_ball,
 		player_id = player_id,
 		dest = dest,
 		origin = origin,
 		goal = false,
 		reset = false,
+		attacker_label = player.label(),
 	}
 	if _carrier_in_opponent_net(player):
 		_award_goal(player.team)
@@ -708,7 +823,6 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 		result.home_score = home_score
 		result.away_score = away_score
 		return result
-	_advance_turn()
 	return result
 
 
@@ -772,6 +886,7 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 	elif is_dribble:
 		_give_ball(occupant)
 		result.lost_possession = true
+	result.carried = player.has_ball
 
 	if _carrier_in_opponent_net(player):
 		_award_goal(player.team)
@@ -780,7 +895,6 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		result.home_score = home_score
 		result.away_score = away_score
 		return result
-	_advance_turn()
 	return result
 
 
@@ -811,11 +925,6 @@ func _release_ball(pos: Vector2i) -> void:
 		previous.has_ball = false
 	ball.carrier_id = -1
 	ball.pos = pos
-
-
-func _advance_turn() -> void:
-	turn_index += 1
-	current_team = MatchRules.opposite_team(current_team)
 
 
 func _positions_unique() -> bool:

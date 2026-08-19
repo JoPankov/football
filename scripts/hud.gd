@@ -1,17 +1,29 @@
 class_name MatchHUD
 extends CanvasLayer
 
+const _CombatLog := preload("res://scripts/combat_log.gd")
+
 const ACC_COLOR := Color("f0c14b")
 const DEF_COLOR := Color("7dffe0")
 const CTR_COLOR := Color("e39bff")
+const BAR_TOP := 88.0
+const BAR_BOTTOM := 72.0
+const LOG_INSET := 308.0
+const PLAY_MARGIN := 12.0
 
 var _home_name: Label
 var _away_name: Label
 var _status: Label
 var _possession: Label
 var _hint: Label
+var _phase: Label
 var _turn: Label
 var _event: Label
+var _top_accent: ColorRect
+var _phase_bar: ColorRect
+var _log_title: Label
+var _log_style: StyleBoxFlat
+var _model: MatchModel
 var _card: ColorRect
 var _card_title: Label
 var _card_acc: Label
@@ -25,18 +37,34 @@ var _card_b_ctr: Label
 var last_event: Dictionary = {}
 
 signal action_picked(action_id: String)
+signal end_turn_pressed
 
 var _choice_panel: PanelContainer
 var _choice_box: VBoxContainer
 var _choice_title: Label
 var _forecast: ColorRect
 var _forecast_label: Label
+var _log_panel: PanelContainer
+var _log_label: RichTextLabel
+var _end_turn: Button
+var _plan_list: Label
+var _resolving: bool = false
 
 
 func _ready() -> void:
 	_build()
 	_build_choice_panel()
 	_build_forecast()
+	_build_log()
+
+
+func play_area() -> Rect2:
+	var view := get_viewport().get_visible_rect().size
+	var left := PLAY_MARGIN
+	var top := BAR_TOP + 8.0
+	var width := view.x - LOG_INSET - left
+	var height := view.y - top - BAR_BOTTOM - 8.0
+	return Rect2(left, top, maxf(width, 1.0), maxf(height, 1.0))
 
 
 func refresh(
@@ -45,15 +73,14 @@ func refresh(
 	hovered: PlayerState = null,
 	hover_cell: Vector2i = Vector2i(-1, -1)
 ) -> void:
+	_model = model
 	var acting := MatchRules.team_name(model.current_team)
-	var home_turn := model.current_team == MatchRules.Team.HOME
 	_status.text = "%d   —   %d" % [model.home_score, model.away_score]
 	_status.add_theme_color_override("font_color", Color("f4fbff"))
-	_turn.text = "%s TO ACT  ·  CYCLE %d" % [acting, model.turn_index + 1]
-	_turn.add_theme_color_override(
-		"font_color",
-		Color("3ecbff") if home_turn else Color("ff4d8d")
-	)
+	_apply_phase(model)
+	_refresh_end_turn(model)
+	_refresh_plan_list(model)
+	refresh_log(model)
 
 	var holder := model.carrier()
 	if holder == null:
@@ -95,80 +122,18 @@ func _hint_for(
 	if selected != null:
 		if selected.has_ball:
 			if model.can_shoot(selected):
-				return "Selected %s — gold: shoot at the net. Green: move. Blue: pass." % selected.label()
-			return "Selected %s — green: move. Amber: dribble. Blue: pass. Red: offside pass. Adjacent teammate: pass or swap." % selected.label()
-		return "Selected %s — green: move. Amber: tackle the carrier (DEF vs CTR) or fight for a square (CTR vs CTR)." % selected.label()
+				return "Queue an action for %s — gold: shoot. Green: move. Blue: pass." % selected.label()
+			return "Queue an action for %s — green: move. Amber: dribble. Blue: pass. Red: offside pass. Adjacent teammate: pass or swap." % selected.label()
+		return "Queue an action for %s — green: move. Amber: tackle the carrier or fight for a square." % selected.label()
+	if _resolving:
+		return "Resolution in progress — both teams' queued actions play out together."
 	if holder == null:
-		return "Click any %s player. Hover a player to inspect ACC / DEF / CTR." % acting
-	return "Click any %s player. The ball stays with the carrier when they move." % acting
+		return "Pick up to %d %s players (one action each). The third action ends the turn; End Turn finishes early. Hover a player to inspect ACC / DEF / CTR." % [MatchRules.ACTIONS_PER_SIDE, acting]
+	return "Pick up to %d %s players. The third action ends the turn; End Turn finishes early. Click a planned player twice to clear their action." % [MatchRules.ACTIONS_PER_SIDE, acting]
 
 
 func _event_line(event: Dictionary) -> String:
-	if event.is_empty() or not event.get("ok", false):
-		return ""
-	var action: String = event.get("action", "move")
-	if event.get("goal", false) and action != "shoot":
-		return "GOAL  walked in  %d—%d" % [event.get("home_score", 0), event.get("away_score", 0)]
-	if action == "shoot":
-		if event.get("goal", false):
-			return "GOAL  %s  %d—%d" % [
-				event.get("attacker_label", "shooter"),
-				event.get("home_score", 0),
-				event.get("away_score", 0),
-			]
-		if event.get("saved", false):
-			return "SAVE  %s's shot was held" % event.get("attacker_label", "shooter")
-		return "MISS  %s's shot missed the net" % event.get("attacker_label", "shooter")
-	if action == "offside":
-		return "OFFSIDE  %s  →  %s takes the restart" % [
-			event.get("defender_label", "receiver"),
-			event.get("taker_label", "defender"),
-		]
-	if action == "pass":
-		if event.get("intercepted", false):
-			return "INTERCEPT  %s %s %d+%d=%d  vs  %s %s %d+%d=%d" % [
-				event.get("attacker_label", "passer"),
-				event.get("attacker_stat_name", "ACC"),
-				event.get("attacker_stat", 0),
-				event.get("attacker_dice", 0),
-				event.get("attacker_total", 0),
-				event.get("defender_label", "interceptor"),
-				event.get("defender_stat_name", "DEF"),
-				event.get("defender_stat", 0),
-				event.get("defender_dice", 0),
-				event.get("defender_total", 0),
-			]
-		return "PASS  %s  →  %s" % [
-			event.get("attacker_label", "passer"),
-			event.get("defender_label", "receiver"),
-		]
-	if action == "swap":
-		return "SWAP  %s  ⇄  %s" % [
-			event.get("attacker_label", "mover"),
-			event.get("defender_label", "teammate"),
-		]
-	if action != "dribble" and action != "challenge" and action != "tackle":
-		return ""
-	var verb := "SQUARE FIGHT"
-	if action == "dribble":
-		verb = "DRIBBLE"
-	elif action == "tackle":
-		verb = "TACKLE"
-	var outcome := "WON" if event.get("contest_won", false) else "LOST"
-	return "%s %s  %s %s %d+%d=%d  vs  %s %s %d+%d=%d" % [
-		verb,
-		outcome,
-		event.get("attacker_label", "attacker"),
-		event.get("attacker_stat_name", "CTR"),
-		event.get("attacker_stat", 0),
-		event.get("attacker_dice", 0),
-		event.get("attacker_total", 0),
-		event.get("defender_label", "defender"),
-		event.get("defender_stat_name", "DEF"),
-		event.get("defender_stat", 0),
-		event.get("defender_dice", 0),
-		event.get("defender_total", 0),
-	]
+	return _CombatLog.format_result(event)
 
 
 func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
@@ -236,34 +201,162 @@ func _emphasize_stat(label: Label, on: bool) -> void:
 		label.add_theme_color_override("font_color", Color("fff4c2"))
 
 
+func set_resolving(value: bool) -> void:
+	_resolving = value
+	if _model != null:
+		_apply_phase(_model)
+		_refresh_end_turn(_model)
+		_refresh_plan_list(_model)
+		refresh_log(_model)
+		if value:
+			_hint.text = "Resolution in progress — both teams' queued actions play out together."
+	elif _end_turn != null:
+		_end_turn.disabled = true
+		_end_turn.text = "RESOLVING..." if value else "END TURN"
+
+
+func refresh_log(model: MatchModel) -> void:
+	if _log_label == null:
+		return
+	_model = model
+	var viewer := _CombatLog.VIEWER_PUBLIC if _resolving else model.current_team
+	_log_label.text = model.combat_log.as_bbcode(viewer)
+	if _resolving:
+		_event.text = _event_line(last_event)
+
+
+func _apply_phase(model: MatchModel) -> void:
+	var home_turn := model.current_team == MatchRules.Team.HOME
+	var acting := MatchRules.team_name(model.current_team)
+	var queued := model.plan_count(model.current_team)
+	var left := MatchRules.ACTIONS_PER_SIDE - queued
+	var phase_color := Color("f0c14b") if _resolving else (
+		Color("3ecbff") if home_turn else Color("ff4d8d")
+	)
+	if _phase != null:
+		if _resolving:
+			_phase.text = "RESOLVING"
+		else:
+			_phase.text = "%s PLANNING" % acting
+		_phase.add_theme_color_override("font_color", phase_color)
+	if _turn != null:
+		if _resolving:
+			_turn.text = "PLAYING OUT BOTH TEAMS"
+		else:
+			var left_word := "ACTION" if left == 1 else "ACTIONS"
+			_turn.text = "%s   %d %s LEFT  ·  CYCLE %d" % [
+				_pip_text(queued),
+				left,
+				left_word,
+				model.turn_index + 1,
+			]
+		_turn.add_theme_color_override("font_color", phase_color.lightened(0.2))
+	if _home_name != null:
+		if _resolving:
+			_home_name.modulate = Color(1, 1, 1, 0.8)
+			_away_name.modulate = Color(1, 1, 1, 0.8)
+		else:
+			_home_name.modulate = Color.WHITE if home_turn else Color(1, 1, 1, 0.38)
+			_away_name.modulate = Color.WHITE if not home_turn else Color(1, 1, 1, 0.38)
+	if _top_accent != null:
+		_top_accent.color = phase_color
+	if _phase_bar != null:
+		_phase_bar.color = phase_color
+	if _log_title != null:
+		_log_title.text = "RESOLUTION LOG" if _resolving else "%s LOG" % acting
+		_log_title.add_theme_color_override("font_color", phase_color)
+	if _log_style != null:
+		_log_style.border_color = phase_color.darkened(0.25)
+
+
+func _pip_text(queued: int) -> String:
+	var marks: PackedStringArray = []
+	for i in MatchRules.ACTIONS_PER_SIDE:
+		marks.append("●" if i < queued else "○")
+	return " ".join(marks)
+
+
+func _refresh_end_turn(model: MatchModel) -> void:
+	if _end_turn == null:
+		return
+	var ready := model.can_end_planning()
+	_end_turn.disabled = _resolving or not ready
+	if _resolving:
+		_end_turn.text = "RESOLVING..."
+	else:
+		_end_turn.text = "END TURN  %d/%d" % [model.plan_count(), MatchRules.ACTIONS_PER_SIDE]
+
+
+func _refresh_plan_list(model: MatchModel) -> void:
+	if _plan_list == null:
+		return
+	if _resolving:
+		_plan_list.text = "Playing out queued actions."
+		return
+	var lines: PackedStringArray = []
+	var queued := model.plan_count(model.current_team)
+	var left := MatchRules.ACTIONS_PER_SIDE - queued
+	if queued == 0:
+		lines.append("No actions queued · %d left" % left)
+	else:
+		lines.append("This turn  %s  ·  %d left" % [_pip_text(queued), left])
+	for plan in model.plans_for(model.current_team):
+		var player := model.player_by_id(int(plan.get("player_id", -1)))
+		var name := player.label() if player != null else "player"
+		lines.append("• %s  %s" % [name, _CombatLog.plan_summary(plan)])
+	_plan_list.text = "\n".join(lines)
+
+
+func _on_end_turn_pressed() -> void:
+	end_turn_pressed.emit()
+
+
 func _build() -> void:
-	var top := _panel(Color(0.03, 0.05, 0.08, 0.92))
+	var top := _panel(Color(0.03, 0.05, 0.08, 0.94))
 	top.anchor_right = 1.0
-	top.offset_bottom = 64.0
+	top.offset_bottom = 88.0
 	add_child(top)
 
 	_home_name = _label("AETHER", 28, Color("3ecbff"), HORIZONTAL_ALIGNMENT_LEFT)
 	_home_name.set_anchors_preset(Control.PRESET_LEFT_WIDE)
 	_home_name.offset_left = 28.0
-	_home_name.offset_right = 260.0
+	_home_name.offset_right = 280.0
+	_home_name.offset_bottom = -44.0
 	top.add_child(_home_name)
 
 	_away_name = _label("HELIX", 28, Color("ff4d8d"), HORIZONTAL_ALIGNMENT_RIGHT)
 	_away_name.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
-	_away_name.offset_left = -260.0
+	_away_name.offset_left = -280.0
 	_away_name.offset_right = -28.0
+	_away_name.offset_bottom = -44.0
 	top.add_child(_away_name)
 
-	_status = _label("AETHER TO ACT", 22, Color("3ecbff"), HORIZONTAL_ALIGNMENT_CENTER)
+	_status = _label("0   —   0", 16, Color("f4fbff"), HORIZONTAL_ALIGNMENT_CENTER)
 	_status.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_status.offset_top = 6.0
-	_status.offset_bottom = -22.0
+	_status.offset_bottom = -58.0
 	top.add_child(_status)
 
-	_turn = _label("CYCLE 1", 13, Color(0.72, 0.82, 0.9, 0.8), HORIZONTAL_ALIGNMENT_CENTER)
+	_phase = _label("AETHER PLANNING", 24, Color("3ecbff"), HORIZONTAL_ALIGNMENT_CENTER)
+	_phase.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_phase.offset_left = 220.0
+	_phase.offset_right = -220.0
+	_phase.offset_top = 28.0
+	_phase.offset_bottom = -22.0
+	top.add_child(_phase)
+
+	_turn = _label("○ ○ ○   3 ACTIONS LEFT  ·  CYCLE 1", 14, Color("3ecbff"), HORIZONTAL_ALIGNMENT_CENTER)
 	_turn.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_turn.offset_top = 34.0
+	_turn.offset_top = 56.0
 	top.add_child(_turn)
+
+	_phase_bar = ColorRect.new()
+	_phase_bar.color = Color("3ecbff")
+	_phase_bar.anchor_top = 1.0
+	_phase_bar.anchor_right = 1.0
+	_phase_bar.anchor_bottom = 1.0
+	_phase_bar.offset_top = -4.0
+	top.add_child(_phase_bar)
 
 	var bottom := _panel(Color(0.03, 0.05, 0.08, 0.88))
 	bottom.anchor_top = 1.0
@@ -293,11 +386,11 @@ func _build() -> void:
 	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	bottom.add_child(_hint)
 
-	var accent := ColorRect.new()
-	accent.color = Color("3ecbff")
-	accent.anchor_right = 1.0
-	accent.offset_bottom = 2.0
-	top.add_child(accent)
+	_top_accent = ColorRect.new()
+	_top_accent.color = Color("3ecbff")
+	_top_accent.anchor_right = 1.0
+	_top_accent.offset_bottom = 3.0
+	top.add_child(_top_accent)
 
 	var accent_bottom := ColorRect.new()
 	accent_bottom.color = Color("ff4d8d")
@@ -312,7 +405,7 @@ func _build_card() -> void:
 	_card = _panel(Color(0.04, 0.06, 0.1, 0.94))
 	_card.visible = false
 	_card.offset_left = 8.0
-	_card.offset_top = 108.0
+	_card.offset_top = 120.0
 	_card.offset_right = 128.0
 	_card.offset_bottom = 200.0
 	add_child(_card)
@@ -379,10 +472,10 @@ func _build_forecast() -> void:
 	_forecast.visible = false
 	_forecast.anchor_left = 1.0
 	_forecast.anchor_right = 1.0
-	_forecast.offset_left = -220.0
-	_forecast.offset_right = -8.0
-	_forecast.offset_top = 108.0
-	_forecast.offset_bottom = 360.0
+	_forecast.offset_left = -540.0
+	_forecast.offset_right = -316.0
+	_forecast.offset_top = 96.0
+	_forecast.offset_bottom = 330.0
 	add_child(_forecast)
 
 	var edge := ColorRect.new()
@@ -402,6 +495,56 @@ func _build_forecast() -> void:
 	_forecast_label.offset_right = -10.0
 	_forecast_label.offset_bottom = -10.0
 	_forecast.add_child(_forecast_label)
+
+
+func _build_log() -> void:
+	_log_panel = PanelContainer.new()
+	_log_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.035, 0.05, 0.075, 0.94)
+	style.border_color = Color("3ecbff")
+	style.set_border_width_all(2)
+	style.set_content_margin_all(8)
+	_log_style = style
+	_log_panel.add_theme_stylebox_override("panel", style)
+	_log_panel.anchor_left = 1.0
+	_log_panel.anchor_right = 1.0
+	_log_panel.anchor_bottom = 1.0
+	_log_panel.offset_left = -308.0
+	_log_panel.offset_right = -8.0
+	_log_panel.offset_top = 96.0
+	_log_panel.offset_bottom = -80.0
+	add_child(_log_panel)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	_log_panel.add_child(box)
+
+	_log_title = _label("AETHER LOG", 13, Color("3ecbff"), HORIZONTAL_ALIGNMENT_LEFT)
+	_log_title.custom_minimum_size = Vector2(0, 18)
+	box.add_child(_log_title)
+
+	_end_turn = Button.new()
+	_end_turn.text = "END TURN  0/3"
+	_end_turn.custom_minimum_size = Vector2(0, 34)
+	_end_turn.disabled = true
+	_end_turn.pressed.connect(_on_end_turn_pressed)
+	box.add_child(_end_turn)
+
+	_plan_list = _label("", 12, Color(0.78, 0.86, 0.92, 0.9), HORIZONTAL_ALIGNMENT_LEFT)
+	_plan_list.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_plan_list.custom_minimum_size = Vector2(0, 64)
+	box.add_child(_plan_list)
+
+	_log_label = RichTextLabel.new()
+	_log_label.bbcode_enabled = true
+	_log_label.scroll_following = true
+	_log_label.fit_content = false
+	_log_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_log_label.add_theme_font_size_override("normal_font_size", 12)
+	_log_label.add_theme_color_override("default_color", Color("d6e4ee"))
+	_log_label.selection_enabled = true
+	box.add_child(_log_label)
 
 
 func show_choices(screen_pos: Vector2, title: String, options: Array) -> void:

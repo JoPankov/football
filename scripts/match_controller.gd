@@ -1,6 +1,6 @@
 extends Node2D
 
-## Grid, 11v11, I-go-you-go movement, possession, pass, and shoot.
+## Grid, 11v11. Each side plans up to 3 actions; the third locks the turn.
 
 @onready var pitch: Pitch = $Pitch
 @onready var hud: MatchHUD = $HUD
@@ -20,8 +20,10 @@ func _ready() -> void:
 	model = MatchModel.new()
 	model.setup_kickoff()
 	_spawn_visuals()
-	_center_camera()
+	get_viewport().size_changed.connect(_frame_camera)
+	_frame_camera()
 	hud.action_picked.connect(choose_action)
+	hud.end_turn_pressed.connect(end_planning)
 	_refresh()
 
 
@@ -42,6 +44,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cancel_choice()
 		else:
 			_deselect()
+	elif event is InputEventKey and event.pressed and (event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
+		end_planning()
 	elif event is InputEventMouseMotion:
 		_set_hover(pitch.world_to_grid(pitch.get_global_mouse_position()))
 
@@ -74,6 +78,10 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 			return perform_action(only)
 		if occupant != null and model.can_select(occupant):
 			if selected_id == occupant.id:
+				if not model.plan_of(occupant.id).is_empty():
+					model.clear_plan(occupant.id)
+					_deselect()
+					return {ok = true, action = "clear_plan", player_id = occupant.id}
 				_deselect()
 				return {ok = true, action = "deselect"}
 			_select(occupant)
@@ -129,39 +137,35 @@ func perform_action(action: Dictionary) -> Dictionary:
 	var selected := _selected_player()
 	if selected == null:
 		return {ok = false, reason = "no_selection"}
-	var action_id := str(action.get("id", ""))
-	match action_id:
-		"pass":
-			return _try_pass_to(selected, action.get("dest", hover_cell))
-		"swap":
-			var teammate := model.player_by_id(int(action.get("target_id", -1)))
-			return _try_swap(selected, teammate)
-		"move", "dribble", "tackle", "challenge":
-			return _try_move(selected, action.get("dest", hover_cell))
-		"shoot":
-			return _try_shoot(selected)
-		_:
-			return {ok = false, reason = "unknown_action"}
-
-
-func _try_move(player: PlayerState, dest: Vector2i) -> Dictionary:
-	var result := model.apply_move(player.id, dest)
+	if not action.has("dest"):
+		action.dest = hover_cell
+	var result := model.queue_plan(selected.id, action)
 	if not result.ok:
 		return result
-	return _finish_action(result)
-
-
-func _try_shoot(player: PlayerState) -> Dictionary:
-	var result := model.apply_shoot(player.id)
-	if not result.ok:
-		return result
-	return _finish_action(result)
-
-
-func _finish_action(result: Dictionary) -> Dictionary:
 	hud.last_event = result
+	_deselect()
+	if model.planning_complete():
+		return end_planning()
+	return result
+
+
+func end_planning() -> Dictionary:
+	if busy:
+		return {ok = false, reason = "busy"}
+	_cancel_choice()
+	var result := model.end_planning()
+	if not result.ok:
+		return result
+	hud.last_event = result
+	if str(result.get("action", "")) == "resolve":
+		return _finish_resolve(result)
+	_deselect()
+	return result
+
+
+func _finish_resolve(result: Dictionary) -> Dictionary:
 	if animate_moves:
-		_play_move(result)
+		_play_resolve(result)
 	else:
 		if result.get("reset", false):
 			_spawn_visuals()
@@ -169,56 +173,43 @@ func _finish_action(result: Dictionary) -> Dictionary:
 	return result
 
 
-func _try_swap(player: PlayerState, teammate: PlayerState) -> Dictionary:
-	if teammate == null:
-		return {ok = false, reason = "no_target"}
-	var result := model.apply_swap(player.id, teammate.id)
-	if not result.ok:
-		return result
-	hud.last_event = result
-	if animate_moves:
-		_play_move(result)
-	else:
-		_deselect()
-	return result
-
-
-func _try_pass_to(passer: PlayerState, dest: Vector2i) -> Dictionary:
-	var result := model.apply_pass_to(passer.id, dest)
-	if not result.ok:
-		return result
-	hud.last_event = result
-	if animate_moves:
-		_play_move(result)
-	else:
-		_deselect()
-	return result
-
-
-func _play_move(result: Dictionary) -> void:
+func _play_resolve(result: Dictionary) -> void:
 	busy = true
-	await _present_result(result)
+	hud.set_resolving(true)
+	var events: Array = result.get("events", [])
+	for event in events:
+		hud.last_event = event
+		hud.refresh_log(model)
+		await _present_result(event)
 	if result.get("reset", false):
 		_spawn_visuals()
+	hud.set_resolving(false)
 	_deselect()
 	busy = false
 
 
 func _present_result(result: Dictionary) -> void:
-	var piece: PlayerPiece = pieces.get(result.player_id)
+	var action: String = result.get("action", "move")
+	if action == "cancelled" or action == "queue" or action == "end_planning":
+		await get_tree().create_timer(0.08).timeout
+		return
+	if action == "clash":
+		await get_tree().create_timer(0.18).timeout
+		return
+	var piece: PlayerPiece = pieces.get(result.get("player_id", -1))
 	if piece == null:
 		return
 	var dest: Vector2i = result.dest
 	var won: bool = result.get("contest_won", true)
-	var action: String = result.get("action", "move")
 	if action == "shoot":
+		pitch.ball_piece.set_carried(false)
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.tween_property(pitch.ball_piece, "position", pitch.grid_to_world(dest), 0.28)
 		await tween.finished
 		return
 	if action == "pass":
-		var receiver := model.player_by_id(result.get("receiver_id", -1))
+		var receiver := model.player_by_id(int(result.get("receiver_id", -1)))
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.set_parallel(true)
@@ -226,12 +217,10 @@ func _present_result(result: Dictionary) -> void:
 			var interceptor_piece: PlayerPiece = pieces.get(receiver.id)
 			if interceptor_piece != null:
 				tween.tween_property(interceptor_piece, "position", pitch.grid_to_world(dest), 0.22)
-		var ball_target := pitch.grid_to_world(dest)
-		if receiver != null:
-			ball_target = pitch.grid_to_world(receiver.pos) + pitch.carried_ball_offset(receiver.team)
+		var ball_target := _pass_ball_target(result, dest, receiver)
+		pitch.ball_piece.set_carried(receiver != null)
 		tween.tween_property(pitch.ball_piece, "position", ball_target, 0.22)
 		await tween.finished
-		pitch.sync_ball(model.ball, model.carrier())
 		return
 	if action == "move" or action == "offside" or won:
 		var tween := create_tween()
@@ -243,12 +232,9 @@ func _present_result(result: Dictionary) -> void:
 			var other: PlayerPiece = pieces.get(displaced_id)
 			if other != null:
 				tween.tween_property(other, "position", pitch.grid_to_world(result.origin), 0.2)
-		var carrier := model.carrier()
-		if carrier != null:
-			var ball_target := pitch.grid_to_world(carrier.pos) + pitch.carried_ball_offset(carrier.team)
+		var ball_target := _event_ball_target(result, dest)
+		if ball_target != Vector2.INF:
 			tween.tween_property(pitch.ball_piece, "position", ball_target, 0.2)
-		elif result.get("gained_possession", false) or result.get("lost_possession", false):
-			tween.tween_property(pitch.ball_piece, "position", pitch.grid_to_world(model.ball.pos), 0.2)
 		await tween.finished
 	else:
 		var start := piece.position
@@ -256,12 +242,44 @@ func _present_result(result: Dictionary) -> void:
 		var tween := create_tween()
 		tween.tween_property(piece, "position", bump, 0.1)
 		tween.tween_property(piece, "position", start, 0.12)
-		var carrier := model.carrier()
-		if result.get("lost_possession", false) and carrier != null:
-			var ball_target := pitch.grid_to_world(carrier.pos) + pitch.carried_ball_offset(carrier.team)
+		var ball_target := _event_ball_target(result, dest)
+		if ball_target != Vector2.INF:
 			tween.parallel().tween_property(pitch.ball_piece, "position", ball_target, 0.18)
 		await tween.finished
-	pitch.sync_ball(model.ball, model.carrier())
+
+
+func _pass_ball_target(_result: Dictionary, dest: Vector2i, receiver: PlayerState) -> Vector2:
+	if receiver == null:
+		return pitch.grid_to_world(dest)
+	return pitch.grid_to_world(dest) + pitch.carried_ball_offset(receiver.team)
+
+
+func _event_ball_target(result: Dictionary, dest: Vector2i) -> Vector2:
+	var action := str(result.get("action", ""))
+	if result.get("lost_possession", false):
+		var defender := model.player_by_id(int(result.get("defender_id", -1)))
+		if defender != null:
+			return pitch.grid_to_world(dest) + pitch.carried_ball_offset(defender.team)
+		return pitch.grid_to_world(dest)
+	if action == "swap":
+		var holder_id := int(result.get("ball_holder_id", -1))
+		var holder := model.player_by_id(holder_id)
+		if holder == null:
+			return Vector2.INF
+		var cell: Vector2i = dest
+		if holder_id != int(result.get("player_id", -1)):
+			cell = result.origin
+		return pitch.grid_to_world(cell) + pitch.carried_ball_offset(holder.team)
+	if (
+		result.get("gained_possession", false)
+		or result.get("carried", false)
+		or (action == "dribble" and result.get("contest_won", false))
+		or action == "offside"
+	):
+		var holder := model.player_by_id(int(result.get("player_id", -1)))
+		var team := holder.team if holder != null else MatchRules.Team.HOME
+		return pitch.grid_to_world(dest) + pitch.carried_ball_offset(team)
+	return Vector2.INF
 
 
 func _select(player: PlayerState) -> void:
@@ -292,8 +310,17 @@ func _spawn_visuals() -> void:
 	pitch.sync_ball(model.ball, model.carrier())
 
 
-func _center_camera() -> void:
-	camera.position = pitch.pitch_size() * 0.5
+func _frame_camera() -> void:
+	var view := get_viewport().get_visible_rect().size
+	var play := hud.play_area()
+	var bounds := pitch.world_rect()
+	var zoom := minf(play.size.x / bounds.size.x, play.size.y / bounds.size.y)
+	camera.make_current()
+	camera.zoom = Vector2(zoom, zoom)
+	camera.position = Vector2(
+		bounds.position.x - (play.position.x - view.x * 0.5) / zoom,
+		bounds.get_center().y - (play.get_center().y - view.y * 0.5) / zoom
+	)
 
 
 func _set_hover(cell: Vector2i) -> void:
@@ -338,6 +365,7 @@ func _refresh() -> void:
 	else:
 		pitch.clear_highlights()
 	_update_pass_preview(selected)
+	pitch.set_plans(_plan_markers())
 
 	for state in model.players:
 		var piece: PlayerPiece = pieces.get(state.id)
@@ -346,8 +374,20 @@ func _refresh() -> void:
 		piece.position = pitch.grid_to_world(state.pos)
 		piece.set_selected(selected != null and state.id == selected.id)
 		piece.set_has_ball(state.has_ball)
-		piece.set_on_turn(state.team == model.current_team)
+		var planned := (
+			state.team == model.current_team
+			and not model.plan_of(state.id).is_empty()
+		)
+		piece.set_planned(planned)
+		piece.set_on_turn(state.team == model.current_team and (planned or model.can_select(state)))
 		piece.z_index = 5 if piece.selected else 3
 
 	pitch.sync_ball(model.ball, model.carrier())
 	hud.refresh(model, selected, _hovered_player(), hover_cell)
+
+
+func _plan_markers() -> Array[Dictionary]:
+	var markers: Array[Dictionary] = []
+	for plan in model.plans_for(model.current_team):
+		markers.append(plan)
+	return markers

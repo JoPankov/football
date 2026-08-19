@@ -9,6 +9,7 @@ const GRID_WIDTH := 12
 const GRID_HEIGHT := 7
 const MOVE_DISTANCE := 1
 const PASS_RANGE := 3
+const ACTIONS_PER_SIDE := 3
 const INTERCEPT_RADIUS := 1.0
 const TILE_SIZE := 72.0
 const CENTER_SPOT := Vector2i(5, 3)

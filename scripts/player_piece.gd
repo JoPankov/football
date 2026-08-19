@@ -17,6 +17,7 @@ var role: String = ""
 var selected: bool = false
 var has_ball: bool = false
 var on_turn: bool = false
+var planned: bool = false
 
 @onready var _number_label: Label = $Number
 @onready var _role_label: Label = $Role
@@ -48,6 +49,11 @@ func set_on_turn(value: bool) -> void:
 	queue_redraw()
 
 
+func set_planned(value: bool) -> void:
+	planned = value
+	queue_redraw()
+
+
 func _ready() -> void:
 	_refresh_labels()
 	queue_redraw()
@@ -71,6 +77,9 @@ func _draw() -> void:
 	if selected:
 		draw_circle(Vector2.ZERO, radius + 10.0, Color(glow, 0.28))
 		draw_arc(Vector2.ZERO, radius + 8.0, 0.0, TAU, 48, glow, 2.5, true)
+	elif planned:
+		draw_circle(Vector2.ZERO, radius + 8.0, Color(glow, 0.2))
+		draw_arc(Vector2.ZERO, radius + 7.0, 0.0, TAU, 48, Color("ffe27a"), 2.2, true)
 	elif on_turn:
 		draw_circle(Vector2.ZERO, radius + 7.0, Color(glow, 0.12))
 

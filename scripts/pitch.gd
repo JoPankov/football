@@ -32,6 +32,7 @@ var pass_cells: Array[Vector2i] = []
 var choice_cells: Array[Vector2i] = []
 var shoot_cells: Array[Vector2i] = []
 var offside_cells: Array[Vector2i] = []
+var plan_markers: Array[Dictionary] = []
 var pass_lane_from: Vector2i = Vector2i(-1, -1)
 var pass_lane_to: Vector2i = Vector2i(-1, -1)
 var intercept_cells: Array[Vector2i] = []
@@ -54,6 +55,14 @@ func world_to_grid(world: Vector2) -> Vector2i:
 
 func pitch_size() -> Vector2:
 	return Vector2(MatchRules.GRID_WIDTH, MatchRules.GRID_HEIGHT) * MatchRules.TILE_SIZE
+
+
+func world_rect() -> Rect2:
+	var tile := MatchRules.TILE_SIZE
+	var pad := 24.0
+	var left := float(MatchRules.HOME_NET.x) * tile
+	var right := float(MatchRules.AWAY_NET.x + 1) * tile
+	return Rect2(left, -pad, right - left, float(MatchRules.GRID_HEIGHT) * tile + pad * 2.0)
 
 
 func carried_ball_offset(team: int) -> Vector2:
@@ -93,6 +102,11 @@ func set_pass_preview(from_cell: Vector2i, to_cell: Vector2i, interceptors: Arra
 	pass_lane_from = from_cell
 	pass_lane_to = to_cell
 	intercept_cells = interceptors
+	queue_redraw()
+
+
+func set_plans(markers: Array[Dictionary]) -> void:
+	plan_markers = markers
 	queue_redraw()
 
 
@@ -145,6 +159,7 @@ func _draw() -> void:
 	_draw_net_tile(MatchRules.AWAY_NET, Color("300a18"), Color("ff4d8d"))
 	_draw_markings(tile, size)
 	_draw_interactive(tile)
+	_draw_plans()
 	_draw_pass_preview()
 
 
@@ -225,6 +240,29 @@ func _draw_interactive(tile: float) -> void:
 		var rect := Rect2(Vector2(cell) * tile + Vector2(4, 4), Vector2(tile - 8, tile - 8))
 		draw_rect(rect, SHOOT_FILL)
 		draw_rect(rect, SHOOT_LINE, false, 2.4)
+
+
+func _draw_plans() -> void:
+	var tile := MatchRules.TILE_SIZE
+	for plan in plan_markers:
+		var from_cell: Vector2i = plan.get("origin", Vector2i.ZERO)
+		var to_cell: Vector2i = plan.get("dest", from_cell)
+		var team := int(plan.get("team", MatchRules.Team.HOME))
+		var color := Color("3ecbff") if team == MatchRules.Team.HOME else Color("ff4d8d")
+		var start := grid_to_world(from_cell)
+		var finish := grid_to_world(to_cell)
+		if from_cell != to_cell:
+			draw_line(start, finish, Color(color, 0.75), 2.0, true)
+			var tip := (finish - start).normalized() * 10.0
+			var side := tip.orthogonal() * 0.45
+			draw_colored_polygon(PackedVector2Array([
+				finish,
+				finish - tip + side,
+				finish - tip - side,
+			]), color)
+		var rect := Rect2(Vector2(to_cell) * tile + Vector2(16, 16), Vector2(tile - 32, tile - 32))
+		draw_rect(rect, Color(color, 0.18))
+		draw_rect(rect, color, false, 1.6)
 
 
 func _draw_pass_preview() -> void:
