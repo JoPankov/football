@@ -652,6 +652,88 @@ func _test_planning_and_resolve() -> void:
 	_assert(log_text.contains("TACKLE"), "log shows the tackle")
 	_assert(log_text.contains("CANCEL") and log_text.contains("lost the ball"), "log shows the cancelled pass")
 
+	var lead := MatchModel.new()
+	lead.setup_kickoff()
+	lead.scripted_first_intercept_wins = false
+	var lead_st := lead.player_at(Vector2i(5, 3))
+	var lead_mate := lead.player_at(Vector2i(5, 2))
+	_fill_plans(lead, [
+		{
+			player_id = lead_st.id,
+			id = "pass",
+			dest = lead_mate.pos,
+			target_id = lead_mate.id,
+			label = "Pass",
+		},
+		{
+			player_id = lead_mate.id,
+			id = "move",
+			dest = Vector2i(5, 1),
+			label = "Move",
+		},
+	])
+	lead.end_planning()
+	_fill_plans(lead, [])
+	var led := lead.end_planning()
+	_assert(led.action == "resolve", "pass-then-move cycle resolved")
+	_assert(lead_mate.pos == Vector2i(5, 1), "receiver moved after the pass")
+	_assert(lead_mate.has_ball, "receiver kept the ball and carried it")
+	_assert(lead.ball.pos == Vector2i(5, 1), "ball followed the receiver's move")
+	_assert(not lead_st.has_ball, "passer no longer has the ball")
+
+	var collect := MatchModel.new()
+	collect.setup_kickoff()
+	collect.scripted_first_intercept_wins = false
+	var collect_st := collect.player_at(Vector2i(5, 3))
+	var collect_mid := collect.player_at(Vector2i(4, 4))
+	_fill_plans(collect, [
+		{
+			player_id = collect_st.id,
+			id = "pass",
+			dest = Vector2i(5, 4),
+			target_id = -1,
+			label = "Pass",
+		},
+		{
+			player_id = collect_mid.id,
+			id = "move",
+			dest = Vector2i(5, 4),
+			label = "Move",
+		},
+	])
+	collect.end_planning()
+	_fill_plans(collect, [])
+	var collected := collect.end_planning()
+	_assert(collected.action == "resolve", "ground-pass collect cycle resolved")
+	_assert(collect_mid.pos == Vector2i(5, 4), "teammate stepped onto the pass square")
+	_assert(collect_mid.has_ball, "teammate collected the loose pass")
+	_assert(not collect.ball.is_loose(), "ball is no longer loose after the collect")
+
+	var steal := MatchModel.new()
+	steal.setup_kickoff()
+	steal.scripted_first_intercept_wins = false
+	var steal_st := steal.player_at(Vector2i(5, 3))
+	var steal_helix := steal.player_at(Vector2i(6, 4))
+	_fill_plans(steal, [{
+		player_id = steal_st.id,
+		id = "pass",
+		dest = Vector2i(5, 4),
+		target_id = -1,
+		label = "Pass",
+	}])
+	steal.end_planning()
+	_fill_plans(steal, [{
+		player_id = steal_helix.id,
+		id = "move",
+		dest = Vector2i(5, 4),
+		label = "Move",
+	}])
+	var stolen_pass := steal.end_planning()
+	_assert(stolen_pass.action == "resolve", "opponent collect cycle resolved")
+	_assert(steal_helix.pos == Vector2i(5, 4), "helix stepped onto the pass square")
+	_assert(steal_helix.has_ball, "helix collected the loose pass")
+	_assert(not steal_st.has_ball, "passer does not keep a collected ground pass")
+
 	var early := MatchModel.new()
 	early.setup_kickoff()
 	var early_st := early.player_at(Vector2i(5, 3))

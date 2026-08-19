@@ -2,7 +2,7 @@ class_name TurnResolver
 extends RefCounted
 
 ## Resolves one planned cycle: Aether's queued actions + Helix's queued actions.
-## Order: tackles, dribbles, square fights, destination clashes, moves/swaps, passes/shots.
+## Order: tackles, dribbles, square fights, passes/shots, destination clashes, moves/swaps.
 
 
 static func resolve(model: MatchModel) -> Dictionary:
@@ -23,11 +23,11 @@ static func resolve(model: MatchModel) -> Dictionary:
 	if not reset:
 		reset = _run_phase(model, remaining, events, ["challenge"], "Square fights")
 	if not reset:
+		reset = _run_phase(model, remaining, events, ["pass", "shoot"], "Ball")
+	if not reset:
 		_resolve_destination_clashes(model, remaining, events)
 	if not reset:
 		reset = _run_phase(model, remaining, events, ["move", "swap"], "Movement")
-	if not reset:
-		reset = _run_phase(model, remaining, events, ["pass", "shoot"], "Ball")
 
 	if reset:
 		for leftover in remaining:

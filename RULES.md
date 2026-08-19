@@ -114,9 +114,9 @@ Actions are planned against the current board, then resolve in this order:
 1. **Tackles**
 2. **Dribbles**
 3. **Square fights**
-4. **Destination clashes** — if two or more remaining **moves** target the same empty square, those players roll **CTR + 2d6**. The higher total takes the square; a tie leaves the lower-id player (first claimer). Losers stay put.
-5. **Moves and swaps**
-6. **Passes and shots**
+4. **Passes and shots** — the ball travels before anyone steps. A pass to a teammate who also queued a move arrives first; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
+5. **Destination clashes** — if two or more remaining **moves** target the same empty square, those players roll **CTR + 2d6**. The higher total takes the square; a tie leaves the lower-id player (first claimer). Losers stay put.
+6. **Moves and swaps**
 
 So if Aether tackles the Helix carrier and that carrier also queued a pass, the tackle is resolved first. If the tackle wins the ball, the pass is cancelled and the log says why.
 
