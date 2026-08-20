@@ -10,6 +10,9 @@ const GRID_HEIGHT := 7
 const MOVE_DISTANCE := 1
 const PASS_RANGE := 3
 const ACTIONS_PER_SIDE := 3
+const ACTION_ENERGY_COST := 1
+const ENERGY_PER_STAMINA := 10
+const ENERGY_EMPTY_FACTOR := 0.5
 const INTERCEPT_RADIUS := 1.0
 const TILE_SIZE := 72.0
 const CENTER_SPOT := Vector2i(5, 3)
@@ -180,6 +183,21 @@ static func roll_2d6(rng: RandomNumberGenerator) -> int:
 	return rng.randi_range(1, 6) + rng.randi_range(1, 6)
 
 
+static func max_energy(stamina: int) -> int:
+	return maxi(ENERGY_PER_STAMINA, stamina * ENERGY_PER_STAMINA)
+
+
+static func energy_factor(energy: int, pool: int) -> float:
+	if pool <= 0:
+		return ENERGY_EMPTY_FACTOR
+	var t := clampf(float(energy) / float(pool), 0.0, 1.0)
+	return ENERGY_EMPTY_FACTOR + (1.0 - ENERGY_EMPTY_FACTOR) * t
+
+
+static func scaled_stat(base: int, energy: int, pool: int) -> int:
+	return maxi(1, int(floor(float(base) * energy_factor(energy, pool) + 0.5)))
+
+
 ## Two 2d6 rolls plus the relevant stats. Ties go to the occupant.
 static func resolve_contest(attacker_stat: int, defender_stat: int, rng: RandomNumberGenerator) -> Dictionary:
 	var attacker_dice := roll_2d6(rng)
@@ -207,27 +225,28 @@ static func contest_win_chance(attacker_stat: int, defender_stat: int) -> float:
 	return float(wins) / float(CONTEST_PAIRS)
 
 
-static func contest_preview(mover: PlayerState, occupant: PlayerState) -> Dictionary:
+static func contest_preview(mover: PlayerState, occupant: PlayerState, mover_on_ball = null) -> Dictionary:
 	var action := "challenge"
 	var verb := "square fight"
 	var atk_name := "CTR"
 	var def_name := "CTR"
-	var atk := mover.control
-	var deff := occupant.control
-	if mover.has_ball:
+	var atk := mover.live_control()
+	var deff := occupant.live_control()
+	var on_ball := mover.has_ball if mover_on_ball == null else bool(mover_on_ball)
+	if on_ball:
 		action = "dribble"
 		verb = "dribble"
 		atk_name = "CTR"
 		def_name = "DEF"
-		atk = mover.control
-		deff = occupant.defense
+		atk = mover.live_control()
+		deff = occupant.live_defense()
 	elif occupant.has_ball:
 		action = "tackle"
 		verb = "tackle"
 		atk_name = "DEF"
 		def_name = "CTR"
-		atk = mover.defense
-		deff = occupant.control
+		atk = mover.live_defense()
+		deff = occupant.live_control()
 	var chance := contest_win_chance(atk, deff)
 	var pct := int(round(chance * 100.0))
 	var text := "%s %s %d %s vs %d %s = %d%% success" % [

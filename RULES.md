@@ -16,24 +16,31 @@ Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is
 
 ## Attributes
 
-Every player has four stats. Hover or select a player to see them.
+Every player has four stats plus an **energy** pool. Hover or select a player to see them. A bar under each piece shows remaining energy.
 
 | Stat | Used for |
 |---|---|
 | **ACC** | Completing a pass against interceptors; hitting a shot |
 | **DEF** | Stopping a dribble; tackling the carrier; intercepting a pass |
 | **CTR** | Dribbling; holding the ball when tackled; fighting for an empty square |
+| **STA** | Size of the energy pool |
 
 Kickoff values by role:
 
-| Role | ACC | DEF | CTR |
-|---|---|---|---|
-| ST | 13 | 4 | 9 |
-| Central mid (LCM/RCM) | 6 | 8 | 7 |
-| Wide mid (LM/RM) | 8 | 6 | 9 |
-| Centre back (LCB/RCB) | 4 | 13 | 7 |
-| Full back (LB/RB) | 5 | 11 | 8 |
-| GK | 4 | 13 | 11 |
+| Role | ACC | DEF | CTR | STA |
+|---|---|---|---|---|
+| ST | 26 | 4 | 9 | 9 |
+| Central mid (LCM/RCM) | 12 | 8 | 7 | 13 |
+| Wide mid (LM/RM) | 16 | 6 | 9 | 11 |
+| Centre back (LCB/RCB) | 8 | 13 | 7 | 8 |
+| Full back (LB/RB) | 10 | 11 | 8 | 10 |
+| GK | 8 | 13 | 11 | 7 |
+
+### Energy
+
+- Max energy is **STA × 10**. Players start each kickoff full.
+- Each resolved action (move, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. Cancelled actions do not.
+- Live ACC / DEF / CTR scale with remaining energy: full energy is 100% of the printed stat; **empty energy halves them**. In between, the drop is linear. The inspector shows `ACC 10 (13)` when fatigue has reduced the live value.
 
 ## How to take a turn
 
@@ -106,16 +113,21 @@ Highlights:
 - Adjacent teammate also allows **swap** — you choose.
 - 2–3 tiles away: pass is queued immediately (no menu).
 - A pass to a teammate in an **offside position** is still legal. If it is not intercepted, it is offside (see below). Empty-square passes are never offside.
+- After you queue a pass to a teammate, that teammate can plan as if they already have the ball (pass on, shoot, dribble). If the incoming pass is intercepted or cancelled, those ball actions do not play.
 
 ## Simultaneous resolution
 
 Actions are planned against the current board, then resolve in this order:
 
 1. **Tackles**
-2. **Dribbles**
-3. **Square fights**
-4. **Passes and shots** — the ball travels before anyone steps. A pass to a teammate who also queued a move arrives first; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
-5. **Destination clashes** — if two or more remaining **moves** target the same empty square, those players roll **CTR + 2d6**. The higher total takes the square; a tie leaves the lower-id player (first claimer). Losers stay put.
+2. **Passes and shots** — the ball travels next, following the current carrier so a pass can feed another pass or a shot. A pass to a teammate who also queued a move arrives first; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
+3. **Dribbles**
+4. **Square fights**
+5. **Destination contests** — if two or more remaining **moves** target the same empty square:
+   - **Opposite teams, one has the ball:** a **tackle** (the player without the ball rolls **DEF**, the carrier rolls **CTR**). Winner takes the square. If the tackler wins, they also steal the ball.
+   - **Opposite teams, neither has the ball:** a **CTR vs CTR** square fight. Winner takes the square (and collects a loose ball there).
+   - **Same team:** **CTR + 2d6**; a tie leaves the lower-id player (first claimer).
+   Losers stay put.
 6. **Moves and swaps**
 
 So if Aether tackles the Helix carrier and that carrier also queued a pass, the tackle is resolved first. If the tackle wins the ball, the pass is cancelled and the log says why.
@@ -212,7 +224,7 @@ Walking or dribbling the ball onto the opponent goal tile also counts as a goal.
 
 ## Not implemented yet
 
-- Fouls, stamina, and a clock.
+- Fouls and a clock.
 - Pass misses other than intercepts (a pass that is not intercepted always arrives).
 
 ## How to run

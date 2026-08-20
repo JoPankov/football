@@ -18,6 +18,7 @@ var selected: bool = false
 var has_ball: bool = false
 var on_turn: bool = false
 var planned: bool = false
+var energy_ratio: float = 1.0
 
 @onready var _number_label: Label = $Number
 @onready var _role_label: Label = $Role
@@ -51,6 +52,14 @@ func set_on_turn(value: bool) -> void:
 
 func set_planned(value: bool) -> void:
 	planned = value
+	queue_redraw()
+
+
+func set_energy_ratio(value: float) -> void:
+	var next := clampf(value, 0.0, 1.0)
+	if is_equal_approx(energy_ratio, next):
+		return
+	energy_ratio = next
 	queue_redraw()
 
 
@@ -93,6 +102,8 @@ func _draw() -> void:
 	if has_ball:
 		draw_arc(Vector2.ZERO, radius + 3.0, 0.0, TAU, 40, Color("f5e6a8"), 2.0, true)
 
+	_draw_energy_bar(radius)
+
 	var chevron_dir := 1.0 if team == MatchRules.Team.HOME else -1.0
 	var tip := Vector2(chevron_dir * (radius + 4.0), 0.0)
 	var wing := Vector2(-chevron_dir * 5.0, 6.0)
@@ -102,6 +113,22 @@ func _draw() -> void:
 		tip + Vector2(-chevron_dir * 2.0, 0.0),
 		tip + Vector2(wing.x, -wing.y),
 	]), glow)
+
+
+func _draw_energy_bar(radius: float) -> void:
+	var bar_w := radius * 1.7
+	var bar_h := 3.5
+	var origin := Vector2(-bar_w * 0.5, radius + 8.0)
+	draw_rect(Rect2(origin, Vector2(bar_w, bar_h)), Color(0.02, 0.04, 0.06, 0.75))
+	var fill := Color("6dff8a")
+	if energy_ratio <= 0.001:
+		fill = Color("ff4d5a")
+	elif energy_ratio <= 0.34:
+		fill = Color("ff6b4d")
+	elif energy_ratio <= 0.67:
+		fill = Color("ffd15a")
+	draw_rect(Rect2(origin, Vector2(bar_w * energy_ratio, bar_h)), fill)
+	draw_rect(Rect2(origin, Vector2(bar_w, bar_h)), Color(1, 1, 1, 0.22), false, 1.0)
 
 
 func _draw_hex(radius: float, fill: Color, outline: Color) -> void:

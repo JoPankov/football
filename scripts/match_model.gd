@@ -190,6 +190,11 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 		target_id = int(action.get("target_id", -1)),
 		origin = player.pos,
 		label = str(action.get("label", action_id)),
+		expects_ball = (
+			not player.has_ball
+			and planning_has_ball(player)
+			and action_id in ["pass", "shoot", "dribble"]
+		),
 	}
 	plans_for(player.team).append(plan)
 	var result := {
@@ -228,6 +233,40 @@ func end_planning() -> Dictionary:
 	return _TurnResolver.resolve(self)
 
 
+func planning_carrier() -> PlayerState:
+	var holder := carrier()
+	if holder == null or holder.team != current_team:
+		return holder
+	var seen := {}
+	while holder != null:
+		if seen.has(holder.id):
+			return holder
+		seen[holder.id] = true
+		var plan := plan_of(holder.id)
+		if plan.is_empty():
+			return holder
+		var act := str(plan.get("action", ""))
+		if act == "pass":
+			var target_id := int(plan.get("target_id", -1))
+			if target_id >= 0:
+				var nxt := player_by_id(target_id)
+				if nxt != null and nxt.team == holder.team:
+					holder = nxt
+					continue
+			return null
+		if act == "shoot":
+			return null
+		return holder
+	return holder
+
+
+func planning_has_ball(player: PlayerState) -> bool:
+	if player == null:
+		return false
+	var holder := planning_carrier()
+	return holder != null and holder.id == player.id
+
+
 func can_pass_to(passer: PlayerState, target: PlayerState) -> bool:
 	if passer == null or target == null:
 		return false
@@ -239,6 +278,24 @@ func can_pass_to(passer: PlayerState, target: PlayerState) -> bool:
 func can_pass_to_cell(passer: PlayerState, dest: Vector2i) -> bool:
 	if passer == null or not passer.has_ball:
 		return false
+	return _pass_geometry_ok(passer, dest)
+
+
+func can_plan_pass_to(passer: PlayerState, target: PlayerState) -> bool:
+	if passer == null or target == null:
+		return false
+	if target.team != passer.team or target.id == passer.id:
+		return false
+	return can_plan_pass_to_cell(passer, target.pos)
+
+
+func can_plan_pass_to_cell(passer: PlayerState, dest: Vector2i) -> bool:
+	if not planning_has_ball(passer):
+		return false
+	return _pass_geometry_ok(passer, dest)
+
+
+func _pass_geometry_ok(passer: PlayerState, dest: Vector2i) -> bool:
 	if not _acting_allowed(passer):
 		return false
 	if not MatchRules.in_bounds(dest) or dest == passer.pos:
@@ -255,20 +312,20 @@ func can_pass_to_cell(passer: PlayerState, dest: Vector2i) -> bool:
 
 func pass_targets(passer: PlayerState) -> Array[PlayerState]:
 	var result: Array[PlayerState] = []
-	if passer == null or not passer.has_ball:
+	if passer == null or not planning_has_ball(passer):
 		return result
 	for player in players:
-		if can_pass_to(passer, player):
+		if can_plan_pass_to(passer, player):
 			result.append(player)
 	return result
 
 
 func pass_cells(passer: PlayerState) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
-	if passer == null or not passer.has_ball:
+	if passer == null or not planning_has_ball(passer):
 		return cells
 	for dest in _cells_in_range(passer.pos, MatchRules.PASS_RANGE):
-		if can_pass_to_cell(passer, dest):
+		if can_plan_pass_to_cell(passer, dest):
 			cells.append(dest)
 	return cells
 
@@ -350,18 +407,18 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 	if occupant == null:
 		if dest in valid_moves(player):
 			actions.append({id = "move", label = "Move", dest = dest})
-		if can_pass_to_cell(player, dest):
+		if can_plan_pass_to_cell(player, dest):
 			actions.append({id = "pass", label = "Pass", dest = dest, target_id = -1, offside = false})
 	elif occupant.team != player.team:
 		if dest in valid_moves(player):
-			var preview := MatchRules.contest_preview(player, occupant)
+			var preview := MatchRules.contest_preview(player, occupant, planning_has_ball(player))
 			actions.append({
 				id = preview.action,
 				label = preview.verb.capitalize(),
 				dest = dest,
 			})
 	else:
-		if can_pass_to(player, occupant):
+		if can_plan_pass_to(player, occupant):
 			var pass_label := "Pass (offside)" if is_offside_receiver(player, occupant) else "Pass"
 			actions.append({
 				id = "pass",
@@ -372,7 +429,7 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 			})
 		if can_swap(player, occupant):
 			actions.append({id = "swap", label = "Swap places", target_id = occupant.id, dest = dest})
-	if can_shoot(player) and dest == MatchRules.opponent_goal(player.team):
+	if can_plan_shoot(player) and dest == MatchRules.opponent_goal(player.team):
 		actions.append({id = "shoot", label = "Shoot", dest = dest})
 	return actions
 
@@ -383,9 +440,15 @@ func can_shoot(player: PlayerState) -> bool:
 	return MatchRules.is_in_shooting_zone(player.pos, MatchRules.opponent_goal(player.team))
 
 
+func can_plan_shoot(player: PlayerState) -> bool:
+	if player == null or not planning_has_ball(player) or not _acting_allowed(player):
+		return false
+	return MatchRules.is_in_shooting_zone(player.pos, MatchRules.opponent_goal(player.team))
+
+
 func shoot_cells(player: PlayerState) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
-	if can_shoot(player):
+	if can_plan_shoot(player):
 		cells.append(MatchRules.opponent_goal(player.team))
 	return cells
 
@@ -408,13 +471,14 @@ func shot_preview(player: PlayerState) -> Dictionary:
 	var geo := MatchRules.shot_geometry(player.pos, goal)
 	var range_f := MatchRules.shot_range_factor(geo.distance)
 	var angle_f := MatchRules.shot_angle_factor(geo.angle)
-	var acc_term := float(player.accuracy) / float(player.accuracy + MatchRules.SHOT_ACC_BIAS)
-	var hit := MatchRules.shot_hit_chance(player.accuracy, geo.distance, geo.angle)
+	var acc := player.live_accuracy()
+	var acc_term := float(acc) / float(acc + MatchRules.SHOT_ACC_BIAS)
+	var hit := MatchRules.shot_hit_chance(acc, geo.distance, geo.angle)
 	var keeper := player_at(goal)
 	var keeper_in_net := keeper != null and keeper.team != player.team
 	var save := 0.0
 	if keeper_in_net:
-		save = 1.0 - MatchRules.contest_win_chance(player.accuracy, keeper.defense)
+		save = 1.0 - MatchRules.contest_win_chance(acc, keeper.live_defense())
 	var goal_p := hit * (1.0 - save)
 	var lines: PackedStringArray = []
 	lines.append("SHOOT at %s net" % MatchRules.team_name(MatchRules.opposite_team(player.team)))
@@ -423,8 +487,8 @@ func shot_preview(player: PlayerState) -> Dictionary:
 	lines.append("angle = max(%.2f, cos θ) = %.2f" % [MatchRules.SHOT_ANGLE_FLOOR, angle_f])
 	lines.append("hit = ACC/(ACC+%d) × range × angle" % MatchRules.SHOT_ACC_BIAS)
 	lines.append("    = %d/%d × %.2f × %.2f = %d%%" % [
-		player.accuracy,
-		player.accuracy + MatchRules.SHOT_ACC_BIAS,
+		acc,
+		acc + MatchRules.SHOT_ACC_BIAS,
 		range_f,
 		angle_f,
 		int(round(hit * 100.0)),
@@ -466,7 +530,7 @@ func apply_swap(player_id: int, teammate_id: int) -> Dictionary:
 		ball.pos = dest
 	elif teammate.has_ball:
 		ball.pos = origin
-	return {
+	var result := {
 		ok = true,
 		action = "swap",
 		player_id = player_id,
@@ -483,6 +547,8 @@ func apply_swap(player_id: int, teammate_id: int) -> Dictionary:
 		attacker_label = player.label(),
 		defender_label = teammate.label(),
 	}
+	player.spend_energy()
+	return result
 
 
 func interceptors_for_pass(passer: PlayerState, dest: Vector2i) -> Array[Dictionary]:
@@ -504,7 +570,7 @@ func interceptors_for_pass(passer: PlayerState, dest: Vector2i) -> Array[Diction
 		)
 		if not hit.hits:
 			continue
-		var through := MatchRules.contest_win_chance(passer.accuracy, player.defense)
+		var through := MatchRules.contest_win_chance(passer.live_accuracy(), player.live_defense())
 		found.append({
 			player = player,
 			player_id = player.id,
@@ -528,8 +594,8 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 		lines.append(
 			"%s: %d ACC vs %d DEF = %d%% intercept (%d%% through)" % [
 				threat.player.label(),
-				passer.accuracy,
-				threat.player.defense,
+				passer.live_accuracy(),
+				threat.player.live_defense(),
 				threat.intercept_percent,
 				threat.through_percent,
 			]
@@ -588,7 +654,7 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 		var from_tile := thief.pos
 		thief.pos = landing
 		_give_ball(thief)
-		return {
+		return _finish_action(passer, {
 			ok = true,
 			action = "pass",
 			intercepted = true,
@@ -604,17 +670,17 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 			defender_label = thief.label(),
 			attacker_stat_name = "ACC",
 			defender_stat_name = "DEF",
-			attacker_stat = passer.accuracy,
-			defender_stat = thief.defense,
+			attacker_stat = passer.live_accuracy(),
+			defender_stat = thief.live_defense(),
 			attacker_dice = intercept.attacker_dice,
 			defender_dice = intercept.defender_dice,
 			attacker_total = intercept.attacker_total,
 			defender_total = intercept.defender_total,
-		}
+		})
 
 	var occupant := player_at(dest)
 	if occupant != null and is_offside_receiver(passer, occupant):
-		return _apply_offside(passer, occupant)
+		return _finish_action(passer, _apply_offside(passer, occupant))
 
 	var receiver_id := -1
 	var receiver_label := "open square"
@@ -624,7 +690,7 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 		receiver_label = occupant.label()
 	else:
 		_release_ball(dest)
-	return {
+	return _finish_action(passer, {
 		ok = true,
 		action = "pass",
 		intercepted = false,
@@ -636,7 +702,7 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 		lost_possession = occupant == null,
 		attacker_label = passer.label(),
 		defender_label = receiver_label,
-	}
+	})
 
 
 func _resolve_pass_intercepts(passer: PlayerState, dest: Vector2i) -> Dictionary:
@@ -652,12 +718,12 @@ func _resolve_pass_intercepts(passer: PlayerState, dest: Vector2i) -> Dictionary
 				landing = _intercept_landing(first.player, first.closest),
 				attacker_dice = 2,
 				defender_dice = 12,
-				attacker_total = passer.accuracy + 2,
-				defender_total = first.player.defense + 12,
+				attacker_total = passer.live_accuracy() + 2,
+				defender_total = first.player.live_defense() + 12,
 			}
 		return {intercepted = false}
 	for threat in threats:
-		var roll := MatchRules.resolve_contest(passer.accuracy, threat.player.defense, rng)
+		var roll := MatchRules.resolve_contest(passer.live_accuracy(), threat.player.live_defense(), rng)
 		if not roll.attacker_won:
 			return {
 				intercepted = true,
@@ -741,7 +807,7 @@ func apply_shoot(player_id: int) -> Dictionary:
 		saved = false
 	elif hit and preview.keeper_in_net:
 		var keeper := player_at(goal)
-		var roll := MatchRules.resolve_contest(player.accuracy, keeper.defense, rng)
+		var roll := MatchRules.resolve_contest(player.live_accuracy(), keeper.live_defense(), rng)
 		saved = not roll.attacker_won
 		preview.attacker_dice = roll.attacker_dice
 		preview.defender_dice = roll.defender_dice
@@ -765,14 +831,15 @@ func apply_shoot(player_id: int) -> Dictionary:
 	}
 	if not hit:
 		_release_ball(goal)
-		return result
+		return _finish_action(player, result)
 	if saved:
 		var keeper := player_at(goal)
 		if keeper != null:
 			_give_ball(keeper)
 		else:
 			_release_ball(goal)
-		return result
+		return _finish_action(player, result)
+	player.spend_energy()
 	result.goal = true
 	_award_goal(player.team)
 	result.reset = true
@@ -817,34 +884,35 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 		attacker_label = player.label(),
 	}
 	if _carrier_in_opponent_net(player):
+		player.spend_energy()
 		_award_goal(player.team)
 		result.goal = true
 		result.reset = true
 		result.home_score = home_score
 		result.away_score = away_score
 		return result
-	return result
+	return _finish_action(player, result)
 
 
 func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) -> Dictionary:
 	var origin := player.pos
 	var is_dribble := player.has_ball
 	var is_tackle := (not player.has_ball) and occupant.has_ball
-	var attacker_stat := player.control
-	var defender_stat := occupant.control
+	var attacker_stat := player.live_control()
+	var defender_stat := occupant.live_control()
 	var attacker_name := "CTR"
 	var defender_name := "CTR"
 	var action := "challenge"
 	if is_dribble:
 		action = "dribble"
-		attacker_stat = player.control
-		defender_stat = occupant.defense
+		attacker_stat = player.live_control()
+		defender_stat = occupant.live_defense()
 		attacker_name = "CTR"
 		defender_name = "DEF"
 	elif is_tackle:
 		action = "tackle"
-		attacker_stat = player.defense
-		defender_stat = occupant.control
+		attacker_stat = player.live_defense()
+		defender_stat = occupant.live_control()
 		attacker_name = "DEF"
 		defender_name = "CTR"
 	var roll := MatchRules.resolve_contest(attacker_stat, defender_stat, rng)
@@ -889,12 +957,19 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 	result.carried = player.has_ball
 
 	if _carrier_in_opponent_net(player):
+		player.spend_energy()
 		_award_goal(player.team)
 		result.goal = true
 		result.reset = true
 		result.home_score = home_score
 		result.away_score = away_score
 		return result
+	return _finish_action(player, result)
+
+
+func _finish_action(player: PlayerState, result: Dictionary) -> Dictionary:
+	if player != null and result.get("ok", false):
+		player.spend_energy()
 	return result
 
 

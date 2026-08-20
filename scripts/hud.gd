@@ -6,6 +6,8 @@ const _CombatLog := preload("res://scripts/combat_log.gd")
 const ACC_COLOR := Color("f0c14b")
 const DEF_COLOR := Color("7dffe0")
 const CTR_COLOR := Color("e39bff")
+const STA_COLOR := Color("9dffb0")
+const NRG_COLOR := Color("ffb347")
 const BAR_TOP := 88.0
 const BAR_BOTTOM := 72.0
 const LOG_INSET := 308.0
@@ -29,11 +31,15 @@ var _card_title: Label
 var _card_acc: Label
 var _card_def: Label
 var _card_ctr: Label
+var _card_sta: Label
+var _card_nrg: Label
 var _card_vs: Label
 var _card_b_title: Label
 var _card_b_acc: Label
 var _card_b_def: Label
 var _card_b_ctr: Label
+var _card_b_sta: Label
+var _card_b_nrg: Label
 var last_event: Dictionary = {}
 
 signal action_picked(action_id: String)
@@ -95,7 +101,7 @@ func refresh(
 
 	_hint.text = _hint_for(acting, selected, holder, hovered, hover_cell, model)
 	_event.text = _event_line(last_event)
-	_show_inspector(selected, hovered)
+	_show_inspector(model, selected, hovered)
 	_show_forecast(model, selected, hover_cell)
 
 
@@ -107,9 +113,9 @@ func _hint_for(
 	hover_cell: Vector2i,
 	model: MatchModel
 ) -> String:
-	if selected != null and model.can_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
+	if selected != null and model.can_plan_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
 		return model.shot_preview(selected).header
-	if selected != null and selected.has_ball and model.can_pass_to_cell(selected, hover_cell):
+	if selected != null and model.planning_has_ball(selected) and model.can_plan_pass_to_cell(selected, hover_cell):
 		var preview := model.pass_preview(selected, hover_cell)
 		if hovered != null and hovered.team == selected.team and MatchRules.is_adjacent(selected.pos, hovered.pos):
 			return preview.header + " or swap places"
@@ -118,17 +124,17 @@ func _hint_for(
 		return preview.header
 	if selected != null and hovered != null and hovered.id != selected.id:
 		if hovered.team != selected.team and MatchRules.is_adjacent(selected.pos, hovered.pos):
-			return MatchRules.contest_preview(selected, hovered).text
+			return MatchRules.contest_preview(selected, hovered, model.planning_has_ball(selected)).text
 	if selected != null:
-		if selected.has_ball:
-			if model.can_shoot(selected):
+		if model.planning_has_ball(selected):
+			if model.can_plan_shoot(selected):
 				return "Queue an action for %s — gold: shoot. Green: move. Blue: pass." % selected.label()
 			return "Queue an action for %s — green: move. Amber: dribble. Blue: pass. Red: offside pass. Adjacent teammate: pass or swap." % selected.label()
 		return "Queue an action for %s — green: move. Amber: tackle the carrier or fight for a square." % selected.label()
 	if _resolving:
 		return "Resolution in progress — both teams' queued actions play out together."
 	if holder == null:
-		return "Pick up to %d %s players (one action each). The third action ends the turn; End Turn finishes early. Hover a player to inspect ACC / DEF / CTR." % [MatchRules.ACTIONS_PER_SIDE, acting]
+		return "Pick up to %d %s players (one action each). The third action ends the turn; End Turn finishes early. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting]
 	return "Pick up to %d %s players. The third action ends the turn; End Turn finishes early. Click a planned player twice to clear their action." % [MatchRules.ACTIONS_PER_SIDE, acting]
 
 
@@ -136,13 +142,13 @@ func _event_line(event: Dictionary) -> String:
 	return _CombatLog.format_result(event)
 
 
-func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
+func _show_inspector(model: MatchModel, selected: PlayerState, hovered: PlayerState) -> void:
 	var primary := selected if selected != null else hovered
 	if primary == null:
 		_card.visible = false
 		return
 	_card.visible = true
-	_fill_card(primary, _card_title, _card_acc, _card_def, _card_ctr, "")
+	_fill_card(primary, _card_title, _card_acc, _card_def, _card_ctr, _card_sta, _card_nrg)
 
 	var compare := (
 		hovered != null
@@ -156,13 +162,15 @@ func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
 	_card_b_acc.visible = compare
 	_card_b_def.visible = compare
 	_card_b_ctr.visible = compare
+	_card_b_sta.visible = compare
+	_card_b_nrg.visible = compare
 	if compare:
 		var kind := "challenge"
-		if selected.has_ball:
+		if model.planning_has_ball(selected):
 			kind = "dribble"
 		elif hovered.has_ball:
 			kind = "tackle"
-		_fill_card(hovered, _card_b_title, _card_b_acc, _card_b_def, _card_b_ctr, kind)
+		_fill_card(hovered, _card_b_title, _card_b_acc, _card_b_def, _card_b_ctr, _card_b_sta, _card_b_nrg)
 		if kind == "dribble":
 			_emphasize_stat(_card_ctr, true)
 			_emphasize_stat(_card_b_def, true)
@@ -172,7 +180,7 @@ func _show_inspector(selected: PlayerState, hovered: PlayerState) -> void:
 		else:
 			_emphasize_stat(_card_ctr, true)
 			_emphasize_stat(_card_b_ctr, true)
-	_card.offset_bottom = 348.0 if compare else 196.0
+	_card.offset_bottom = 400.0 if compare else 236.0
 
 
 func _fill_card(
@@ -181,19 +189,30 @@ func _fill_card(
 	acc: Label,
 	defense: Label,
 	ctr: Label,
-	_kind: String
+	sta: Label,
+	nrg: Label
 ) -> void:
 	title.text = player.label()
 	title.add_theme_color_override(
 		"font_color",
 		Color("3ecbff") if player.team == MatchRules.Team.HOME else Color("ff4d8d")
 	)
-	acc.text = "ACC  %d" % player.accuracy
-	defense.text = "DEF  %d" % player.defense
-	ctr.text = "CTR  %d" % player.control
+	acc.text = _stat_text("ACC", player.live_accuracy(), player.accuracy)
+	defense.text = _stat_text("DEF", player.live_defense(), player.defense)
+	ctr.text = _stat_text("CTR", player.live_control(), player.control)
+	sta.text = "STA  %d" % player.stamina
+	nrg.text = "NRG  %d/%d" % [player.energy, player.max_energy]
 	acc.add_theme_color_override("font_color", ACC_COLOR)
 	defense.add_theme_color_override("font_color", DEF_COLOR)
 	ctr.add_theme_color_override("font_color", CTR_COLOR)
+	sta.add_theme_color_override("font_color", STA_COLOR)
+	nrg.add_theme_color_override("font_color", NRG_COLOR)
+
+
+func _stat_text(name: String, live: int, base: int) -> String:
+	if live == base:
+		return "%s  %d" % [name, live]
+	return "%s  %d (%d)" % [name, live, base]
 
 
 func _emphasize_stat(label: Label, on: bool) -> void:
@@ -407,7 +426,7 @@ func _build_card() -> void:
 	_card.offset_left = 8.0
 	_card.offset_top = 120.0
 	_card.offset_right = 128.0
-	_card.offset_bottom = 200.0
+	_card.offset_bottom = 236.0
 	add_child(_card)
 
 	var edge := ColorRect.new()
@@ -426,40 +445,46 @@ func _build_card() -> void:
 	_card_acc = _stat_label(8, 24, ACC_COLOR)
 	_card_def = _stat_label(8, 44, DEF_COLOR)
 	_card_ctr = _stat_label(8, 64, CTR_COLOR)
+	_card_sta = _stat_label(8, 84, STA_COLOR)
+	_card_nrg = _stat_label(8, 104, NRG_COLOR)
 	_card.add_child(_card_acc)
 	_card.add_child(_card_def)
 	_card.add_child(_card_ctr)
+	_card.add_child(_card_sta)
+	_card.add_child(_card_nrg)
 
 	_card_vs = _label("VS", 11, Color(0.85, 0.85, 0.9, 0.7), HORIZONTAL_ALIGNMENT_CENTER)
 	_card_vs.offset_left = 8.0
-	_card_vs.offset_top = 88.0
+	_card_vs.offset_top = 128.0
 	_card_vs.offset_right = 116.0
-	_card_vs.offset_bottom = 104.0
+	_card_vs.offset_bottom = 144.0
 	_card_vs.visible = false
 	_card.add_child(_card_vs)
 
 	_card_b_title = _label("", 12, Color("ff4d8d"), HORIZONTAL_ALIGNMENT_LEFT)
 	_card_b_title.offset_left = 8.0
-	_card_b_title.offset_top = 106.0
+	_card_b_title.offset_top = 146.0
 	_card_b_title.offset_right = 116.0
-	_card_b_title.offset_bottom = 124.0
+	_card_b_title.offset_bottom = 164.0
 	_card_b_title.visible = false
 	_card.add_child(_card_b_title)
 
-	_card_b_acc = _stat_label(8, 126, ACC_COLOR)
-	_card_b_def = _stat_label(8, 146, DEF_COLOR)
-	_card_b_ctr = _stat_label(8, 166, CTR_COLOR)
-	for label in [_card_b_acc, _card_b_def, _card_b_ctr]:
+	_card_b_acc = _stat_label(8, 166, ACC_COLOR)
+	_card_b_def = _stat_label(8, 186, DEF_COLOR)
+	_card_b_ctr = _stat_label(8, 206, CTR_COLOR)
+	_card_b_sta = _stat_label(8, 226, STA_COLOR)
+	_card_b_nrg = _stat_label(8, 246, NRG_COLOR)
+	for label in [_card_b_acc, _card_b_def, _card_b_ctr, _card_b_sta, _card_b_nrg]:
 		label.visible = false
 		_card.add_child(label)
 
 
 func _show_forecast(model: MatchModel, selected: PlayerState, hover_cell: Vector2i) -> void:
-	if selected != null and model.can_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
+	if selected != null and model.can_plan_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
 		_forecast_label.text = model.shot_preview(selected).text
 		_forecast.visible = true
 		return
-	if selected == null or not selected.has_ball or not model.can_pass_to_cell(selected, hover_cell):
+	if selected == null or not model.planning_has_ball(selected) or not model.can_plan_pass_to_cell(selected, hover_cell):
 		_forecast.visible = false
 		return
 	var preview := model.pass_preview(selected, hover_cell)

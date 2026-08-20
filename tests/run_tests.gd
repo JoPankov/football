@@ -217,9 +217,20 @@ func _test_attributes() -> void:
 	var st := model.player_at(Vector2i(5, 3))
 	var gk := model.player_at(MatchRules.HOME_NET)
 	var cm := model.player_at(Vector2i(4, 2))
-	_assert(st.accuracy == 13 and st.control == 9, "striker is accuracy/control leaning")
+	_assert(st.accuracy == 26 and st.control == 9, "striker is accuracy/control leaning")
+	_assert(st.stamina == 9 and st.energy == 90 and st.max_energy == 90, "striker stamina fills a 10× energy pool")
 	_assert(gk.defense == 13 and gk.control == 11, "keeper is defense/control leaning")
-	_assert(cm.accuracy == 6 and cm.defense == 8, "central mid keeps midfield ACC/DEF")
+	_assert(gk.stamina == 7 and gk.max_energy == 70, "keeper stamina is lower")
+	_assert(cm.accuracy == 12 and cm.defense == 8, "central mid keeps midfield ACC/DEF")
+	_assert(cm.stamina == 13, "central mid has the biggest energy pool")
+	_assert(st.live_accuracy() == 26, "full energy keeps printed stats")
+	st.energy = 0
+	_assert(st.live_accuracy() == 13, "empty energy halves ACC with rounding")
+	_assert(st.live_defense() == 2, "empty energy halves DEF with rounding")
+	st.energy = st.max_energy
+	var tired := model.apply_move(st.id, Vector2i(5, 4))
+	_assert(tired.ok, "move still works while spending energy")
+	_assert(st.energy == 89, "a resolved move costs 1 energy")
 	var away := model.player_at(Vector2i(6, 4))
 	_assert(away.pos in model.valid_moves(st), "opponent tile is a legal contest dest")
 	_assert(away.pos in model.contest_moves(st), "opponent tile is listed as a contest")
@@ -306,6 +317,8 @@ func _test_challenge_takes_ball() -> void:
 
 func _test_contest_preview() -> void:
 	print("-- contest preview")
+	_assert(MatchRules.scaled_stat(13, 0, 9) == 7, "zero energy scales 13 to 7")
+	_assert(MatchRules.scaled_stat(13, 9, 9) == 13, "full energy keeps 13")
 	_assert(MatchRules.PASS_RANGE == 3, "pass range is 3 tiles")
 	var even := MatchRules.contest_win_chance(9, 9)
 	_assert(absi(even - 575.0 / 1296.0) < 0.0001, "even contest is 575/1296 (ties to occupant)")
@@ -391,7 +404,10 @@ func _test_intercepts() -> void:
 	var preview := model.pass_preview(st, Vector2i(8, 3))
 	_assert(preview.text.contains("ACC vs"), "preview lists ACC vs DEF")
 	_assert(preview.text.contains("Pass success:"), "preview shows total pass success")
-	_assert(preview.total < 1.0, "at least one interceptor lowers pass success")
+	_assert(
+		preview.text.contains("intercept") or preview.total < 1.0,
+		"intercept threats are listed even when high ACC beats them"
+	)
 
 	model.scripted_first_intercept_wins = true
 	var from_tile: Vector2i = threats[0].player.pos
@@ -598,29 +614,85 @@ func _test_planning_and_resolve() -> void:
 	_assert(not public_after.contains("PLAN  "), "resolution view hides every team's plans")
 	_assert(public_after.contains("MOVE"), "resolution view shows the public move")
 
-	var clash := MatchModel.new()
-	clash.setup_kickoff()
-	var home_st := clash.player_at(Vector2i(5, 3))
-	var away_st := clash.player_at(Vector2i(6, 4))
-	clash.scripted_attacker_wins = true
-	_fill_plans(clash, [{
-		player_id = home_st.id,
+	var held := MatchModel.new()
+	held.setup_kickoff()
+	var held_st := held.player_at(Vector2i(5, 3))
+	var held_away := held.player_at(Vector2i(6, 4))
+	held.scripted_attacker_wins = false
+	_fill_plans(held, [{
+		player_id = held_st.id,
 		id = "move",
 		dest = Vector2i(5, 4),
 		label = "Move",
 	}])
-	clash.end_planning()
-	_fill_plans(clash, [{
-		player_id = away_st.id,
+	held.end_planning()
+	_fill_plans(held, [{
+		player_id = held_away.id,
 		id = "move",
 		dest = Vector2i(5, 4),
 		label = "Move",
 	}])
-	var clash_result := clash.end_planning()
-	_assert(clash_result.action == "resolve", "clash cycle resolved")
-	_assert(home_st.pos == Vector2i(5, 4), "lower-id mover won the CTR clash")
-	_assert(away_st.pos == Vector2i(6, 4), "clash loser stayed put")
-	_assert(clash.combat_log.as_text().contains("CLASH"), "log records the square fight")
+	var held_result := held.end_planning()
+	_assert(held_result.action == "resolve", "arrival tackle cycle resolved")
+	_assert(held_st.pos == Vector2i(5, 4) and held_st.has_ball, "carrier won the arrival tackle and kept the ball")
+	_assert(held_away.pos == Vector2i(6, 4), "failed tackler stayed put")
+	_assert(held.combat_log.as_text().contains("TACKLE"), "log records the arrival as a tackle")
+
+	var poke := MatchModel.new()
+	poke.setup_kickoff()
+	var poke_st := poke.player_at(Vector2i(5, 3))
+	var poke_away := poke.player_at(Vector2i(6, 4))
+	poke.scripted_attacker_wins = true
+	_fill_plans(poke, [{
+		player_id = poke_st.id,
+		id = "move",
+		dest = Vector2i(5, 4),
+		label = "Move",
+	}])
+	poke.end_planning()
+	_fill_plans(poke, [{
+		player_id = poke_away.id,
+		id = "move",
+		dest = Vector2i(5, 4),
+		label = "Move",
+	}])
+	var poke_result := poke.end_planning()
+	_assert(poke_result.action == "resolve", "arrival tackle steal resolved")
+	_assert(poke_away.pos == Vector2i(5, 4) and poke_away.has_ball, "tackler won the square and stole the ball")
+	_assert(poke_st.pos == Vector2i(5, 3) and not poke_st.has_ball, "carrier lost the arrival tackle")
+
+	var square := MatchModel.new()
+	square.setup_kickoff()
+	var square_mid := square.player_at(Vector2i(4, 4))
+	var square_st := square.player_at(Vector2i(5, 3))
+	var square_away := square.player_at(Vector2i(6, 4))
+	square.scripted_attacker_wins = true
+	_fill_plans(square, [
+		{
+			player_id = square_mid.id,
+			id = "move",
+			dest = Vector2i(5, 4),
+			label = "Move",
+		},
+		{
+			player_id = square_st.id,
+			id = "move",
+			dest = Vector2i(4, 3),
+			label = "Move",
+		},
+	])
+	square.end_planning()
+	_fill_plans(square, [{
+		player_id = square_away.id,
+		id = "move",
+		dest = Vector2i(5, 4),
+		label = "Move",
+	}])
+	var square_result := square.end_planning()
+	_assert(square_result.action == "resolve", "off-ball arrival contest resolved")
+	_assert(square_mid.pos == Vector2i(5, 4), "lower-id mover won the CTR arrival fight")
+	_assert(square_away.pos == Vector2i(6, 4), "CTR arrival loser stayed put")
+	_assert(square.combat_log.as_text().contains("SQUARE FIGHT"), "log records the off-ball arrival as a square fight")
 
 	var interrupt := MatchModel.new()
 	interrupt.setup_kickoff()
@@ -680,6 +752,80 @@ func _test_planning_and_resolve() -> void:
 	_assert(lead_mate.has_ball, "receiver kept the ball and carried it")
 	_assert(lead.ball.pos == Vector2i(5, 1), "ball followed the receiver's move")
 	_assert(not lead_st.has_ball, "passer no longer has the ball")
+
+	var feed := MatchModel.new()
+	feed.setup_kickoff()
+	var feed_st := feed.player_at(Vector2i(5, 3))
+	var feed_mate := feed.player_at(Vector2i(5, 2))
+	feed.queue_plan(feed_st.id, {
+		id = "pass",
+		dest = feed_mate.pos,
+		target_id = feed_mate.id,
+		label = "Pass",
+	})
+	_assert(feed.planning_has_ball(feed_mate), "queued pass lets the receiver plan with the ball")
+	_assert(not feed.planning_has_ball(feed_st), "passer no longer has planning possession")
+	_assert(feed.can_plan_pass_to_cell(feed_mate, Vector2i(5, 1)), "receiver can queue a follow-up pass")
+	var feed_acts := feed.actions_for(feed_mate, Vector2i(6, 2))
+	var feed_ids: Array = []
+	for act in feed_acts:
+		feed_ids.append(act.id)
+	_assert("dribble" in feed_ids, "receiver can queue a dribble as if they have the ball")
+
+	var fed := MatchModel.new()
+	fed.setup_kickoff()
+	fed.scripted_first_intercept_wins = false
+	fed.scripted_attacker_wins = true
+	var fed_st := fed.player_at(Vector2i(5, 3))
+	var fed_mate := fed.player_at(Vector2i(5, 2))
+	_fill_plans(fed, [
+		{
+			player_id = fed_st.id,
+			id = "pass",
+			dest = fed_mate.pos,
+			target_id = fed_mate.id,
+			label = "Pass",
+		},
+		{
+			player_id = fed_mate.id,
+			id = "dribble",
+			dest = Vector2i(6, 2),
+			label = "Dribble",
+		},
+	])
+	fed.end_planning()
+	_fill_plans(fed, [])
+	var fed_result := fed.end_planning()
+	_assert(fed_result.action == "resolve", "pass-then-dribble cycle resolved")
+	_assert(fed_mate.pos == Vector2i(6, 2) and fed_mate.has_ball, "receiver dribbled after the pass arrived")
+
+	var cut := MatchModel.new()
+	cut.setup_kickoff()
+	cut.scripted_first_intercept_wins = true
+	var cut_st := cut.player_at(Vector2i(5, 3))
+	var cut_mate := cut.player_at(Vector2i(5, 2))
+	_fill_plans(cut, [
+		{
+			player_id = cut_st.id,
+			id = "pass",
+			dest = cut_mate.pos,
+			target_id = cut_mate.id,
+			label = "Pass",
+		},
+		{
+			player_id = cut_mate.id,
+			id = "dribble",
+			dest = Vector2i(6, 2),
+			label = "Dribble",
+		},
+	])
+	cut.end_planning()
+	_fill_plans(cut, [])
+	var cut_result := cut.end_planning()
+	_assert(cut_result.action == "resolve", "intercepted pass-then-dribble resolved")
+	_assert(cut_mate.pos == Vector2i(5, 2), "receiver dribble did not play after the intercept")
+	_assert(not cut_mate.has_ball, "receiver never got the intercepted pass")
+	_assert(cut.combat_log.as_text().contains("pass did not arrive"), "log cancels the expected-ball dribble")
 
 	var collect := MatchModel.new()
 	collect.setup_kickoff()

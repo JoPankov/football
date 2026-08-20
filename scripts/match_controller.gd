@@ -333,7 +333,7 @@ func _set_hover(cell: Vector2i) -> void:
 
 
 func _update_pass_preview(selected: PlayerState) -> void:
-	if selected == null or not selected.has_ball or not model.can_pass_to_cell(selected, hover_cell):
+	if selected == null or not model.planning_has_ball(selected) or not model.can_plan_pass_to_cell(selected, hover_cell):
 		pitch.clear_pass_preview()
 		return
 	var threats := model.interceptors_for_pass(selected, hover_cell)
@@ -379,6 +379,7 @@ func _refresh() -> void:
 			and not model.plan_of(state.id).is_empty()
 		)
 		piece.set_planned(planned)
+		piece.set_energy_ratio(state.energy_ratio())
 		piece.set_on_turn(state.team == model.current_team and (planned or model.can_select(state)))
 		piece.z_index = 5 if piece.selected else 3
 
