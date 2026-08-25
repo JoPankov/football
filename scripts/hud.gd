@@ -55,6 +55,7 @@ var _log_label: RichTextLabel
 var _end_turn: Button
 var _plan_list: Label
 var _resolving: bool = false
+var require_end_turn: bool = false
 
 
 func _ready() -> void:
@@ -133,6 +134,10 @@ func _hint_for(
 		return "Queue an action for %s — green: move. Amber: tackle the carrier or fight for a square." % selected.label()
 	if _resolving:
 		return "Resolution in progress — both teams' queued actions play out together."
+	if require_end_turn:
+		if holder == null:
+			return "Pick up to %d %s players (one action each). Press End Turn to lock in. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting]
+		return "Pick up to %d %s players. Press End Turn to lock in. Click a planned player twice to clear their action." % [MatchRules.ACTIONS_PER_SIDE, acting]
 	if holder == null:
 		return "Pick up to %d %s players (one action each). The third action ends the turn; End Turn finishes early. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting]
 	return "Pick up to %d %s players. The third action ends the turn; End Turn finishes early. Click a planned player twice to clear their action." % [MatchRules.ACTIONS_PER_SIDE, acting]
@@ -302,6 +307,8 @@ func _refresh_end_turn(model: MatchModel) -> void:
 	_end_turn.disabled = _resolving or not ready
 	if _resolving:
 		_end_turn.text = "RESOLVING..."
+	elif require_end_turn and model.planning_complete():
+		_end_turn.text = "END TURN  %d/%d  — CONFIRM" % [model.plan_count(), MatchRules.ACTIONS_PER_SIDE]
 	else:
 		_end_turn.text = "END TURN  %d/%d" % [model.plan_count(), MatchRules.ACTIONS_PER_SIDE]
 

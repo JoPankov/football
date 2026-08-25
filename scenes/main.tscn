@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/match_controller.gd" id="1_match"]
 [ext_resource type="Script" path="res://scripts/pitch.gd" id="2_pitch"]
 [ext_resource type="Script" path="res://scripts/ball_piece.gd" id="3_ball"]
 [ext_resource type="Script" path="res://scripts/hud.gd" id="4_hud"]
+[ext_resource type="Script" path="res://scripts/game_menu.gd" id="5_menu"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_match")
@@ -22,3 +23,8 @@ position = Vector2(432, 252)
 
 [node name="HUD" type="CanvasLayer" parent="."]
 script = ExtResource("4_hud")
+
+[node name="GameMenu" type="CanvasLayer" parent="."]
+layer = 20
+process_mode = 3
+script = ExtResource("5_menu")

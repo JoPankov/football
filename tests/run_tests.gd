@@ -33,7 +33,9 @@ func _run() -> void:
 	_test_offside()
 	_test_shooting()
 	_test_planning_and_resolve()
+	_test_game_settings()
 	await _test_controller_click_flow()
+	await _test_game_menu()
 	if _failed == 0:
 		print("ALL TESTS PASSED")
 		quit(0)
@@ -1132,4 +1134,96 @@ func _test_controller_click_flow() -> void:
 	_assert(offside_click.get("action") == "queue", "choosing the offside pass queues it")
 	_assert(off_st.has_ball, "offside pass has not resolved yet")
 	offside_main.queue_free()
+	await process_frame
+
+
+func _test_game_settings() -> void:
+	print("-- game settings")
+	var cfg := GameSettings.new()
+	_assert(is_equal_approx(cfg.anim_scale(), 1.0), "default animation speed is 1x")
+	cfg.set_animation_speed(1)
+	_assert(is_equal_approx(cfg.anim_scale(), 5.0), "speed 1 is 5x slower")
+	cfg.set_animation_speed(10)
+	_assert(is_equal_approx(cfg.anim_scale(), 0.5), "speed 10 is 2x faster")
+	cfg.set_animation_speed(99)
+	_assert(cfg.animation_speed == 10, "animation speed clamps to 10")
+	cfg.set_animation_speed(0)
+	_assert(cfg.animation_speed == 1, "animation speed clamps to 1")
+
+
+func _test_game_menu() -> void:
+	print("-- game menu")
+	var packed: PackedScene = load("res://scenes/main.tscn")
+	var main: Node = packed.instantiate()
+	root.add_child(main)
+	await process_frame
+	main.animate_moves = false
+	_assert(not main.menu.is_open(), "menu starts closed")
+
+	var esc := InputEventKey.new()
+	esc.pressed = true
+	esc.keycode = KEY_ESCAPE
+	main._unhandled_input(esc)
+	_assert(main.menu.is_open(), "escape opens the pause menu")
+	_assert(paused, "pause menu pauses the match")
+	_assert(main.menu._main_panel.visible, "main menu is the first screen")
+	_assert(main.menu._resume_btn != null, "menu lists resume")
+	_assert(main.menu._new_game_btn != null, "menu lists new game")
+	_assert(main.menu._options_btn != null, "menu lists options")
+	_assert(main.menu._exit_btn != null, "menu lists exit")
+
+	main.menu._on_options()
+	_assert(main.menu._options_panel.visible, "options opens the second screen")
+	_assert(not main.menu._main_panel.visible, "main menu hides while options is open")
+	_assert(main.menu._end_turn_check != null, "options has the end-turn checkbox")
+	_assert(
+		is_equal_approx(main.menu._speed_slider.min_value, 1.0)
+		and is_equal_approx(main.menu._speed_slider.max_value, 10.0),
+		"speed slider is 1 to 10"
+	)
+	main.menu._end_turn_check.button_pressed = true
+	_assert(main.settings.require_end_turn, "checkbox sets require end turn")
+	_assert(main.hud.require_end_turn, "hud picks up require end turn")
+	main.menu._speed_slider.value = 8
+	_assert(main.settings.animation_speed == 8, "slider sets animation speed")
+
+	main.menu._on_escape()
+	_assert(main.menu.is_open() and main.menu._main_panel.visible, "escape from options returns to the main menu")
+	main.menu._on_escape()
+	_assert(not main.menu.is_open(), "escape from the main menu resumes")
+	_assert(not paused, "resuming unpauses the match")
+
+	main._unhandled_input(esc)
+	_assert(main.menu.is_open(), "escape opens the pause menu again")
+	main.menu._resume_btn.pressed.emit()
+	_assert(not main.menu.is_open(), "resume returns to the match")
+	_assert(not paused, "resume unpauses the match")
+
+	var except := {}
+	var last := {}
+	for _i in range(MatchRules.ACTIONS_PER_SIDE):
+		var dummy := _dummy_empty_move(main.model, MatchRules.Team.HOME, except)
+		_assert(not dummy.is_empty(), "needed an aether dummy move for required end turn")
+		var mover: PlayerState = dummy.player
+		except[mover.id] = true
+		main.selected_id = mover.id
+		last = main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
+	_assert(last.get("action") == "queue", "third action only queues when end turn is required")
+	_assert(main.model.current_team == MatchRules.Team.HOME, "aether still plans until end turn")
+	_assert(main.hud._end_turn.text.contains("CONFIRM"), "end turn prompts to confirm a full plan")
+	var locked: Dictionary = main.end_planning()
+	_assert(locked.get("action") == "end_planning", "end turn still locks after three queued actions")
+	_assert(main.model.current_team == MatchRules.Team.AWAY, "helix plans after a confirmed end turn")
+
+	main.model.home_score = 3
+	main.start_new_game()
+	_assert(main.model.home_score == 0 and main.model.away_score == 0, "new game clears the score")
+	_assert(main.model.current_team == MatchRules.Team.HOME, "new game is aether kickoff")
+	_assert(main.model.player_at(Vector2i(5, 3)).has_ball, "new game restores kickoff possession")
+	_assert(not main.menu.is_open(), "new game closes the menu")
+	_assert(not paused, "new game unpauses")
+	_assert(main.settings.require_end_turn, "new game keeps options")
+	_assert(main.settings.animation_speed == 8, "new game keeps animation speed")
+	main.queue_free()
+	paused = false
 	await process_frame

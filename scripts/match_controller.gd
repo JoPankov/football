@@ -5,18 +5,24 @@ extends Node2D
 @onready var pitch: Pitch = $Pitch
 @onready var hud: MatchHUD = $HUD
 @onready var camera: Camera2D = $Camera2D
+@onready var menu: GameMenu = $GameMenu
 
 var model: MatchModel
+var settings := GameSettings.new()
 var pieces: Dictionary = {}
 var selected_id: int = -1
 var hover_cell: Vector2i = Vector2i(-1, -1)
 var busy: bool = false
 var animate_moves: bool = true
 var _pending_choice: Dictionary = {}
+var _resolve_generation: int = 0
+var _active_tween: Tween
 
 
 func _ready() -> void:
 	animate_moves = DisplayServer.get_name() != "headless"
+	if animate_moves:
+		settings.load_from_disk()
 	model = MatchModel.new()
 	model.setup_kickoff()
 	_spawn_visuals()
@@ -24,11 +30,23 @@ func _ready() -> void:
 	_frame_camera()
 	hud.action_picked.connect(choose_action)
 	hud.end_turn_pressed.connect(end_planning)
+	hud.require_end_turn = settings.require_end_turn
+	menu.bind_settings(settings)
+	menu.new_game_pressed.connect(start_new_game)
+	menu.exit_pressed.connect(_quit_game)
+	menu.closed.connect(_on_menu_closed)
+	menu.settings_changed.connect(_on_settings_changed)
 	_refresh()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if busy:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		if menu != null and menu.is_open():
+			return
+		open_menu()
+		get_viewport().set_input_as_handled()
+		return
+	if busy or get_tree().paused:
 		return
 	if event is InputEventMouseButton and event.pressed:
 		var cell := pitch.world_to_grid(pitch.get_global_mouse_position())
@@ -39,15 +57,61 @@ func _unhandled_input(event: InputEvent) -> void:
 				_cancel_choice()
 			else:
 				_deselect()
-	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		if not _pending_choice.is_empty():
-			_cancel_choice()
-		else:
-			_deselect()
 	elif event is InputEventKey and event.pressed and (event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
 		end_planning()
 	elif event is InputEventMouseMotion:
 		_set_hover(pitch.world_to_grid(pitch.get_global_mouse_position()))
+
+
+func open_menu() -> void:
+	if menu == null or menu.is_open():
+		return
+	_cancel_choice()
+	menu.open()
+	get_tree().paused = true
+
+
+func close_menu() -> void:
+	if menu != null:
+		menu.close()
+	get_tree().paused = false
+
+
+func start_new_game() -> void:
+	_resolve_generation += 1
+	if _active_tween != null and _active_tween.is_valid():
+		_active_tween.kill()
+	_active_tween = null
+	busy = false
+	hud.set_resolving(false)
+	hud.last_event = {}
+	_pending_choice = {}
+	hud.hide_choices()
+	selected_id = -1
+	hover_cell = Vector2i(-1, -1)
+	pitch.clear_pass_preview()
+	model = MatchModel.new()
+	model.setup_kickoff()
+	_spawn_visuals()
+	close_menu()
+	_refresh()
+
+
+func _quit_game() -> void:
+	get_tree().paused = false
+	get_tree().quit()
+
+
+func _on_menu_closed() -> void:
+	get_tree().paused = false
+
+
+func _on_settings_changed() -> void:
+	hud.require_end_turn = settings.require_end_turn
+	if model != null:
+		hud.refresh(model, _selected_player(), _hovered_player(), hover_cell)
+	if DisplayServer.get_name() != "headless":
+		settings.save_to_disk()
 
 
 func handle_cell_clicked(cell: Vector2i) -> Dictionary:
@@ -144,7 +208,7 @@ func perform_action(action: Dictionary) -> Dictionary:
 		return result
 	hud.last_event = result
 	_deselect()
-	if model.planning_complete():
+	if model.planning_complete() and not settings.require_end_turn:
 		return end_planning()
 	return result
 
@@ -176,11 +240,17 @@ func _finish_resolve(result: Dictionary) -> Dictionary:
 func _play_resolve(result: Dictionary) -> void:
 	busy = true
 	hud.set_resolving(true)
+	var token := _resolve_generation
 	var events: Array = result.get("events", [])
 	for event in events:
+		if _resolve_generation != token:
+			return
 		hud.last_event = event
 		hud.refresh_log(model)
-		await _present_result(event)
+		if not await _present_result(event):
+			return
+	if _resolve_generation != token:
+		return
 	if result.get("reset", false):
 		_spawn_visuals()
 	hud.set_resolving(false)
@@ -188,26 +258,44 @@ func _play_resolve(result: Dictionary) -> void:
 	busy = false
 
 
-func _present_result(result: Dictionary) -> void:
+func _anim(base: float) -> float:
+	return maxf(0.02, base * settings.anim_scale())
+
+
+func _anim_wait(base: float) -> bool:
+	var token := _resolve_generation
+	await get_tree().create_timer(_anim(base)).timeout
+	return _resolve_generation == token
+
+
+func _wait_for_tween(tween: Tween) -> bool:
+	_active_tween = tween
+	var token := _resolve_generation
+	while is_instance_valid(tween) and tween.is_valid() and tween.is_running():
+		if _resolve_generation != token:
+			return false
+		await get_tree().process_frame
+	_active_tween = null
+	return _resolve_generation == token
+
+
+func _present_result(result: Dictionary) -> bool:
 	var action: String = result.get("action", "move")
 	if action == "cancelled" or action == "queue" or action == "end_planning":
-		await get_tree().create_timer(0.08).timeout
-		return
+		return await _anim_wait(0.08)
 	if action == "clash":
-		await get_tree().create_timer(0.18).timeout
-		return
+		return await _anim_wait(0.18)
 	var piece: PlayerPiece = pieces.get(result.get("player_id", -1))
 	if piece == null:
-		return
+		return true
 	var dest: Vector2i = result.dest
 	var won: bool = result.get("contest_won", true)
 	if action == "shoot":
 		pitch.ball_piece.set_carried(false)
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		tween.tween_property(pitch.ball_piece, "position", pitch.grid_to_world(dest), 0.28)
-		await tween.finished
-		return
+		tween.tween_property(pitch.ball_piece, "position", pitch.grid_to_world(dest), _anim(0.28))
+		return await _wait_for_tween(tween)
 	if action == "pass":
 		var receiver := model.player_by_id(int(result.get("receiver_id", -1)))
 		var tween := create_tween()
@@ -216,36 +304,34 @@ func _present_result(result: Dictionary) -> void:
 		if result.get("intercepted", false) and receiver != null:
 			var interceptor_piece: PlayerPiece = pieces.get(receiver.id)
 			if interceptor_piece != null:
-				tween.tween_property(interceptor_piece, "position", pitch.grid_to_world(dest), 0.22)
+				tween.tween_property(interceptor_piece, "position", pitch.grid_to_world(dest), _anim(0.22))
 		var ball_target := _pass_ball_target(result, dest, receiver)
 		pitch.ball_piece.set_carried(receiver != null)
-		tween.tween_property(pitch.ball_piece, "position", ball_target, 0.22)
-		await tween.finished
-		return
+		tween.tween_property(pitch.ball_piece, "position", ball_target, _anim(0.22))
+		return await _wait_for_tween(tween)
 	if action == "move" or action == "offside" or won:
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.set_parallel(true)
-		tween.tween_property(piece, "position", pitch.grid_to_world(dest), 0.2)
+		tween.tween_property(piece, "position", pitch.grid_to_world(dest), _anim(0.2))
 		var displaced_id: int = result.get("displaced_id", -1)
 		if displaced_id >= 0:
 			var other: PlayerPiece = pieces.get(displaced_id)
 			if other != null:
-				tween.tween_property(other, "position", pitch.grid_to_world(result.origin), 0.2)
+				tween.tween_property(other, "position", pitch.grid_to_world(result.origin), _anim(0.2))
 		var ball_target := _event_ball_target(result, dest)
 		if ball_target != Vector2.INF:
-			tween.tween_property(pitch.ball_piece, "position", ball_target, 0.2)
-		await tween.finished
-	else:
-		var start := piece.position
-		var bump: Vector2 = start.lerp(pitch.grid_to_world(dest), 0.4)
-		var tween := create_tween()
-		tween.tween_property(piece, "position", bump, 0.1)
-		tween.tween_property(piece, "position", start, 0.12)
-		var ball_target := _event_ball_target(result, dest)
-		if ball_target != Vector2.INF:
-			tween.parallel().tween_property(pitch.ball_piece, "position", ball_target, 0.18)
-		await tween.finished
+			tween.tween_property(pitch.ball_piece, "position", ball_target, _anim(0.2))
+		return await _wait_for_tween(tween)
+	var start := piece.position
+	var bump: Vector2 = start.lerp(pitch.grid_to_world(dest), 0.4)
+	var tween := create_tween()
+	tween.tween_property(piece, "position", bump, _anim(0.1))
+	tween.tween_property(piece, "position", start, _anim(0.12))
+	var ball_target := _event_ball_target(result, dest)
+	if ball_target != Vector2.INF:
+		tween.parallel().tween_property(pitch.ball_piece, "position", ball_target, _anim(0.18))
+	return await _wait_for_tween(tween)
 
 
 func _pass_ball_target(_result: Dictionary, dest: Vector2i, receiver: PlayerState) -> Vector2:
