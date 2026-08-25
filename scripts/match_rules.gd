@@ -22,10 +22,7 @@ const SHOT_ACC_BIAS := 1
 const SHOT_RANGE_K := 0.35
 const SHOT_ANGLE_FLOOR := 0.15
 
-## Ways to roll each 2d6 total (index = sum). 2..12.
-const WAYS_2D6: Array[int] = [0, 0, 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]
-const OUTCOMES_2D6 := 36
-const CONTEST_PAIRS := 1296
+## 1dSTAT faces are 1..stat. Live stats are already at least 1.
 
 const DIRECTIONS: Array[Vector2i] = [
 	Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
@@ -179,8 +176,8 @@ static func move_destinations(from: Vector2i, blocked: Dictionary) -> Array[Vect
 	return result
 
 
-static func roll_2d6(rng: RandomNumberGenerator) -> int:
-	return rng.randi_range(1, 6) + rng.randi_range(1, 6)
+static func roll_d_stat(stat: int, rng: RandomNumberGenerator) -> int:
+	return rng.randi_range(1, maxi(1, stat))
 
 
 static func max_energy(stamina: int) -> int:
@@ -198,34 +195,88 @@ static func scaled_stat(base: int, energy: int, pool: int) -> int:
 	return maxi(1, int(floor(float(base) * energy_factor(energy, pool) + 0.5)))
 
 
-## Two 2d6 rolls plus the relevant stats. Ties go to the occupant.
-static func resolve_contest(attacker_stat: int, defender_stat: int, rng: RandomNumberGenerator) -> Dictionary:
-	var attacker_dice := roll_2d6(rng)
-	var defender_dice := roll_2d6(rng)
-	var attacker_total := attacker_stat + attacker_dice
-	var defender_total := defender_stat + defender_dice
+## Each side rolls 1dSTAT (1..stat). Higher roll wins. Ties go to the team with the ball.
+static func resolve_contest(
+	attacker_stat: int,
+	defender_stat: int,
+	rng: RandomNumberGenerator,
+	tie_goes_to_attacker: bool = false
+) -> Dictionary:
+	var attacker_dice := roll_d_stat(attacker_stat, rng)
+	var defender_dice := roll_d_stat(defender_stat, rng)
+	var attacker_won := (
+		attacker_dice > defender_dice
+		or (attacker_dice == defender_dice and tie_goes_to_attacker)
+	)
 	return {
 		attacker_stat = attacker_stat,
 		defender_stat = defender_stat,
 		attacker_dice = attacker_dice,
 		defender_dice = defender_dice,
-		attacker_total = attacker_total,
-		defender_total = defender_total,
-		attacker_won = attacker_total > defender_total,
+		attacker_total = attacker_dice,
+		defender_total = defender_dice,
+		attacker_won = attacker_won,
 	}
 
 
-## Chance the mover wins (strictly higher than occupant after 2d6). Ties stay with occupant.
-static func contest_win_chance(attacker_stat: int, defender_stat: int) -> float:
+## Tests force a winner; dice are filled in so the log still reads as 1dSTAT.
+static func apply_scripted_winner(roll: Dictionary, attacker_won: bool) -> void:
+	roll.attacker_won = attacker_won
+	if attacker_won:
+		roll.attacker_dice = maxi(int(roll.get("attacker_stat", 1)), 2)
+		roll.defender_dice = 1
+	else:
+		roll.attacker_dice = 1
+		roll.defender_dice = maxi(int(roll.get("defender_stat", 1)), 2)
+	roll.attacker_total = roll.attacker_dice
+	roll.defender_total = roll.defender_dice
+
+
+## If one contestant has the ball they win ties. Else the side in possession.
+## Same-team clashes and a loose ball leave the first claimer / occupant.
+static func attacker_wins_ties(
+	attacker: PlayerState,
+	defender: PlayerState,
+	possession_team: int = -1
+) -> bool:
+	if attacker == null:
+		return false
+	if attacker.has_ball:
+		return true
+	if defender != null and defender.has_ball:
+		return false
+	if defender != null and attacker.team == defender.team:
+		return true
+	if possession_team < 0:
+		return false
+	return attacker.team == possession_team
+
+
+## Chance the attacker wins a 1dSTAT vs 1dSTAT contest.
+static func contest_win_chance(
+	attacker_stat: int,
+	defender_stat: int,
+	tie_goes_to_attacker: bool = false
+) -> float:
+	var atk := maxi(1, attacker_stat)
+	var deff := maxi(1, defender_stat)
 	var wins := 0
-	for atk_dice in range(2, 13):
-		for def_dice in range(2, 13):
-			if attacker_stat + atk_dice > defender_stat + def_dice:
-				wins += WAYS_2D6[atk_dice] * WAYS_2D6[def_dice]
-	return float(wins) / float(CONTEST_PAIRS)
+	var ties := 0
+	for roll in range(1, atk + 1):
+		wins += mini(roll - 1, deff)
+		if roll <= deff:
+			ties += 1
+	if tie_goes_to_attacker:
+		wins += ties
+	return float(wins) / float(atk * deff)
 
 
-static func contest_preview(mover: PlayerState, occupant: PlayerState, mover_on_ball = null) -> Dictionary:
+static func contest_preview(
+	mover: PlayerState,
+	occupant: PlayerState,
+	mover_on_ball = null,
+	possession_team: int = -1
+) -> Dictionary:
 	var action := "challenge"
 	var verb := "square fight"
 	var atk_name := "CTR"
@@ -247,7 +298,14 @@ static func contest_preview(mover: PlayerState, occupant: PlayerState, mover_on_
 		def_name = "CTR"
 		atk = mover.live_defense()
 		deff = occupant.live_control()
-	var chance := contest_win_chance(atk, deff)
+	var ties_to_atk := false
+	if on_ball:
+		ties_to_atk = true
+	elif occupant.has_ball:
+		ties_to_atk = false
+	else:
+		ties_to_atk = attacker_wins_ties(mover, occupant, possession_team)
+	var chance := contest_win_chance(atk, deff, ties_to_atk)
 	var pct := int(round(chance * 100.0))
 	var text := "%s %s %d %s vs %d %s = %d%% success" % [
 		verb, occupant.label(), atk, atk_name, deff, def_name, pct

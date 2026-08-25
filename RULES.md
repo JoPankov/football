@@ -126,7 +126,7 @@ Actions are planned against the current board, then resolve in this order:
 5. **Destination contests** — if two or more remaining **moves** target the same empty square:
    - **Opposite teams, one has the ball:** a **tackle** (the player without the ball rolls **DEF**, the carrier rolls **CTR**). Winner takes the square. If the tackler wins, they also steal the ball.
    - **Opposite teams, neither has the ball:** a **CTR vs CTR** square fight. Winner takes the square (and collects a loose ball there).
-   - **Same team:** **CTR + 2d6**; a tie leaves the lower-id player (first claimer).
+   - **Same team:** **1dCTR**; a tie goes to the player with the ball if one has it, otherwise the lower-id player (first claimer).
    Losers stay put.
 6. **Moves and swaps**
 
@@ -177,9 +177,9 @@ Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s D
 
 All contested actions use the same roll:
 
-- Each side: **stat + 2d6**
-- The acting player wins only if **strictly higher**
-- Ties go to the occupant / interceptor
+- Each side rolls **1dSTAT** (faces `1` through that side’s live stat)
+- Higher roll wins
+- A tie goes to **the team with the ball**: a pass beats the interceptor, a dribble beats the defender, a tackle fails, a shot beats the keeper’s save. If neither contestant’s team has the ball, the occupant / first claimer keeps the square.
 
 Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 
@@ -206,7 +206,7 @@ Hover the goal to see:
 hit = ACC/(ACC+1) x range x angle
 range = 1 / (1 + 0.35 x (d-1))
 angle = max(0.15, cos theta)
-save = P(keeper DEF+2d6 >= ACC+2d6)   if a keeper is on the goal tile, else 0
+save = P(keeper 1dDEF > shooter 1dACC)   if a keeper is on the goal tile, else 0
 goal = hit x (1 - save)
 ```
 
@@ -215,7 +215,7 @@ goal = hit x (1 - save)
 Resolution:
 
 1. Roll hit against `hit`.
-2. If it hits and a keeper is in the net, they try a save (ACC vs DEF, ties to the keeper).
+2. If it hits and a keeper is in the net, they try a save (shooter **1dACC** vs keeper **1dDEF**; ties to the shooter).
 3. Goal: score +1, kickoff reset, the team that conceded starts with the ball.
 4. Save: the keeper has the ball.
 5. Miss: the ball is loose on the goal tile.

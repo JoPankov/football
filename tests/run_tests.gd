@@ -322,8 +322,23 @@ func _test_contest_preview() -> void:
 	_assert(MatchRules.scaled_stat(13, 0, 9) == 7, "zero energy scales 13 to 7")
 	_assert(MatchRules.scaled_stat(13, 9, 9) == 13, "full energy keeps 13")
 	_assert(MatchRules.PASS_RANGE == 3, "pass range is 3 tiles")
-	var even := MatchRules.contest_win_chance(9, 9)
-	_assert(absi(even - 575.0 / 1296.0) < 0.0001, "even contest is 575/1296 (ties to occupant)")
+	var even := MatchRules.contest_win_chance(9, 9, false)
+	_assert(absi(even - 36.0 / 81.0) < 0.0001, "even 1d9 contest is 36/81 (ties to occupant)")
+	var even_ball := MatchRules.contest_win_chance(9, 9, true)
+	_assert(absi(even_ball - 45.0 / 81.0) < 0.0001, "even 1d9 contest is 45/81 (ties to the ball)")
+	var dribble_favors := MatchRules.contest_win_chance(9, 9, true) > MatchRules.contest_win_chance(9, 9, false)
+	_assert(dribble_favors, "ball-team ties raise the attacker win chance")
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1
+	var dice_ok := true
+	for _i in 40:
+		var rolled := MatchRules.resolve_contest(9, 4, rng, true)
+		if (
+			rolled.attacker_dice < 1 or rolled.attacker_dice > 9
+			or rolled.defender_dice < 1 or rolled.defender_dice > 4
+		):
+			dice_ok = false
+	_assert(dice_ok, "1dSTAT rolls stay inside 1..stat")
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var st := model.player_at(Vector2i(5, 3))
@@ -341,6 +356,12 @@ func _test_contest_preview() -> void:
 	_assert(tackle.text.begins_with("tackle "), "tackle hint starts with tackle")
 	_assert(tackle.text.contains("%d DEF" % away.defense), "tackle hint uses mover DEF")
 	_assert(tackle.text.contains("%d CTR" % st.control), "tackle hint uses carrier CTR")
+	_assert(MatchRules.attacker_wins_ties(st, away), "dribble ties go to the carrier")
+	_assert(not MatchRules.attacker_wins_ties(away, st), "tackle ties go to the carrier")
+	var decoy_vs_wing := MatchRules.attacker_wins_ties(
+		decoy, model.player_at(Vector2i(7, 0)), MatchRules.Team.HOME
+	)
+	_assert(decoy_vs_wing, "square fight ties go to the team in possession")
 
 
 func _test_pass() -> void:

@@ -108,15 +108,11 @@ static func format_result(event: Dictionary) -> String:
 			event.get("reason_text", event.get("reason", "interrupted")),
 		]
 	if action == "clash":
-		return "CLASH  %s CTR %d+%d=%d  vs  %s CTR %d+%d=%d  on %s  ·  %s takes the square" % [
+		return "CLASH  %s CTR %s  vs  %s CTR %s  on %s  ·  %s takes the square" % [
 			event.get("attacker_label", "a"),
-			event.get("attacker_stat", 0),
-			event.get("attacker_dice", 0),
-			event.get("attacker_total", 0),
+			dice_text(event.get("attacker_stat", 0), event.get("attacker_dice", 0)),
 			event.get("defender_label", "b"),
-			event.get("defender_stat", 0),
-			event.get("defender_dice", 0),
-			event.get("defender_total", 0),
+			dice_text(event.get("defender_stat", 0), event.get("defender_dice", 0)),
 			cell_text(event.get("dest", Vector2i.ZERO)),
 			event.get("winner_label", "winner"),
 		]
@@ -139,17 +135,13 @@ static func format_result(event: Dictionary) -> String:
 		]
 	if action == "pass":
 		if event.get("intercepted", false):
-			return "INTERCEPT  %s %s %d+%d=%d  vs  %s %s %d+%d=%d" % [
+			return "INTERCEPT  %s %s %s  vs  %s %s %s" % [
 				event.get("attacker_label", "passer"),
 				event.get("attacker_stat_name", "ACC"),
-				event.get("attacker_stat", 0),
-				event.get("attacker_dice", 0),
-				event.get("attacker_total", 0),
+				dice_text(event.get("attacker_stat", 0), event.get("attacker_dice", 0)),
 				event.get("defender_label", "interceptor"),
 				event.get("defender_stat_name", "DEF"),
-				event.get("defender_stat", 0),
-				event.get("defender_dice", 0),
-				event.get("defender_total", 0),
+				dice_text(event.get("defender_stat", 0), event.get("defender_dice", 0)),
 			]
 		return "PASS  %s  →  %s" % [
 			event.get("attacker_label", "passer"),
@@ -173,20 +165,20 @@ static func format_result(event: Dictionary) -> String:
 	elif action == "tackle":
 		verb = "TACKLE"
 	var outcome := "WON" if event.get("contest_won", false) else "LOST"
-	return "%s %s  %s %s %d+%d=%d  vs  %s %s %d+%d=%d" % [
+	return "%s %s  %s %s %s  vs  %s %s %s" % [
 		verb,
 		outcome,
 		event.get("attacker_label", "attacker"),
 		event.get("attacker_stat_name", "CTR"),
-		event.get("attacker_stat", 0),
-		event.get("attacker_dice", 0),
-		event.get("attacker_total", 0),
+		dice_text(event.get("attacker_stat", 0), event.get("attacker_dice", 0)),
 		event.get("defender_label", "defender"),
 		event.get("defender_stat_name", "DEF"),
-		event.get("defender_stat", 0),
-		event.get("defender_dice", 0),
-		event.get("defender_total", 0),
+		dice_text(event.get("defender_stat", 0), event.get("defender_dice", 0)),
 	]
+
+
+static func dice_text(stat: int, roll: int) -> String:
+	return "1d%d=%d" % [stat, roll]
 
 
 static func plan_summary(plan: Dictionary) -> String:

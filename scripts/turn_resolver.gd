@@ -223,19 +223,12 @@ static func _arrival_pair(
 		defender = player_a
 		attacker_stat = player_b.live_control()
 		defender_stat = player_a.live_control()
-	var roll := MatchRules.resolve_contest(attacker_stat, defender_stat, model.rng)
+	var holder := model.carrier()
+	var possession_team := holder.team if holder != null else -1
+	var ties_to_atk := MatchRules.attacker_wins_ties(attacker, defender, possession_team)
+	var roll := MatchRules.resolve_contest(attacker_stat, defender_stat, model.rng, ties_to_atk)
 	if model.scripted_attacker_wins != null:
-		roll.attacker_won = bool(model.scripted_attacker_wins)
-		if roll.attacker_won:
-			roll.attacker_total = attacker_stat + 12
-			roll.defender_total = defender_stat + 2
-			roll.attacker_dice = 12
-			roll.defender_dice = 2
-		else:
-			roll.attacker_total = attacker_stat + 2
-			roll.defender_total = defender_stat + 12
-			roll.attacker_dice = 2
-			roll.defender_dice = 12
+		MatchRules.apply_scripted_winner(roll, bool(model.scripted_attacker_wins))
 	var winner_player := attacker if roll.attacker_won else defender
 	var contest := {
 		ok = true,
@@ -325,21 +318,19 @@ static func _clash_winner(
 		var defender := model.player_by_id(int(other.player_id))
 		if attacker == null or defender == null:
 			continue
-		var roll := MatchRules.resolve_contest(attacker.live_control(), defender.live_control(), model.rng)
+		var holder := model.carrier()
+		var possession_team := holder.team if holder != null else -1
+		var ties_to_atk := MatchRules.attacker_wins_ties(attacker, defender, possession_team)
+		var roll := MatchRules.resolve_contest(
+			attacker.live_control(),
+			defender.live_control(),
+			model.rng,
+			ties_to_atk
+		)
 		if model.scripted_attacker_wins != null:
-			roll.attacker_won = bool(model.scripted_attacker_wins)
-			if roll.attacker_won:
-				roll.attacker_total = attacker.live_control() + 12
-				roll.defender_total = defender.live_control() + 2
-				roll.attacker_dice = 12
-				roll.defender_dice = 2
-			else:
-				roll.attacker_total = attacker.live_control() + 2
-				roll.defender_total = defender.live_control() + 12
-				roll.attacker_dice = 2
-				roll.defender_dice = 12
+			MatchRules.apply_scripted_winner(roll, bool(model.scripted_attacker_wins))
 		var winner_player := attacker
-		if roll.attacker_total < roll.defender_total:
+		if not roll.attacker_won:
 			winner_player = defender
 			champ = other
 		var clash := {

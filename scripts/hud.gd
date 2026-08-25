@@ -125,7 +125,14 @@ func _hint_for(
 		return preview.header
 	if selected != null and hovered != null and hovered.id != selected.id:
 		if hovered.team != selected.team and MatchRules.is_adjacent(selected.pos, hovered.pos):
-			return MatchRules.contest_preview(selected, hovered, model.planning_has_ball(selected)).text
+			var planning_holder := model.planning_carrier()
+			var possession := planning_holder.team if planning_holder != null else -1
+			return MatchRules.contest_preview(
+				selected,
+				hovered,
+				model.planning_has_ball(selected),
+				possession
+			).text
 	if selected != null:
 		if model.planning_has_ball(selected):
 			if model.can_plan_shoot(selected):

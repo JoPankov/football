@@ -478,7 +478,7 @@ func shot_preview(player: PlayerState) -> Dictionary:
 	var keeper_in_net := keeper != null and keeper.team != player.team
 	var save := 0.0
 	if keeper_in_net:
-		save = 1.0 - MatchRules.contest_win_chance(acc, keeper.live_defense())
+		save = 1.0 - MatchRules.contest_win_chance(acc, keeper.live_defense(), true)
 	var goal_p := hit * (1.0 - save)
 	var lines: PackedStringArray = []
 	lines.append("SHOOT at %s net" % MatchRules.team_name(MatchRules.opposite_team(player.team)))
@@ -494,7 +494,7 @@ func shot_preview(player: PlayerState) -> Dictionary:
 		int(round(hit * 100.0)),
 	])
 	if keeper_in_net:
-		lines.append("save = P(keeper DEF+2d6 ≥ ACC+2d6) = %d%%" % int(round(save * 100.0)))
+		lines.append("save = P(keeper 1dDEF > ACC 1dACC) = %d%%" % int(round(save * 100.0)))
 	else:
 		lines.append("save = 0% (no keeper in the net)")
 	lines.append("goal = hit × (1 − save) = %d%%" % int(round(goal_p * 100.0)))
@@ -570,7 +570,7 @@ func interceptors_for_pass(passer: PlayerState, dest: Vector2i) -> Array[Diction
 		)
 		if not hit.hits:
 			continue
-		var through := MatchRules.contest_win_chance(passer.live_accuracy(), player.live_defense())
+		var through := MatchRules.contest_win_chance(passer.live_accuracy(), player.live_defense(), true)
 		found.append({
 			player = player,
 			player_id = player.id,
@@ -716,14 +716,19 @@ func _resolve_pass_intercepts(passer: PlayerState, dest: Vector2i) -> Dictionary
 				intercepted = true,
 				player = first.player,
 				landing = _intercept_landing(first.player, first.closest),
-				attacker_dice = 2,
-				defender_dice = 12,
-				attacker_total = passer.live_accuracy() + 2,
-				defender_total = first.player.live_defense() + 12,
+				attacker_dice = 1,
+				defender_dice = maxi(first.player.live_defense(), 2),
+				attacker_total = 1,
+				defender_total = maxi(first.player.live_defense(), 2),
 			}
 		return {intercepted = false}
 	for threat in threats:
-		var roll := MatchRules.resolve_contest(passer.live_accuracy(), threat.player.live_defense(), rng)
+		var roll := MatchRules.resolve_contest(
+			passer.live_accuracy(),
+			threat.player.live_defense(),
+			rng,
+			true
+		)
 		if not roll.attacker_won:
 			return {
 				intercepted = true,
@@ -807,7 +812,12 @@ func apply_shoot(player_id: int) -> Dictionary:
 		saved = false
 	elif hit and preview.keeper_in_net:
 		var keeper := player_at(goal)
-		var roll := MatchRules.resolve_contest(player.live_accuracy(), keeper.live_defense(), rng)
+		var roll := MatchRules.resolve_contest(
+			player.live_accuracy(),
+			keeper.live_defense(),
+			rng,
+			true
+		)
 		saved = not roll.attacker_won
 		preview.attacker_dice = roll.attacker_dice
 		preview.defender_dice = roll.defender_dice
@@ -915,9 +925,12 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		defender_stat = occupant.live_control()
 		attacker_name = "DEF"
 		defender_name = "CTR"
-	var roll := MatchRules.resolve_contest(attacker_stat, defender_stat, rng)
+	var holder := carrier()
+	var possession_team := holder.team if holder != null else -1
+	var ties_to_atk := MatchRules.attacker_wins_ties(player, occupant, possession_team)
+	var roll := MatchRules.resolve_contest(attacker_stat, defender_stat, rng, ties_to_atk)
 	if scripted_attacker_wins != null:
-		roll.attacker_won = bool(scripted_attacker_wins)
+		MatchRules.apply_scripted_winner(roll, bool(scripted_attacker_wins))
 
 	var result := {
 		ok = true,
