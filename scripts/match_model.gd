@@ -213,7 +213,7 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 
 
 func can_end_planning() -> bool:
-	return plan_count(current_team) > 0
+	return true
 
 
 func planning_complete() -> bool:
@@ -221,8 +221,6 @@ func planning_complete() -> bool:
 
 
 func end_planning() -> Dictionary:
-	if not can_end_planning():
-		return {ok = false, reason = "need_an_action"}
 	combat_log.note("%s locked in %d actions." % [
 		MatchRules.team_name(current_team),
 		plan_count(current_team),
@@ -300,13 +298,11 @@ func _pass_geometry_ok(passer: PlayerState, dest: Vector2i) -> bool:
 		return false
 	if not MatchRules.in_bounds(dest) or dest == passer.pos:
 		return false
-	if MatchRules.is_goal_tile(dest):
-		return false
 	if MatchRules.chebyshev(passer.pos, dest) > MatchRules.PASS_RANGE:
 		return false
 	var occupant := player_at(dest)
 	if occupant == null:
-		return true
+		return not MatchRules.is_goal_tile(dest)
 	return occupant.team == passer.team and occupant.id != passer.id
 
 

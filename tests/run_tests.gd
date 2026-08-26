@@ -36,6 +36,7 @@ func _run() -> void:
 	_test_game_settings()
 	await _test_controller_click_flow()
 	await _test_game_menu()
+	await _test_vs_ai()
 	if _failed == 0:
 		print("ALL TESTS PASSED")
 		quit(0)
@@ -169,7 +170,7 @@ func _test_turn_and_selection() -> void:
 	_assert(home.has_ball, "kickoff taker still has the ball after moving")
 	_assert(model.current_team == MatchRules.Team.HOME, "planning team stays until End Turn")
 	_assert(not model.can_select(away), "helix still cannot be selected")
-	_assert(not model.can_end_planning(), "end turn needs at least one plan")
+	_assert(model.can_end_planning(), "end turn is allowed with no queued plan")
 
 
 func _test_possession() -> void:
@@ -405,6 +406,27 @@ func _test_pass() -> void:
 	_assert(not kicker.has_ball, "passer released the ball")
 	_assert(open.ball.is_loose() and open.ball.pos == Vector2i(3, 3), "ball sits loose on the target square")
 	_assert(kicker.pos == Vector2i(5, 3), "passer stayed put")
+
+	var back := MatchModel.new()
+	back.setup_kickoff()
+	var back_st := back.player_at(Vector2i(5, 3))
+	var back_gk := back.player_at(MatchRules.HOME_NET)
+	var back_lcb := back.player_at(Vector2i(2, 2))
+	back.scripted_first_intercept_wins = false
+	var to_cb := back.apply_pass(back_st.id, back_lcb.id)
+	_assert(to_cb.ok and back_lcb.has_ball, "back line can receive a 3-tile pass")
+	_assert(back.can_pass_to(back_lcb, back_gk), "can pass to the keeper in the net")
+	_assert(MatchRules.HOME_NET in back.pass_cells(back_lcb), "own net highlights as a pass tile")
+	_assert(not back.can_pass_to_cell(back_lcb, MatchRules.AWAY_NET), "cannot pass into the opponent net")
+	var gk_spot := back_gk.pos
+	back_gk.pos = Vector2i(0, 3)
+	_assert(not back.can_pass_to_cell(back_lcb, gk_spot), "cannot pass into an empty net")
+	back_gk.pos = gk_spot
+	var to_gk := back.apply_pass(back_lcb.id, back_gk.id)
+	_assert(to_gk.ok and to_gk.action == "pass", "pass to the keeper in the net succeeds")
+	_assert(back_gk.has_ball and not back_lcb.has_ball, "keeper in the net received the ball")
+	_assert(back.ball.pos == MatchRules.HOME_NET, "ball sits on the net tile")
+	_assert(back_gk.pos == MatchRules.HOME_NET, "keeper stayed in the net")
 
 
 func _test_intercepts() -> void:
@@ -919,6 +941,20 @@ func _test_planning_and_resolve() -> void:
 	_assert(early_st.pos == Vector2i(5, 4), "lone aether plan still resolved")
 	_assert(early_helix.pos == Vector2i(6, 5), "lone helix plan still resolved")
 
+	var skip := MatchModel.new()
+	skip.setup_kickoff()
+	var skip_st := skip.player_at(Vector2i(5, 3))
+	_assert(skip.plan_count() == 0, "kickoff starts with an empty plan")
+	var skip_lock := skip.end_planning()
+	_assert(skip_lock.ok and skip_lock.action == "end_planning", "end turn with no plan hands to helix")
+	_assert(skip.current_team == MatchRules.Team.AWAY, "helix plans after an empty aether end")
+	_assert(skip.home_plans.is_empty(), "aether stored no actions")
+	_assert(skip_st.pos == Vector2i(5, 3), "empty aether end does not move anyone")
+	var skip_resolve := skip.end_planning()
+	_assert(skip_resolve.ok and skip_resolve.action == "resolve", "helix can also end with no plan")
+	_assert(skip.current_team == MatchRules.Team.HOME, "empty cycle returns planning to aether")
+	_assert(skip_st.pos == Vector2i(5, 3), "empty cycle leaves the board unchanged")
+
 
 func _test_shooting() -> void:
 	print("-- shooting")
@@ -994,6 +1030,18 @@ func _test_controller_click_flow() -> void:
 	_assert(aether_net.x >= play.position.x - 2.0, "aether net sits in the left play area")
 	_assert(helix_net.x <= play.end.x + 2.0, "helix net is left of the match log")
 	_assert(helix_net.x > aether_net.x, "pitch still runs left to right")
+	_assert(not controller.hud._end_turn.disabled, "end turn is clickable with no plans")
+	_assert(controller.hud._end_turn.text.contains("0/3"), "end turn shows an empty queue")
+	var select_for_forecast: Dictionary = controller.handle_cell_clicked(Vector2i(5, 3))
+	_assert(select_for_forecast.get("action") == "select", "selecting the carrier sets up a pass hover")
+	controller._set_hover(Vector2i(5, 2))
+	await process_frame
+	_assert(controller.hud._forecast.visible, "pass hover shows the success forecast")
+	_assert(controller.hud._forecast_label.text.contains("Pass success"), "forecast shows the pass success chance")
+	var forecast_box: Rect2 = controller.hud._forecast.get_global_rect()
+	_assert(forecast_box.position.y >= play.end.y - 4.0, "forecast sits below the playable pitch")
+	_assert(forecast_box.end.x <= play.end.x + 8.0, "forecast does not overlap the match log")
+	controller._deselect()
 	var select_result: Dictionary = controller.handle_cell_clicked(Vector2i(5, 3))
 	_assert(select_result.get("action") == "select", "clicking own player selects")
 	_assert(controller.selected_id >= 0, "selection stored")
@@ -1137,6 +1185,35 @@ func _test_controller_click_flow() -> void:
 	_assert(early_main.model.current_team == MatchRules.Team.AWAY, "helix plans after a premature end turn")
 	early_main.queue_free()
 
+	var skip_main: Node = packed.instantiate()
+	root.add_child(skip_main)
+	skip_main.animate_moves = false
+	_assert(not skip_main.hud._end_turn.disabled, "end turn stays enabled before any queue")
+	var skip_end: Dictionary = skip_main.end_planning()
+	_assert(skip_end.get("action") == "end_planning", "end turn with no queued action is allowed")
+	_assert(skip_main.model.current_team == MatchRules.Team.AWAY, "helix plans after an empty end turn")
+	_assert(not skip_main.hud._end_turn.disabled, "helix can also end with an empty queue")
+	var skip_resolve: Dictionary = skip_main.end_planning()
+	_assert(skip_resolve.get("action") == "resolve", "empty helix end turn still resolves the cycle")
+	_assert(skip_main.model.current_team == MatchRules.Team.HOME, "aether plans after an empty cycle")
+	skip_main.queue_free()
+
+	var net_main: Node = packed.instantiate()
+	root.add_child(net_main)
+	net_main.animate_moves = false
+	net_main.model.scripted_first_intercept_wins = false
+	net_main.handle_cell_clicked(Vector2i(5, 3))
+	var feed_cb: Dictionary = net_main.handle_cell_clicked(Vector2i(2, 2))
+	_assert(feed_cb.get("action") == "queue", "clicking the LCB queues a pass")
+	net_main.handle_cell_clicked(Vector2i(2, 2))
+	var to_net: Dictionary = net_main.handle_cell_clicked(MatchRules.HOME_NET)
+	_assert(to_net.get("action") == "queue", "clicking the keeper in the net queues a pass")
+	var net_lcb: PlayerState = net_main.model.player_at(Vector2i(2, 2))
+	var net_plan: Dictionary = net_main.model.plan_of(net_lcb.id)
+	_assert(str(net_plan.get("action", "")) == "pass", "LCB queued a pass")
+	_assert(net_plan.get("dest", Vector2i.ZERO) == MatchRules.HOME_NET, "pass destination is the net")
+	net_main.queue_free()
+
 	var offside_main: Node = packed.instantiate()
 	root.add_child(offside_main)
 	offside_main.animate_moves = false
@@ -1245,6 +1322,91 @@ func _test_game_menu() -> void:
 	_assert(not paused, "new game unpauses")
 	_assert(main.settings.require_end_turn, "new game keeps options")
 	_assert(main.settings.animation_speed == 8, "new game keeps animation speed")
+
+	main.menu.open_title()
+	_assert(main.menu.is_title_open(), "title screen can open")
+	_assert(main.menu._hotseat_btn != null, "title lists new hotseat")
+	_assert(main.menu._vs_ai_btn != null, "title lists new vs ai")
+	_assert(main.menu._title_exit_btn != null, "title lists exit")
+	main.menu._on_escape()
+	_assert(main.menu.is_title_open(), "escape does not leave the title screen")
+	main.menu._hotseat_btn.pressed.emit()
+	_assert(not main.menu.is_open(), "new hotseat closes the title")
+	_assert(not main.menu.is_title_open(), "hotseat leaves title mode")
+	_assert(main.model.player_at(Vector2i(5, 3)).has_ball, "hotseat starts at kickoff")
+	_assert(not paused, "hotseat unpauses")
+	_assert(not main.vs_ai, "hotseat is not vs-ai")
 	main.queue_free()
+	paused = false
+	await process_frame
+
+
+func _test_vs_ai() -> void:
+	print("-- vs ai")
+	var packed: PackedScene = load("res://scenes/main.tscn")
+	var main: Node = packed.instantiate()
+	root.add_child(main)
+	await process_frame
+	main.animate_moves = false
+	main.start_vs_ai()
+	_assert(main.vs_ai, "new vs ai sets the mode")
+	_assert(main.model.current_team == MatchRules.Team.HOME, "human still plans aether")
+	_assert(main.model.plan_count(MatchRules.Team.HOME) == 0, "aether has not queued yet")
+	var helix_n: int = main.model.plan_count(MatchRules.Team.AWAY)
+	_assert(helix_n >= 1, "helix preplanned before aether queued")
+	_assert(helix_n <= MatchRules.ACTIONS_PER_SIDE, "helix does not queue a fourth action")
+	var helix_dests := {}
+	for plan in main.model.plans_for(MatchRules.Team.AWAY):
+		var hid := int(plan.get("player_id", -1))
+		var helix: PlayerState = main.model.player_by_id(hid)
+		_assert(helix != null and helix.team == MatchRules.Team.AWAY, "helix plan is a helix player")
+		var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+		_assert(MatchRules.in_bounds(dest), "helix destination is on the pitch")
+		helix_dests[dest] = true
+	var aether_except := {}
+	var last := {}
+	for _i in range(MatchRules.ACTIONS_PER_SIDE):
+		var dummy := _dummy_empty_move(main.model, MatchRules.Team.HOME, aether_except)
+		_assert(not dummy.is_empty(), "needed an aether dummy move vs ai")
+		var mover: PlayerState = dummy.player
+		aether_except[mover.id] = true
+		main.selected_id = mover.id
+		last = main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
+	_assert(last.get("action") == "resolve", "aether lock resolves immediately vs ai")
+	_assert(main.model.current_team == MatchRules.Team.HOME, "aether plans the next cycle vs ai")
+	_assert(main.model.plan_count(MatchRules.Team.AWAY) >= 1, "helix preplanned the next cycle")
+	main.queue_free()
+
+	var skip_ai: Node = packed.instantiate()
+	root.add_child(skip_ai)
+	await process_frame
+	skip_ai.animate_moves = false
+	skip_ai.start_vs_ai()
+	_assert(not skip_ai.hud._end_turn.disabled, "vs ai still allows an empty end turn")
+	var skip_ai_end: Dictionary = skip_ai.end_planning()
+	_assert(skip_ai_end.get("action") == "resolve", "empty aether end vs ai still resolves helix plans")
+	_assert(skip_ai.model.current_team == MatchRules.Team.HOME, "aether plans the next cycle after skipping")
+	_assert(skip_ai.model.plan_count(MatchRules.Team.AWAY) >= 1, "helix preplanned after an empty aether lock")
+	skip_ai.queue_free()
+
+	var kick: Node = packed.instantiate()
+	root.add_child(kick)
+	await process_frame
+	kick.animate_moves = false
+	kick.start_vs_ai()
+	var shooter: PlayerState = kick.model.player_at(Vector2i(5, 3))
+	_assert(shooter != null, "kickoff striker exists")
+	shooter.pos = Vector2i(11, 3)
+	kick.model.ball.pos = shooter.pos
+	kick.model.scripted_shot_outcome = "goal"
+	var scored: Dictionary = kick.model.apply_shoot(shooter.id)
+	_assert(scored.get("goal", false), "scripted shot is a goal")
+	_assert(kick.model.current_team == MatchRules.Team.AWAY, "helix would kick off after conceding")
+	kick._begin_vs_ai_cycle()
+	_assert(kick.model.current_team == MatchRules.Team.HOME, "vs-ai still lets aether plan after helix kickoff")
+	_assert(kick.model.plan_count(MatchRules.Team.AWAY) >= 1, "helix still preplans on its kickoff")
+	var aether_kicker: PlayerState = kick.model.player_at(Vector2i(5, 3))
+	_assert(aether_kicker == null or aether_kicker.team == MatchRules.Team.HOME, "aether kickoff spot is aether or empty after helix restart")
+	kick.queue_free()
 	paused = false
 	await process_frame

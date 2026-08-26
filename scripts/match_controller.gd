@@ -9,6 +9,7 @@ extends Node2D
 
 var model: MatchModel
 var settings := GameSettings.new()
+var vs_ai: bool = false
 var pieces: Dictionary = {}
 var selected_id: int = -1
 var hover_cell: Vector2i = Vector2i(-1, -1)
@@ -32,11 +33,16 @@ func _ready() -> void:
 	hud.end_turn_pressed.connect(end_planning)
 	hud.require_end_turn = settings.require_end_turn
 	menu.bind_settings(settings)
+	menu.hotseat_pressed.connect(start_hotseat)
+	menu.vs_ai_pressed.connect(start_vs_ai)
 	menu.new_game_pressed.connect(start_new_game)
 	menu.exit_pressed.connect(_quit_game)
 	menu.closed.connect(_on_menu_closed)
 	menu.settings_changed.connect(_on_settings_changed)
 	_refresh()
+	if animate_moves:
+		menu.open_title()
+		get_tree().paused = true
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -64,7 +70,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func open_menu() -> void:
-	if menu == null or menu.is_open():
+	if menu == null or menu.is_open() or menu.is_title_open():
 		return
 	_cancel_choice()
 	menu.open()
@@ -75,6 +81,16 @@ func close_menu() -> void:
 	if menu != null:
 		menu.close()
 	get_tree().paused = false
+
+
+func start_hotseat() -> void:
+	vs_ai = false
+	start_new_game()
+
+
+func start_vs_ai() -> void:
+	vs_ai = true
+	start_new_game()
 
 
 func start_new_game() -> void:
@@ -94,7 +110,22 @@ func start_new_game() -> void:
 	model.setup_kickoff()
 	_spawn_visuals()
 	close_menu()
+	_begin_vs_ai_cycle()
 	_refresh()
+
+
+func _begin_vs_ai_cycle() -> void:
+	if not vs_ai or model == null:
+		return
+	_preplan_ai()
+	model.current_team = MatchRules.Team.HOME
+
+
+func _preplan_ai() -> void:
+	model.away_plans.clear()
+	model.current_team = MatchRules.Team.AWAY
+	AiCoach.fill_plans(model)
+	model.current_team = MatchRules.Team.HOME
 
 
 func _quit_game() -> void:
@@ -220,6 +251,13 @@ func end_planning() -> Dictionary:
 	var result := model.end_planning()
 	if not result.ok:
 		return result
+	if vs_ai and str(result.get("action", "")) == "end_planning":
+		if model.plan_count() == 0:
+			_preplan_ai()
+			model.current_team = MatchRules.Team.AWAY
+		result = model.end_planning()
+		if not result.ok:
+			return result
 	hud.last_event = result
 	if str(result.get("action", "")) == "resolve":
 		return _finish_resolve(result)
@@ -233,6 +271,7 @@ func _finish_resolve(result: Dictionary) -> Dictionary:
 	else:
 		if result.get("reset", false):
 			_spawn_visuals()
+		_begin_vs_ai_cycle()
 		_deselect()
 	return result
 
@@ -254,8 +293,9 @@ func _play_resolve(result: Dictionary) -> void:
 	if result.get("reset", false):
 		_spawn_visuals()
 	hud.set_resolving(false)
-	_deselect()
 	busy = false
+	_begin_vs_ai_cycle()
+	_deselect()
 
 
 func _anim(base: float) -> float:

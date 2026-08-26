@@ -495,44 +495,78 @@ func _build_card() -> void:
 
 func _show_forecast(model: MatchModel, selected: PlayerState, hover_cell: Vector2i) -> void:
 	if selected != null and model.can_plan_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
-		_forecast_label.text = model.shot_preview(selected).text
+		_forecast_label.text = _shot_forecast_text(model.shot_preview(selected))
 		_forecast.visible = true
 		return
 	if selected == null or not model.planning_has_ball(selected) or not model.can_plan_pass_to_cell(selected, hover_cell):
 		_forecast.visible = false
 		return
-	var preview := model.pass_preview(selected, hover_cell)
-	_forecast_label.text = preview.text
+	_forecast_label.text = _pass_forecast_text(selected, model.pass_preview(selected, hover_cell))
 	_forecast.visible = true
+
+
+func _shot_forecast_text(preview: Dictionary) -> String:
+	return "%s\nd = %.2f tiles   θ = %.0f°   hit %d%%   save %d%%" % [
+		str(preview.get("header", "shoot")),
+		float(preview.get("distance", 0.0)),
+		float(preview.get("angle_deg", 0.0)),
+		int(round(float(preview.get("hit_chance", 0.0)) * 100.0)),
+		int(round(float(preview.get("save_chance", 0.0)) * 100.0)),
+	]
+
+
+func _pass_forecast_text(passer: PlayerState, preview: Dictionary) -> String:
+	var bits: PackedStringArray = [str(preview.get("header", "pass"))]
+	for threat in preview.get("threats", []):
+		var player: PlayerState = threat.get("player", null)
+		var name := player.label() if player != null else "interceptor"
+		bits.append(
+			"%s: %d ACC vs %d DEF = %d%% intercept (%d%% through)" % [
+				name,
+				passer.live_accuracy() if passer != null else 0,
+				player.live_defense() if player != null else 0,
+				int(threat.get("intercept_percent", 0)),
+				int(threat.get("through_percent", 0)),
+			]
+		)
+	if bool(preview.get("offside", false)):
+		bits.append("Offside if it arrives.")
+	var total := int(preview.get("total_percent", 100))
+	if preview.get("threats", []).is_empty():
+		bits.append("No interceptors. Pass success: %d%%" % total)
+	else:
+		bits.append("Pass success: %d%%" % total)
+	return "   ·   ".join(bits)
 
 
 func _build_forecast() -> void:
 	_forecast = _panel(Color(0.04, 0.06, 0.1, 0.94))
 	_forecast.visible = false
-	_forecast.anchor_left = 1.0
+	_forecast.anchor_left = 0.0
+	_forecast.anchor_top = 1.0
 	_forecast.anchor_right = 1.0
-	_forecast.offset_left = -540.0
-	_forecast.offset_right = -316.0
-	_forecast.offset_top = 96.0
-	_forecast.offset_bottom = 330.0
+	_forecast.anchor_bottom = 1.0
+	_forecast.offset_left = PLAY_MARGIN
+	_forecast.offset_right = -LOG_INSET
+	_forecast.offset_top = -BAR_BOTTOM
+	_forecast.offset_bottom = 0.0
 	add_child(_forecast)
 
 	var edge := ColorRect.new()
 	edge.color = Color("6fd3ff")
-	edge.anchor_left = 1.0
 	edge.anchor_right = 1.0
-	edge.offset_left = -3.0
-	edge.anchor_bottom = 1.0
+	edge.offset_bottom = 2.0
+	edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_forecast.add_child(edge)
 
-	_forecast_label = _label("", 13, Color(0.86, 0.92, 0.97, 0.95), HORIZONTAL_ALIGNMENT_LEFT)
+	_forecast_label = _label("", 12, Color(0.86, 0.92, 0.97, 0.95), HORIZONTAL_ALIGNMENT_LEFT)
 	_forecast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_forecast_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_forecast_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_forecast_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_forecast_label.offset_left = 12.0
-	_forecast_label.offset_top = 10.0
-	_forecast_label.offset_right = -10.0
-	_forecast_label.offset_bottom = -10.0
+	_forecast_label.offset_top = 6.0
+	_forecast_label.offset_right = -12.0
+	_forecast_label.offset_bottom = -6.0
 	_forecast.add_child(_forecast_label)
 
 
@@ -566,7 +600,7 @@ func _build_log() -> void:
 	_end_turn = Button.new()
 	_end_turn.text = "END TURN  0/3"
 	_end_turn.custom_minimum_size = Vector2(0, 34)
-	_end_turn.disabled = true
+	_end_turn.disabled = false
 	_end_turn.pressed.connect(_on_end_turn_pressed)
 	box.add_child(_end_turn)
 

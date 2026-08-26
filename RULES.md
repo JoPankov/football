@@ -107,8 +107,8 @@ Highlights:
 - Only the player with the ball.
 - Range: **3 tiles** (Chebyshev), to a **teammate** or an **empty square**.
 - You stay put. The ball travels to the target.
-- Empty square: the ball becomes **loose** there.
-- Teammate: they receive it and become the carrier.
+- Empty square: the ball becomes **loose** there. You cannot lay the ball into an empty net.
+- Teammate: they receive it and become the carrier. This includes the keeper standing in the net.
 - Adjacent empty square also allows **move** — you choose.
 - Adjacent teammate also allows **swap** — you choose.
 - 2–3 tiles away: pass is queued immediately (no menu).

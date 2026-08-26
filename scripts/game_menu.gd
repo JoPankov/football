@@ -1,8 +1,10 @@
 class_name GameMenu
 extends CanvasLayer
 
-## Pause overlay: Resume / New Game / Options / Exit. ESC resumes, or backs out of Options.
+## Title on launch; pause overlay in-match. ESC resumes pause, or backs out of Options.
 
+signal hotseat_pressed
+signal vs_ai_pressed
 signal new_game_pressed
 signal exit_pressed
 signal closed
@@ -15,9 +17,14 @@ const MUTED := Color(0.78, 0.86, 0.92, 0.88)
 
 var settings: GameSettings
 
+var _title_mode: bool = false
 var _dim: ColorRect
+var _title_panel: PanelContainer
 var _main_panel: PanelContainer
 var _options_panel: PanelContainer
+var _hotseat_btn: Button
+var _vs_ai_btn: Button
+var _title_exit_btn: Button
 var _resume_btn: Button
 var _new_game_btn: Button
 var _options_btn: Button
@@ -41,6 +48,7 @@ func bind_settings(value: GameSettings) -> void:
 
 
 func open() -> void:
+	_title_mode = false
 	_sync_options()
 	_show_main()
 	visible = true
@@ -48,12 +56,30 @@ func open() -> void:
 		_resume_btn.grab_focus()
 
 
+func open_title() -> void:
+	_title_mode = true
+	if _title_panel != null:
+		_title_panel.visible = true
+	if _main_panel != null:
+		_main_panel.visible = false
+	if _options_panel != null:
+		_options_panel.visible = false
+	visible = true
+	if _hotseat_btn != null:
+		_hotseat_btn.grab_focus()
+
+
 func close() -> void:
+	_title_mode = false
 	visible = false
 
 
 func is_open() -> bool:
 	return visible
+
+
+func is_title_open() -> bool:
+	return visible and _title_mode
 
 
 func _input(event: InputEvent) -> void:
@@ -65,6 +91,8 @@ func _input(event: InputEvent) -> void:
 
 
 func _on_escape() -> void:
+	if _title_mode:
+		return
 	if _options_panel.visible:
 		_show_main()
 		if _options_btn != null:
@@ -79,12 +107,17 @@ func _resume() -> void:
 
 
 func _show_main() -> void:
+	_title_mode = false
+	if _title_panel != null:
+		_title_panel.visible = false
 	_main_panel.visible = true
 	_options_panel.visible = false
 
 
 func _show_options() -> void:
 	_sync_options()
+	if _title_panel != null:
+		_title_panel.visible = false
 	_main_panel.visible = false
 	_options_panel.visible = true
 	if _end_turn_check != null:
@@ -105,6 +138,14 @@ func _refresh_speed_label() -> void:
 	if _speed_value == null or settings == null:
 		return
 	_speed_value.text = str(settings.animation_speed)
+
+
+func _on_hotseat() -> void:
+	hotseat_pressed.emit()
+
+
+func _on_vs_ai() -> void:
+	vs_ai_pressed.emit()
 
 
 func _on_new_game() -> void:
@@ -153,6 +194,11 @@ func _build() -> void:
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(center)
 
+	_title_panel = _panel()
+	_title_panel.visible = false
+	center.add_child(_title_panel)
+	_build_title(_title_panel)
+
 	_main_panel = _panel()
 	center.add_child(_main_panel)
 	_build_main(_main_panel)
@@ -164,8 +210,32 @@ func _build() -> void:
 
 
 func _on_dim_gui_input(event: InputEvent) -> void:
+	if _title_mode:
+		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_on_escape()
+
+
+func _build_title(panel: PanelContainer) -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.custom_minimum_size = Vector2(360, 0)
+	panel.add_child(box)
+
+	box.add_child(_title("SCI-FI FOOTBALL"))
+	box.add_child(_rule())
+
+	_hotseat_btn = _menu_button("NEW HOTSEAT")
+	_hotseat_btn.pressed.connect(_on_hotseat)
+	box.add_child(_hotseat_btn)
+
+	_vs_ai_btn = _menu_button("NEW VS AI")
+	_vs_ai_btn.pressed.connect(_on_vs_ai)
+	box.add_child(_vs_ai_btn)
+
+	_title_exit_btn = _menu_button("EXIT")
+	_title_exit_btn.pressed.connect(_on_exit)
+	box.add_child(_title_exit_btn)
 
 
 func _build_main(panel: PanelContainer) -> void:
