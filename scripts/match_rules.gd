@@ -1,12 +1,12 @@
 class_name MatchRules
 extends RefCounted
 
-## Pure, side-effect-free rules for the 12×7 grid.
+## Pure, side-effect-free rules for the 18×9 grid.
 
 enum Team { HOME, AWAY }
 
-const GRID_WIDTH := 12
-const GRID_HEIGHT := 7
+const GRID_WIDTH := 18
+const GRID_HEIGHT := 9
 const MOVE_DISTANCE := 1
 const PASS_RANGE := 3
 const ACTIONS_PER_SIDE := 3
@@ -15,9 +15,10 @@ const ENERGY_PER_STAMINA := 10
 const ENERGY_EMPTY_FACTOR := 0.5
 const INTERCEPT_RADIUS := 1.0
 const TILE_SIZE := 72.0
-const CENTER_SPOT := Vector2i(5, 3)
-const HOME_NET := Vector2i(-1, 3)
-const AWAY_NET := Vector2i(12, 3)
+const CENTER_SPOT := Vector2i(8, 4)
+const AWAY_KICKOFF := Vector2i(9, 5)
+const HOME_NET := Vector2i(-1, 4)
+const AWAY_NET := Vector2i(18, 4)
 const SHOT_ACC_BIAS := 1
 const SHOT_RANGE_K := 0.35
 const SHOT_ANGLE_FLOOR := 0.15
@@ -118,14 +119,15 @@ static func team_name(team: int) -> String:
 	return TEAM_NAME.get(team, "UNKNOWN")
 
 
-## Opponent's last third: 4 columns (12 / 3). Home attacks +x.
+## Opponent's last third: 6 columns (18 / 3). Home attacks +x.
 static func is_attacking_third(pos: Vector2i, team: int) -> bool:
+	var depth := GRID_WIDTH / 3
 	if team == Team.HOME:
-		return pos.x >= 8
-	return pos.x <= 3
+		return pos.x >= GRID_WIDTH - depth
+	return pos.x < depth
 
 
-## Opponent's half. Halfway sits between x=5 and x=6. Home attacks +x.
+## Opponent's half. Halfway sits between x=8 and x=9. Home attacks +x.
 static func is_opponent_half(pos: Vector2i, team: int) -> bool:
 	if team == Team.HOME:
 		return pos.x >= GRID_WIDTH / 2

@@ -1,7 +1,7 @@
 class_name Formation
 extends RefCounted
 
-## 4-4-2 kickoff on the 12×7 grid. Home attacks +x, away attacks −x.
+## 4-4-2 kickoff on the 18×9 grid. Home attacks +x, away attacks −x.
 ## y=0 is the top touchline (home's left wing).
 
 
@@ -15,31 +15,31 @@ static func _home() -> Array[Dictionary]:
 	return [
 		_slot(1, "GK", MatchRules.HOME_NET),
 		_slot(2, "LB", Vector2i(2, 0)),
-		_slot(3, "LCB", Vector2i(2, 2)),
-		_slot(4, "RCB", Vector2i(2, 4)),
-		_slot(5, "RB", Vector2i(2, 6)),
-		_slot(6, "LM", Vector2i(4, 0)),
-		_slot(7, "LCM", Vector2i(4, 2)),
-		_slot(8, "RCM", Vector2i(4, 4)),
-		_slot(11, "RM", Vector2i(4, 6)),
-		_slot(10, "ST", Vector2i(5, 2)),
-		_slot(9, "ST", Vector2i(5, 3)),
+		_slot(3, "LCB", Vector2i(2, 3)),
+		_slot(4, "RCB", Vector2i(2, 5)),
+		_slot(5, "RB", Vector2i(2, 8)),
+		_slot(6, "LM", Vector2i(5, 0)),
+		_slot(7, "LCM", Vector2i(5, 3)),
+		_slot(8, "RCM", Vector2i(5, 5)),
+		_slot(11, "RM", Vector2i(5, 8)),
+		_slot(10, "ST", Vector2i(8, 3)),
+		_slot(9, "ST", MatchRules.CENTER_SPOT),
 	]
 
 
 static func _away() -> Array[Dictionary]:
 	return [
 		_slot(1, "GK", MatchRules.AWAY_NET),
-		_slot(2, "RB", Vector2i(9, 0)),
-		_slot(3, "RCB", Vector2i(9, 2)),
-		_slot(4, "LCB", Vector2i(9, 4)),
-		_slot(5, "LB", Vector2i(9, 6)),
-		_slot(6, "RM", Vector2i(7, 0)),
-		_slot(7, "RCM", Vector2i(7, 2)),
-		_slot(8, "LCM", Vector2i(7, 4)),
-		_slot(11, "LM", Vector2i(7, 6)),
-		_slot(10, "ST", Vector2i(6, 2)),
-		_slot(9, "ST", Vector2i(6, 4)),
+		_slot(2, "RB", Vector2i(15, 0)),
+		_slot(3, "RCB", Vector2i(15, 3)),
+		_slot(4, "LCB", Vector2i(15, 5)),
+		_slot(5, "LB", Vector2i(15, 8)),
+		_slot(6, "RM", Vector2i(12, 0)),
+		_slot(7, "RCM", Vector2i(12, 3)),
+		_slot(8, "LCM", Vector2i(12, 5)),
+		_slot(11, "LM", Vector2i(12, 8)),
+		_slot(10, "ST", Vector2i(9, 3)),
+		_slot(9, "ST", MatchRules.AWAY_KICKOFF),
 	]
 
 

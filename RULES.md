@@ -4,12 +4,12 @@ This is what the game actually does today.
 
 ## Setup
 
-- Pitch: **12×7** tiles plus **two extra goal tiles**. `x` runs goal to goal (0 = Aether goal line, 11 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing).
-- Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 3)`, Helix net `(12, 3)`. Keepers start in the net so they do not occupy a pitch tile.
+- Pitch: **18×9** tiles plus **two extra goal tiles**. `x` runs goal to goal (0 = Aether goal line, 17 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing).
+- Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 4)`, Helix net `(18, 4)`. Keepers start in the net so they do not occupy a pitch tile.
 - From a net tile the keeper can step to the three adjacent pitch squares in front of goal.
 - Teams: **Aether** (home, cyan, attacks +x) vs **Helix** (away, magenta, attacks −x).
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
-- Aether **#9 ST** starts on the centre spot `(5, 3)` **with the ball**. Helix does not start in possession.
+- Aether **#9 ST** starts on the centre spot `(8, 4)` **with the ball**. Helix does not start in possession.
 - **Simultaneous cycles.** Aether plans **up to 3 actions** (one per player). The third action ends the turn automatically; **End Turn** can finish early with fewer. Helix then plans the same way. All queued actions then resolve together. Then Aether plans again.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
@@ -45,23 +45,24 @@ Kickoff values by role:
 ## How to take a turn
 
 1. Click any player on the team that is planning.
-2. Click a highlighted tile (or pick from the menu). That **queues** the action — nothing moves yet.
-3. Repeat for up to **3 different players**. A gold ring marks a planned player; an arrow shows their destination.
-4. The **third** action ends the turn automatically. Click **End Turn** (or press Enter) to finish with fewer than 3.
-5. After Helix’s turn ends (third action or End Turn), all queued actions resolve. The match log lists every public event and roll (tackles, contests, moves, passes, shots).
-6. Click a planned player twice to clear their action and pick someone else — do this before the third action if you want to change who acts. Right-click or Escape cancels a menu or deselects.
+2. Choose an action from the bottom bar (or press **1–9**): Move, Pass, Dribble, Tackle, Fight, Swap, Shoot. Only actions that player can currently take are listed.
+3. Click a highlighted tile. That **queues** the action — nothing moves yet.
+4. Repeat for up to **3 different players**. A gold ring marks a planned player; an arrow shows their destination.
+5. The **third** action ends the turn automatically. Click **End Turn** (or press Enter) to finish with fewer than 3.
+6. After Helix’s turn ends (third action or End Turn), all queued actions resolve. The match log lists every public event and roll (tackles, contests, moves, passes, shots).
+7. Click a planned player twice to clear their action and pick someone else — do this before the third action if you want to change who acts. Right-click or Escape cancels the current action, then the selection; Escape with nothing selected opens the menu.
 
 You cannot pick a fourth player. The third action locks the turn.
 
 Hotseat: plan arrows, gold rings, and plan log lines are visible only to the team that queued them — including past cycles. Resolution events (who tackled whom, rolls, and results) are public.
 
-Highlights:
+Highlights (after you pick an action):
 
 - **Green** — walk there
 - **Amber** — contest an opponent on that square
-- **Blue** — pass only
+- **Blue** — pass there
 - **Red** — pass to an offside teammate
-- **Purple** — more than one action (move/pass, pass/swap, or shoot plus move/dribble)
+- **Purple** — swap with that teammate
 - **Gold** — shoot at the opponent net
 
 ## Actions
@@ -109,9 +110,9 @@ Highlights:
 - You stay put. The ball travels to the target.
 - Empty square: the ball becomes **loose** there. You cannot lay the ball into an empty net.
 - Teammate: they receive it and become the carrier. This includes the keeper standing in the net.
-- Adjacent empty square also allows **move** — you choose.
-- Adjacent teammate also allows **swap** — you choose.
-- 2–3 tiles away: pass is queued immediately (no menu).
+- Adjacent empty square can be a **Move** or a **Pass** — pick the action first, then the tile.
+- Adjacent teammate can be a **Pass** or a **Swap** — pick the action first, then the teammate.
+- Pass still uses the 3-tile range once Pass is selected.
 - A pass to a teammate in an **offside position** is still legal. If it is not intercepted, it is offside (see below). Empty-square passes are never offside.
 - After you queue a pass to a teammate, that teammate can plan as if they already have the ball (pass on, shoot, dribble). If the incoming pass is intercepted or cancelled, those ball actions do not play.
 

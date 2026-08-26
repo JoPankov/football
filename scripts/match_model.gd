@@ -51,9 +51,9 @@ func setup_kickoff(kicking_team: int = MatchRules.Team.HOME) -> void:
 	combat_log.header("Kickoff — %s plans first." % MatchRules.team_name(kicking_team))
 	var kicker: PlayerState = null
 	if kicking_team == MatchRules.Team.HOME:
-		kicker = player_at(Vector2i(5, 3))
+		kicker = player_at(MatchRules.CENTER_SPOT)
 	else:
-		kicker = player_at(Vector2i(6, 4))
+		kicker = player_at(MatchRules.AWAY_KICKOFF)
 	assert(kicker != null and kicker.team == kicking_team, "Kickoff taker missing.")
 	_give_ball(kicker)
 	assert(_positions_unique(), "Kickoff spawned two players on the same cell.")
@@ -428,6 +428,80 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 	if can_plan_shoot(player) and dest == MatchRules.opponent_goal(player.team):
 		actions.append({id = "shoot", label = "Shoot", dest = dest})
 	return actions
+
+
+func commands_for(player: PlayerState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if player == null or not can_select(player):
+		return result
+	for spec in [
+		{id = "move", label = "Move"},
+		{id = "pass", label = "Pass"},
+		{id = "dribble", label = "Dribble"},
+		{id = "tackle", label = "Tackle"},
+		{id = "challenge", label = "Fight"},
+		{id = "swap", label = "Swap"},
+		{id = "shoot", label = "Shoot"},
+	]:
+		var dests := command_dests(player, str(spec.id))
+		if dests.is_empty():
+			continue
+		result.append({id = spec.id, label = spec.label, dests = dests})
+	return result
+
+
+func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
+	var dests: Array[Vector2i] = []
+	if player == null or not can_select(player):
+		return dests
+	match command_id:
+		"move":
+			for cell in valid_moves(player):
+				if player_at(cell) == null:
+					dests.append(cell)
+		"pass":
+			return pass_cells(player)
+		"dribble":
+			if planning_has_ball(player):
+				for cell in contest_moves(player):
+					dests.append(cell)
+		"tackle":
+			if planning_has_ball(player):
+				return dests
+			var holder := planning_carrier()
+			if (
+				holder != null
+				and holder.team != player.team
+				and holder.pos in contest_moves(player)
+			):
+				dests.append(holder.pos)
+		"challenge":
+			if planning_has_ball(player):
+				return dests
+			var holder := planning_carrier()
+			for cell in contest_moves(player):
+				var occupant := player_at(cell)
+				if occupant == null:
+					continue
+				if holder != null and occupant.id == holder.id:
+					continue
+				dests.append(cell)
+		"swap":
+			for other in players:
+				if can_swap(player, other):
+					dests.append(other.pos)
+		"shoot":
+			return shoot_cells(player)
+	return dests
+
+
+func action_for_command(player: PlayerState, command_id: String, dest: Vector2i) -> Dictionary:
+	if dest not in command_dests(player, command_id):
+		return {}
+	for action in actions_for(player, dest):
+		if str(action.get("id", "")) == command_id:
+			return action
+	return {}
 
 
 func can_shoot(player: PlayerState) -> bool:

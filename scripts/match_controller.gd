@@ -16,6 +16,7 @@ var hover_cell: Vector2i = Vector2i(-1, -1)
 var busy: bool = false
 var animate_moves: bool = true
 var _pending_choice: Dictionary = {}
+var _pending_action: String = ""
 var _resolve_generation: int = 0
 var _active_tween: Tween
 
@@ -30,6 +31,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_frame_camera)
 	_frame_camera()
 	hud.action_picked.connect(choose_action)
+	hud.command_picked.connect(select_command)
 	hud.end_turn_pressed.connect(end_planning)
 	hud.require_end_turn = settings.require_end_turn
 	menu.bind_settings(settings)
@@ -49,6 +51,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 		if menu != null and menu.is_open():
 			return
+		if _pending_action != "":
+			_cancel_command()
+			get_viewport().set_input_as_handled()
+			return
+		if selected_id >= 0:
+			_deselect()
+			get_viewport().set_input_as_handled()
+			return
 		open_menu()
 		get_viewport().set_input_as_handled()
 		return
@@ -59,12 +69,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			handle_cell_clicked(cell)
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			if not _pending_choice.is_empty():
-				_cancel_choice()
-			else:
+			if not _cancel_command():
 				_deselect()
 	elif event is InputEventKey and event.pressed and (event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
 		end_planning()
+	elif event is InputEventKey and event.pressed and not event.echo:
+		_try_command_hotkey(event.keycode)
 	elif event is InputEventMouseMotion:
 		_set_hover(pitch.world_to_grid(pitch.get_global_mouse_position()))
 
@@ -73,6 +83,7 @@ func open_menu() -> void:
 	if menu == null or menu.is_open() or menu.is_title_open():
 		return
 	_cancel_choice()
+	_pending_action = ""
 	menu.open()
 	get_tree().paused = true
 
@@ -102,6 +113,7 @@ func start_new_game() -> void:
 	hud.set_resolving(false)
 	hud.last_event = {}
 	_pending_choice = {}
+	_pending_action = ""
 	hud.hide_choices()
 	selected_id = -1
 	hover_cell = Vector2i(-1, -1)
@@ -140,7 +152,7 @@ func _on_menu_closed() -> void:
 func _on_settings_changed() -> void:
 	hud.require_end_turn = settings.require_end_turn
 	if model != null:
-		hud.refresh(model, _selected_player(), _hovered_player(), hover_cell)
+		hud.refresh(model, _selected_player(), _hovered_player(), hover_cell, _pending_action)
 	if DisplayServer.get_name() != "headless":
 		settings.save_to_disk()
 
@@ -160,29 +172,21 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 
 	var occupant := model.player_at(cell)
 	var selected := _selected_player()
-	if selected != null:
-		var actions: Array[Dictionary] = model.actions_for(selected, cell)
-		if actions.size() > 1:
-			return _open_choice(cell, actions)
-		if actions.size() == 1:
-			var only: Dictionary = actions[0]
-			var only_swap: bool = str(only.get("id", "")) == "swap"
-			if only_swap and occupant != null and model.can_select(occupant):
-				_select(occupant)
-				return {ok = true, action = "select", player_id = occupant.id}
-			return perform_action(only)
+	if selected != null and occupant != null and occupant.id == selected.id:
+		if not model.plan_of(occupant.id).is_empty():
+			model.clear_plan(occupant.id)
+			_deselect()
+			return {ok = true, action = "clear_plan", player_id = occupant.id}
+		_deselect()
+		return {ok = true, action = "deselect"}
+	if selected != null and _pending_action != "":
+		var command := model.action_for_command(selected, _pending_action, cell)
+		if not command.is_empty():
+			return perform_action(command)
 		if occupant != null and model.can_select(occupant):
-			if selected_id == occupant.id:
-				if not model.plan_of(occupant.id).is_empty():
-					model.clear_plan(occupant.id)
-					_deselect()
-					return {ok = true, action = "clear_plan", player_id = occupant.id}
-				_deselect()
-				return {ok = true, action = "deselect"}
 			_select(occupant)
 			return {ok = true, action = "select", player_id = occupant.id}
-		_deselect()
-		return {ok = false, reason = "no_action"}
+		return {ok = false, reason = "not_a_target"}
 
 	if occupant != null and model.can_select(occupant):
 		_select(occupant)
@@ -204,24 +208,61 @@ func _open_choice(cell: Vector2i, actions: Array[Dictionary]) -> Dictionary:
 
 
 func choose_action(action_id: String) -> Dictionary:
-	if _pending_choice.is_empty():
-		return {ok = false, reason = "no_choice"}
-	var actions: Array = _pending_choice.get("actions", [])
-	var chosen := {}
-	for action in actions:
-		if str(action.get("id", "")) == action_id:
-			chosen = action
-			break
-	_pending_choice = {}
-	hud.hide_choices()
-	if chosen.is_empty():
-		return {ok = false, reason = "unknown_action"}
-	return perform_action(chosen)
+	if not _pending_choice.is_empty():
+		var actions: Array = _pending_choice.get("actions", [])
+		var chosen := {}
+		for action in actions:
+			if str(action.get("id", "")) == action_id:
+				chosen = action
+				break
+		_pending_choice = {}
+		hud.hide_choices()
+		if chosen.is_empty():
+			return {ok = false, reason = "unknown_action"}
+		return perform_action(chosen)
+	return select_command(action_id)
+
+
+func select_command(action_id: String) -> Dictionary:
+	var selected := _selected_player()
+	if selected == null:
+		return {ok = false, reason = "no_selection"}
+	var dests := model.command_dests(selected, action_id)
+	if dests.is_empty():
+		return {ok = false, reason = "no_targets"}
+	_pending_action = action_id
+	_refresh()
+	return {ok = true, action = "command", command = action_id, dests = dests}
+
+
+func _try_command_hotkey(keycode: int) -> void:
+	var index := -1
+	if keycode >= KEY_1 and keycode <= KEY_9:
+		index = keycode - KEY_1
+	elif keycode >= KEY_KP_1 and keycode <= KEY_KP_9:
+		index = keycode - KEY_KP_1
+	if index < 0:
+		return
+	var selected := _selected_player()
+	if selected == null:
+		return
+	var commands := model.commands_for(selected)
+	if index >= commands.size():
+		return
+	select_command(str(commands[index].get("id", "")))
 
 
 func _cancel_choice() -> void:
 	_pending_choice = {}
 	hud.hide_choices()
+
+
+func _cancel_command() -> bool:
+	if _pending_action == "":
+		return false
+	_pending_action = ""
+	_refresh()
+	return true
 
 
 func _cell_to_screen(cell: Vector2i) -> Vector2:
@@ -410,11 +451,15 @@ func _event_ball_target(result: Dictionary, dest: Vector2i) -> Vector2:
 
 func _select(player: PlayerState) -> void:
 	selected_id = player.id
+	_pending_action = ""
+	if not model.command_dests(player, "move").is_empty():
+		_pending_action = "move"
 	_refresh()
 
 
 func _deselect() -> void:
 	_cancel_choice()
+	_pending_action = ""
 	selected_id = -1
 	_refresh()
 
@@ -455,11 +500,16 @@ func _set_hover(cell: Vector2i) -> void:
 	hover_cell = cell
 	pitch.set_hover(cell)
 	_update_pass_preview(_selected_player())
-	hud.refresh(model, _selected_player(), _hovered_player(), hover_cell)
+	hud.refresh(model, _selected_player(), _hovered_player(), hover_cell, _pending_action)
 
 
 func _update_pass_preview(selected: PlayerState) -> void:
-	if selected == null or not model.planning_has_ball(selected) or not model.can_plan_pass_to_cell(selected, hover_cell):
+	if (
+		selected == null
+		or _pending_action != "pass"
+		or not model.planning_has_ball(selected)
+		or not model.can_plan_pass_to_cell(selected, hover_cell)
+	):
 		pitch.clear_pass_preview()
 		return
 	var threats := model.interceptors_for_pass(selected, hover_cell)
@@ -480,14 +530,28 @@ func _refresh() -> void:
 	var moves: Array[Vector2i] = []
 	var contests: Array[Vector2i] = []
 	var passes: Array[Vector2i] = []
-	if selected != null:
-		moves = model.valid_moves(selected)
-		contests = model.contest_moves(selected)
-		passes = model.pass_cells(selected)
-		var choices: Array[Vector2i] = model.choice_cells(selected)
-		var shots: Array[Vector2i] = model.shoot_cells(selected)
-		var offsides: Array[Vector2i] = model.offside_pass_cells(selected)
+	var choices: Array[Vector2i] = []
+	var shots: Array[Vector2i] = []
+	var offsides: Array[Vector2i] = []
+	if selected != null and _pending_action != "":
+		var dests := model.command_dests(selected, _pending_action)
+		match _pending_action:
+			"move":
+				moves = dests
+			"pass":
+				offsides = model.offside_pass_cells(selected)
+				for cell in dests:
+					if cell not in offsides:
+						passes.append(cell)
+			"dribble", "tackle", "challenge":
+				contests = dests
+			"swap":
+				choices = dests
+			"shoot":
+				shots = dests
 		pitch.set_highlights(selected.pos, moves, contests, passes, choices, shots, offsides)
+	elif selected != null:
+		pitch.set_highlights(selected.pos, [], [], [], [], [], [])
 	else:
 		pitch.clear_highlights()
 	_update_pass_preview(selected)
@@ -510,7 +574,7 @@ func _refresh() -> void:
 		piece.z_index = 5 if piece.selected else 3
 
 	pitch.sync_ball(model.ball, model.carrier())
-	hud.refresh(model, selected, _hovered_player(), hover_cell)
+	hud.refresh(model, selected, _hovered_player(), hover_cell, _pending_action)
 
 
 func _plan_markers() -> Array[Dictionary]:

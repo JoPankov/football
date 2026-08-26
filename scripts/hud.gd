@@ -9,7 +9,7 @@ const CTR_COLOR := Color("e39bff")
 const STA_COLOR := Color("9dffb0")
 const NRG_COLOR := Color("ffb347")
 const BAR_TOP := 88.0
-const BAR_BOTTOM := 72.0
+const BAR_BOTTOM := 108.0
 const LOG_INSET := 308.0
 const PLAY_MARGIN := 12.0
 
@@ -43,6 +43,7 @@ var _card_b_nrg: Label
 var last_event: Dictionary = {}
 
 signal action_picked(action_id: String)
+signal command_picked(action_id: String)
 signal end_turn_pressed
 
 var _choice_panel: PanelContainer
@@ -54,6 +55,9 @@ var _log_panel: PanelContainer
 var _log_label: RichTextLabel
 var _end_turn: Button
 var _plan_list: Label
+var _action_box: HBoxContainer
+var _command_ids: PackedStringArray = []
+var _shown_command_key: String = ""
 var _resolving: bool = false
 var require_end_turn: bool = false
 
@@ -78,7 +82,8 @@ func refresh(
 	model: MatchModel,
 	selected: PlayerState,
 	hovered: PlayerState = null,
-	hover_cell: Vector2i = Vector2i(-1, -1)
+	hover_cell: Vector2i = Vector2i(-1, -1),
+	pending_action: String = ""
 ) -> void:
 	_model = model
 	var acting := MatchRules.team_name(model.current_team)
@@ -100,10 +105,11 @@ func refresh(
 			Color("3ecbff") if holder.team == MatchRules.Team.HOME else Color("ff4d8d")
 		)
 
-	_hint.text = _hint_for(acting, selected, holder, hovered, hover_cell, model)
+	_hint.text = _hint_for(acting, selected, holder, hovered, hover_cell, model, pending_action)
 	_event.text = _event_line(last_event)
 	_show_inspector(model, selected, hovered)
-	_show_forecast(model, selected, hover_cell)
+	_show_forecast(model, selected, hover_cell, pending_action)
+	_refresh_commands(model, selected, pending_action)
 
 
 func _hint_for(
@@ -112,19 +118,15 @@ func _hint_for(
 	holder: PlayerState,
 	hovered: PlayerState,
 	hover_cell: Vector2i,
-	model: MatchModel
+	model: MatchModel,
+	pending_action: String = ""
 ) -> String:
-	if selected != null and model.can_plan_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
+	if pending_action == "shoot" and selected != null and hover_cell == MatchRules.opponent_goal(selected.team):
 		return model.shot_preview(selected).header
-	if selected != null and model.planning_has_ball(selected) and model.can_plan_pass_to_cell(selected, hover_cell):
-		var preview := model.pass_preview(selected, hover_cell)
-		if hovered != null and hovered.team == selected.team and MatchRules.is_adjacent(selected.pos, hovered.pos):
-			return preview.header + " or swap places"
-		if hovered == null and MatchRules.is_adjacent(selected.pos, hover_cell):
-			return preview.header + " or move there"
-		return preview.header
-	if selected != null and hovered != null and hovered.id != selected.id:
-		if hovered.team != selected.team and MatchRules.is_adjacent(selected.pos, hovered.pos):
+	if pending_action == "pass" and selected != null and model.can_plan_pass_to_cell(selected, hover_cell):
+		return model.pass_preview(selected, hover_cell).header
+	if pending_action in ["dribble", "tackle", "challenge"] and selected != null and hovered != null:
+		if hover_cell in model.command_dests(selected, pending_action):
 			var planning_holder := model.planning_carrier()
 			var possession := planning_holder.team if planning_holder != null else -1
 			return MatchRules.contest_preview(
@@ -133,12 +135,13 @@ func _hint_for(
 				model.planning_has_ball(selected),
 				possession
 			).text
+	if selected != null and pending_action != "":
+		return "Click a highlighted tile to queue %s for %s. Right-click or Esc cancels." % [
+			pending_action.to_upper(),
+			selected.label(),
+		]
 	if selected != null:
-		if model.planning_has_ball(selected):
-			if model.can_plan_shoot(selected):
-				return "Queue an action for %s — gold: shoot. Green: move. Blue: pass." % selected.label()
-			return "Queue an action for %s — green: move. Amber: dribble. Blue: pass. Red: offside pass. Adjacent teammate: pass or swap." % selected.label()
-		return "Queue an action for %s — green: move. Amber: tackle the carrier or fight for a square." % selected.label()
+		return "Pick an action for %s, then click a highlighted tile. Keys 1–9 select actions." % selected.label()
 	if _resolving:
 		return "Resolution in progress — both teams' queued actions play out together."
 	if require_end_turn:
@@ -344,6 +347,67 @@ func _on_end_turn_pressed() -> void:
 	end_turn_pressed.emit()
 
 
+func _refresh_commands(model: MatchModel, selected: PlayerState, pending_action: String) -> void:
+	if _action_box == null:
+		return
+	var key := "%s|%s|%s" % [
+		str(selected.id) if selected != null else "-",
+		pending_action,
+		"busy" if _resolving else "ready",
+	]
+	if selected != null and not _resolving:
+		for command in model.commands_for(selected):
+			key += "," + str(command.get("id", ""))
+	if key == _shown_command_key:
+		return
+	_shown_command_key = key
+	for child in _action_box.get_children():
+		_action_box.remove_child(child)
+		child.queue_free()
+	_command_ids = PackedStringArray()
+	if selected == null or _resolving:
+		return
+	var commands := model.commands_for(selected)
+	var index := 1
+	for command in commands:
+		var action_id := str(command.get("id", ""))
+		_command_ids.append(action_id)
+		var button := _command_button("%d  %s" % [index, str(command.get("label", action_id)).to_upper()])
+		button.toggle_mode = true
+		button.set_pressed_no_signal(action_id == pending_action)
+		button.pressed.connect(_on_command_pressed.bind(action_id))
+		_action_box.add_child(button)
+		index += 1
+
+
+func _on_command_pressed(action_id: String) -> void:
+	command_picked.emit(action_id)
+
+
+func _command_button(text: String) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(108, 36)
+	button.mouse_filter = Control.MOUSE_FILTER_STOP
+	button.add_theme_font_size_override("font_size", 14)
+	button.add_theme_color_override("font_color", Color("d6e4ee"))
+	button.add_theme_color_override("font_hover_color", Color("ffe27a"))
+	button.add_theme_color_override("font_pressed_color", Color("3ecbff"))
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.06, 0.1, 0.16, 0.96)
+	normal.border_color = Color("3ecbff")
+	normal.set_border_width_all(1)
+	normal.set_content_margin_all(8)
+	var hover := normal.duplicate()
+	hover.border_color = Color("ffe27a")
+	hover.bg_color = Color(0.1, 0.16, 0.24, 0.98)
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", hover)
+	button.add_theme_stylebox_override("focus", hover)
+	return button
+
+
 func _build() -> void:
 	var top := _panel(Color(0.03, 0.05, 0.08, 0.94))
 	top.anchor_right = 1.0
@@ -395,27 +459,54 @@ func _build() -> void:
 	bottom.anchor_top = 1.0
 	bottom.anchor_right = 1.0
 	bottom.anchor_bottom = 1.0
-	bottom.offset_top = -72.0
+	bottom.offset_top = -BAR_BOTTOM
 	add_child(bottom)
 
+	_action_box = HBoxContainer.new()
+	_action_box.add_theme_constant_override("separation", 8)
+	_action_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_action_box.anchor_left = 0.0
+	_action_box.anchor_right = 1.0
+	_action_box.anchor_top = 0.0
+	_action_box.anchor_bottom = 0.0
+	_action_box.offset_left = 16.0
+	_action_box.offset_right = -LOG_INSET
+	_action_box.offset_top = 8.0
+	_action_box.offset_bottom = 48.0
+	_action_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bottom.add_child(_action_box)
+
 	_possession = _label("BALL: LOOSE", 16, Color("f5e6a8"), HORIZONTAL_ALIGNMENT_LEFT)
-	_possession.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	_possession.anchor_left = 0.0
+	_possession.anchor_right = 0.0
+	_possession.anchor_top = 1.0
+	_possession.anchor_bottom = 1.0
 	_possession.offset_left = 28.0
 	_possession.offset_right = 520.0
+	_possession.offset_top = -56.0
 	_possession.offset_bottom = -28.0
 	bottom.add_child(_possession)
 
 	_event = _label("", 13, Color("ffb347"), HORIZONTAL_ALIGNMENT_LEFT)
-	_event.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	_event.anchor_left = 0.0
+	_event.anchor_right = 0.0
+	_event.anchor_top = 1.0
+	_event.anchor_bottom = 1.0
 	_event.offset_left = 28.0
-	_event.offset_top = 32.0
 	_event.offset_right = 700.0
+	_event.offset_top = -28.0
+	_event.offset_bottom = -4.0
 	bottom.add_child(_event)
 
 	_hint = _label("", 14, Color(0.78, 0.86, 0.92, 0.92), HORIZONTAL_ALIGNMENT_RIGHT)
-	_hint.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hint.anchor_left = 0.0
+	_hint.anchor_right = 1.0
+	_hint.anchor_top = 1.0
+	_hint.anchor_bottom = 1.0
 	_hint.offset_left = 240.0
 	_hint.offset_right = -28.0
+	_hint.offset_top = -56.0
+	_hint.offset_bottom = -4.0
 	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	bottom.add_child(_hint)
 
@@ -493,16 +584,21 @@ func _build_card() -> void:
 		_card.add_child(label)
 
 
-func _show_forecast(model: MatchModel, selected: PlayerState, hover_cell: Vector2i) -> void:
-	if selected != null and model.can_plan_shoot(selected) and hover_cell == MatchRules.opponent_goal(selected.team):
+func _show_forecast(
+	model: MatchModel,
+	selected: PlayerState,
+	hover_cell: Vector2i,
+	pending_action: String = ""
+) -> void:
+	if pending_action == "shoot" and selected != null and hover_cell == MatchRules.opponent_goal(selected.team):
 		_forecast_label.text = _shot_forecast_text(model.shot_preview(selected))
 		_forecast.visible = true
 		return
-	if selected == null or not model.planning_has_ball(selected) or not model.can_plan_pass_to_cell(selected, hover_cell):
-		_forecast.visible = false
+	if pending_action == "pass" and selected != null and model.can_plan_pass_to_cell(selected, hover_cell):
+		_forecast_label.text = _pass_forecast_text(selected, model.pass_preview(selected, hover_cell))
+		_forecast.visible = true
 		return
-	_forecast_label.text = _pass_forecast_text(selected, model.pass_preview(selected, hover_cell))
-	_forecast.visible = true
+	_forecast.visible = false
 
 
 func _shot_forecast_text(preview: Dictionary) -> String:
@@ -548,7 +644,7 @@ func _build_forecast() -> void:
 	_forecast.anchor_bottom = 1.0
 	_forecast.offset_left = PLAY_MARGIN
 	_forecast.offset_right = -LOG_INSET
-	_forecast.offset_top = -BAR_BOTTOM
+	_forecast.offset_top = -60.0
 	_forecast.offset_bottom = 0.0
 	add_child(_forecast)
 
@@ -586,7 +682,7 @@ func _build_log() -> void:
 	_log_panel.offset_left = -308.0
 	_log_panel.offset_right = -8.0
 	_log_panel.offset_top = 96.0
-	_log_panel.offset_bottom = -80.0
+	_log_panel.offset_bottom = -(BAR_BOTTOM + 8.0)
 	add_child(_log_panel)
 
 	var box := VBoxContainer.new()
