@@ -22,6 +22,8 @@ const AWAY_NET := Vector2i(18, 4)
 const SHOT_ACC_BIAS := 1
 const SHOT_RANGE_K := 0.35
 const SHOT_ANGLE_FLOOR := 0.15
+## Rear pass cone: directly back plus this many degrees to each side.
+const BACK_PASS_HALF_ANGLE_DEG := 43.0
 
 ## 1dSTAT faces are 1..stat. Live stats are already at least 1.
 
@@ -115,6 +117,40 @@ static func opposite_team(team: int) -> int:
 	return Team.AWAY if team == Team.HOME else Team.HOME
 
 
+static func kickoff_facing(team: int) -> Vector2i:
+	return Vector2i(1, 0) if team == Team.HOME else Vector2i(-1, 0)
+
+
+static func normalize_facing(facing: Vector2i) -> Vector2i:
+	if facing == Vector2i.ZERO:
+		return Vector2i.ZERO
+	return Vector2i(signi(facing.x), signi(facing.y))
+
+
+static func step_direction(from: Vector2i, to: Vector2i) -> Vector2i:
+	return normalize_facing(to - from)
+
+
+## The one adjacent square opposite the way the player faces.
+static func is_behind_step(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool:
+	var face := normalize_facing(facing)
+	if face == Vector2i.ZERO:
+		return false
+	return (to - from) == -face
+
+
+## Non-adjacent pass into the rear cone (directly back ± 43°). Adjacent cells are allowed.
+static func is_back_pass(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool:
+	if is_adjacent(from, to):
+		return false
+	var face := Vector2(normalize_facing(facing))
+	var delta := Vector2(to - from)
+	if face == Vector2.ZERO or delta == Vector2.ZERO:
+		return false
+	var angle_deg := absf(rad_to_deg((-face).angle_to(delta)))
+	return angle_deg <= BACK_PASS_HALF_ANGLE_DEG + 0.0001
+
+
 static func team_name(team: int) -> String:
 	return TEAM_NAME.get(team, "UNKNOWN")
 
@@ -166,13 +202,20 @@ static func can_use_ball_action(has_ball: bool) -> bool:
 
 
 ## Cells in `blocked` cannot be entered (teammates). Opponent cells are legal.
-static func move_destinations(from: Vector2i, blocked: Dictionary) -> Array[Vector2i]:
+## `facing` ZERO skips the rear-square block (geometry-only callers).
+static func move_destinations(
+	from: Vector2i,
+	blocked: Dictionary,
+	facing: Vector2i = Vector2i.ZERO
+) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
 	for dir in DIRECTIONS:
 		var dest: Vector2i = from + dir
 		if not in_bounds(dest):
 			continue
 		if blocked.has(dest):
+			continue
+		if is_behind_step(from, dest, facing):
 			continue
 		result.append(dest)
 	return result

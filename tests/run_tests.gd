@@ -14,6 +14,7 @@ func _run() -> void:
 	_test_bounds()
 	_test_adjacency()
 	_test_move_destinations()
+	_test_facing()
 	_test_attacking_third()
 	_test_offside_position()
 	_test_kickoff()
@@ -76,6 +77,62 @@ func _test_adjacency() -> void:
 	_assert(not MatchRules.is_adjacent(Vector2i(5, 4), Vector2i(7, 4)), "2 tiles is too far")
 
 
+func _test_facing() -> void:
+	print("-- facing")
+	var from := Vector2i(8, 4)
+	var east := Vector2i(1, 0)
+	_assert(MatchRules.kickoff_facing(MatchRules.Team.HOME) == Vector2i(1, 0), "aether kickoff facing is +x")
+	_assert(MatchRules.kickoff_facing(MatchRules.Team.AWAY) == Vector2i(-1, 0), "helix kickoff facing is -x")
+	_assert(MatchRules.step_direction(from, Vector2i(9, 5)) == Vector2i(1, 1), "step direction is 8-way")
+	_assert(MatchRules.is_behind_step(from, Vector2i(7, 4), east), "west is behind when facing east")
+	_assert(not MatchRules.is_behind_step(from, Vector2i(7, 3), east), "rear-diagonal is not the blocked step")
+	_assert(not MatchRules.is_behind_step(from, Vector2i(9, 4), east), "forward is not behind")
+	_assert(not MatchRules.is_back_pass(from, Vector2i(7, 4), east), "adjacent rear pass is allowed")
+	_assert(MatchRules.is_back_pass(from, Vector2i(6, 4), east), "2 tiles directly back is a back pass")
+	_assert(MatchRules.is_back_pass(from, Vector2i(6, 3), east), "2 back 1 side is inside 43°")
+	_assert(not MatchRules.is_back_pass(from, Vector2i(6, 2), east), "45° rear-diagonal is outside 43°")
+	_assert(not MatchRules.is_back_pass(from, Vector2i(10, 4), east), "forward pass is allowed")
+	_assert(MatchRules.is_behind_step(from, Vector2i(7, 3), Vector2i(1, 1)), "diagonal facing blocks the opposite diagonal")
+
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var st := model.player_at(MatchRules.CENTER_SPOT)
+	_assert(st.facing == Vector2i(1, 0), "kickoff taker faces attack")
+	_assert(Vector2i(7, 4) not in model.valid_moves(st), "cannot step directly back")
+	var refused := model.apply_move(st.id, Vector2i(7, 4))
+	_assert(not refused.ok, "apply_move rejects the rear square")
+	_assert(st.pos == MatchRules.CENTER_SPOT and st.facing == Vector2i(1, 0), "failed back step does not turn")
+	_assert(not model.can_pass_to_cell(st, Vector2i(6, 4)), "cannot pass 2 tiles back")
+	_assert(model.can_pass_to_cell(st, Vector2i(7, 4)), "can still pass to the adjacent rear square")
+	_assert(model.can_pass_to_cell(st, Vector2i(10, 4)), "can pass 2 tiles forward")
+
+	var walked := model.apply_move(st.id, Vector2i(8, 5))
+	_assert(walked.ok and st.facing == Vector2i(0, 1), "player faces the direction of the last move")
+	_assert(Vector2i(8, 4) not in model.valid_moves(st), "cannot immediately step back to the previous tile")
+
+	model.scripted_attacker_wins = true
+	var dribble := model.apply_move(st.id, MatchRules.AWAY_KICKOFF)
+	_assert(dribble.ok and dribble.get("action") == "dribble", "dribble onto helix after turning")
+	_assert(st.facing == Vector2i(1, 0), "dribbler faces the square they took")
+	var away := model.player_at(Vector2i(8, 5))
+	_assert(away != null and away.team == MatchRules.Team.AWAY, "shoved defender occupies the origin")
+	_assert(away.facing == Vector2i(-1, 0), "shoved defender faces the shove")
+	_assert(st.pos not in model.valid_moves(away), "shoved player cannot immediately step back onto the dribbler")
+
+	var swap_model := MatchModel.new()
+	swap_model.setup_kickoff()
+	var swap_st := swap_model.player_at(MatchRules.CENTER_SPOT)
+	var partner := swap_model.player_at(Vector2i(8, 3))
+	partner.pos = Vector2i(7, 4)
+	_assert(not swap_model.can_swap(swap_st, partner), "cannot swap onto the rear square")
+	_assert(not swap_model.apply_swap(swap_st.id, partner.id).ok, "swap behind is rejected")
+	partner.pos = Vector2i(8, 3)
+	var side_swap := swap_model.apply_swap(swap_st.id, partner.id)
+	_assert(side_swap.ok, "side swap still works")
+	_assert(swap_st.facing == Vector2i(0, -1), "swapper faces the tile they took")
+	_assert(partner.facing == Vector2i(0, 1), "swapped teammate faces the tile they took")
+
+
 func _test_move_destinations() -> void:
 	print("-- destinations")
 	var center := MatchRules.move_destinations(Vector2i(5, 4), {})
@@ -85,6 +142,10 @@ func _test_move_destinations() -> void:
 	var blocked := MatchRules.move_destinations(Vector2i(5, 4), {Vector2i(5, 5): true})
 	_assert(blocked.size() == 7, "occupied neighbour is excluded")
 	_assert(Vector2i(5, 5) not in blocked, "blocked cell missing from result")
+	var faced := MatchRules.move_destinations(Vector2i(5, 4), {}, Vector2i(1, 0))
+	_assert(faced.size() == 7, "facing blocks only the rear square")
+	_assert(Vector2i(4, 4) not in faced, "square directly behind is not a move")
+	_assert(Vector2i(4, 3) in faced, "rear-diagonal is still a legal step")
 
 
 func _test_attacking_third() -> void:
@@ -153,6 +214,8 @@ func _test_kickoff() -> void:
 	_assert(model.player_at(MatchRules.HOME_NET).role == "GK", "aether keeper starts in the net")
 	_assert(model.player_at(MatchRules.AWAY_NET).role == "GK", "helix keeper starts in the net")
 	_assert(model.player_at(Vector2i(0, 4)) == null, "goal-line tile in front of aether net is free")
+	_assert(home_st.facing == Vector2i(1, 0), "aether faces +x at kickoff")
+	_assert(model.player_at(MatchRules.AWAY_KICKOFF).facing == Vector2i(-1, 0), "helix faces -x at kickoff")
 
 
 func _test_turn_and_selection() -> void:
@@ -291,6 +354,7 @@ func _test_square_fight() -> void:
 	model.ignore_team_gate = true
 	var origin := away.pos
 	var dest := home.pos
+	away.facing = MatchRules.step_direction(origin, dest)
 	var lose := model.apply_move(away.id, dest)
 	_assert(lose.action == "challenge", "second contest is still a square fight")
 	_assert(not lose.contest_won, "scripted fight failed")
@@ -391,20 +455,20 @@ func _test_pass() -> void:
 	open.setup_kickoff()
 	var kicker := open.player_at(MatchRules.CENTER_SPOT)
 	_assert(open.can_pass_to_cell(kicker, Vector2i(8, 5)), "can pass to an empty adjacent square")
-	_assert(open.can_pass_to_cell(kicker, Vector2i(6, 4)), "can pass to an empty square 2 tiles away")
+	_assert(open.can_pass_to_cell(kicker, Vector2i(10, 4)), "can pass to an empty square 2 tiles away")
 	_assert(not open.can_pass_to_cell(kicker, Vector2i(4, 4)), "cannot pass 4 tiles to empty")
 	var empty_actions := open.actions_for(kicker, Vector2i(8, 5))
 	_assert(empty_actions.size() == 2, "adjacent empty square is move or pass")
 	_assert(empty_actions[0].id == "move" and empty_actions[1].id == "pass", "move and pass are both offered")
-	var through := open.actions_for(kicker, Vector2i(6, 4))
+	var through := open.actions_for(kicker, Vector2i(10, 4))
 	_assert(through.size() == 1 and through[0].id == "pass", "empty square 2 tiles away is pass only")
 	open.scripted_first_intercept_wins = false
-	var laid := open.apply_pass_to(kicker.id, Vector2i(6, 4))
+	var laid := open.apply_pass_to(kicker.id, Vector2i(10, 4))
 	_assert(laid.ok and laid.action == "pass", "pass to empty square succeeds")
 	_assert(int(laid.get("receiver_id", 0)) < 0, "empty-square pass has no receiver")
-	_assert(laid.dest == Vector2i(6, 4), "empty-square pass records the landing tile")
+	_assert(laid.dest == Vector2i(10, 4), "empty-square pass records the landing tile")
 	_assert(not kicker.has_ball, "passer released the ball")
-	_assert(open.ball.is_loose() and open.ball.pos == Vector2i(6, 4), "ball sits loose on the target square")
+	_assert(open.ball.is_loose() and open.ball.pos == Vector2i(10, 4), "ball sits loose on the target square")
 	_assert(kicker.pos == MatchRules.CENTER_SPOT, "passer stayed put")
 
 	var back := MatchModel.new()
@@ -413,10 +477,12 @@ func _test_pass() -> void:
 	var back_gk := back.player_at(MatchRules.HOME_NET)
 	var back_lcb := back.player_at(Vector2i(2, 3))
 	back_st.pos = Vector2i(5, 4)
+	back_st.facing = Vector2i(-1, 0)
 	back.ball.pos = back_st.pos
 	back.scripted_first_intercept_wins = false
 	var to_cb := back.apply_pass(back_st.id, back_lcb.id)
 	_assert(to_cb.ok and back_lcb.has_ball, "back line can receive a 3-tile pass")
+	back_lcb.facing = Vector2i(-1, 0)
 	_assert(back.can_pass_to(back_lcb, back_gk), "can pass to the keeper in the net")
 	_assert(MatchRules.HOME_NET in back.pass_cells(back_lcb), "own net highlights as a pass tile")
 	_assert(not back.can_pass_to_cell(back_lcb, MatchRules.AWAY_NET), "cannot pass into the opponent net")
@@ -489,8 +555,11 @@ func _test_swap_and_choice() -> void:
 	_assert(adjacent.size() == 2, "adjacent teammate offers two actions")
 	_assert(adjacent[0].id == "pass" and adjacent[1].id == "swap", "pass and swap are both offered")
 	var lcm := model.player_at(Vector2i(5, 3))
+	_assert(not model.can_pass_to(st, lcm), "cannot pass into the rear cone")
+	st.facing = Vector2i(-1, 0)
 	var far := model.actions_for(st, lcm.pos)
 	_assert(far.size() == 1 and far[0].id == "pass", "3-tile teammate is pass only")
+	st.facing = MatchRules.kickoff_facing(st.team)
 	_assert(not model.can_swap(st, lcm), "cannot swap from 3 tiles away")
 	_assert(not model.can_swap(st, wing), "cannot swap from the wing")
 	_assert(not model.can_swap(st, away), "cannot swap with an opponent")
@@ -727,7 +796,7 @@ func _test_planning_and_resolve() -> void:
 		{
 			player_id = square_st.id,
 			id = "move",
-			dest = Vector2i(7, 4),
+			dest = Vector2i(8, 5),
 			label = "Move",
 		},
 	])
@@ -886,14 +955,14 @@ func _test_planning_and_resolve() -> void:
 		{
 			player_id = collect_st.id,
 			id = "pass",
-			dest = Vector2i(7, 3),
+			dest = Vector2i(9, 4),
 			target_id = -1,
 			label = "Pass",
 		},
 		{
 			player_id = collect_mid.id,
 			id = "move",
-			dest = Vector2i(7, 3),
+			dest = Vector2i(9, 4),
 			label = "Move",
 		},
 	])
@@ -901,7 +970,7 @@ func _test_planning_and_resolve() -> void:
 	_fill_plans(collect, [])
 	var collected := collect.end_planning()
 	_assert(collected.action == "resolve", "ground-pass collect cycle resolved")
-	_assert(collect_mid.pos == Vector2i(7, 3), "teammate stepped onto the pass square")
+	_assert(collect_mid.pos == Vector2i(9, 4), "teammate stepped onto the pass square")
 	_assert(collect_mid.has_ball, "teammate collected the loose pass")
 	_assert(not collect.ball.is_loose(), "ball is no longer loose after the collect")
 
@@ -1100,8 +1169,11 @@ func _test_controller_click_flow() -> void:
 	auto_pass.animate_moves = false
 	auto_pass.handle_cell_clicked(MatchRules.CENTER_SPOT)
 	auto_pass.model.scripted_first_intercept_wins = false
+	var far_mate: PlayerState = auto_pass.model.player_at(Vector2i(8, 3))
+	far_mate.pos = Vector2i(8, 1)
+	auto_pass._refresh()
 	auto_pass.select_command("pass")
-	var far_pass: Dictionary = auto_pass.handle_cell_clicked(Vector2i(5, 3))
+	var far_pass: Dictionary = auto_pass.handle_cell_clicked(Vector2i(8, 1))
 	_assert(far_pass.get("action") == "queue", "non-adjacent in-range teammate queues a pass")
 	_assert(auto_pass.model.player_at(MatchRules.CENTER_SPOT).has_ball, "auto-pass is only queued")
 	auto_pass.queue_free()
@@ -1112,7 +1184,7 @@ func _test_controller_click_flow() -> void:
 	ground_pass.handle_cell_clicked(MatchRules.CENTER_SPOT)
 	ground_pass.model.scripted_first_intercept_wins = false
 	ground_pass.select_command("pass")
-	var empty_pass: Dictionary = ground_pass.handle_cell_clicked(Vector2i(6, 4))
+	var empty_pass: Dictionary = ground_pass.handle_cell_clicked(Vector2i(10, 4))
 	_assert(empty_pass.get("action") == "queue", "clicking a distant empty square queues a pass")
 	_assert(not ground_pass.model.ball.is_loose(), "queued ground pass has not released the ball")
 	ground_pass.queue_free()
@@ -1212,6 +1284,7 @@ func _test_controller_click_flow() -> void:
 	net_main.model.scripted_first_intercept_wins = false
 	var net_st: PlayerState = net_main.model.player_at(MatchRules.CENTER_SPOT)
 	net_st.pos = Vector2i(2, 4)
+	net_st.facing = Vector2i(-1, 0)
 	net_main.model.ball.pos = net_st.pos
 	net_main._refresh()
 	net_main.handle_cell_clicked(Vector2i(2, 4))

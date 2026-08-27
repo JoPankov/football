@@ -103,7 +103,7 @@ func teammate_cells(except_id: int = -1) -> Dictionary:
 func valid_moves(player: PlayerState) -> Array[Vector2i]:
 	if player == null:
 		return []
-	return MatchRules.move_destinations(player.pos, teammate_cells(player.id))
+	return MatchRules.move_destinations(player.pos, teammate_cells(player.id), player.facing)
 
 
 func contest_moves(player: PlayerState) -> Array[Vector2i]:
@@ -300,6 +300,8 @@ func _pass_geometry_ok(passer: PlayerState, dest: Vector2i) -> bool:
 		return false
 	if MatchRules.chebyshev(passer.pos, dest) > MatchRules.PASS_RANGE:
 		return false
+	if MatchRules.is_back_pass(passer.pos, dest, passer.facing):
+		return false
 	var occupant := player_at(dest)
 	if occupant == null:
 		return not MatchRules.is_goal_tile(dest)
@@ -389,6 +391,8 @@ func can_swap(player: PlayerState, teammate: PlayerState) -> bool:
 	if not _acting_allowed(player) or teammate.team != player.team:
 		return false
 	if teammate.id == player.id:
+		return false
+	if MatchRules.is_behind_step(player.pos, teammate.pos, player.facing):
 		return false
 	return MatchRules.is_adjacent(player.pos, teammate.pos)
 
@@ -594,8 +598,8 @@ func apply_swap(player_id: int, teammate_id: int) -> Dictionary:
 		return {ok = false, reason = "illegal_swap"}
 	var origin := player.pos
 	var dest := teammate.pos
-	player.pos = dest
-	teammate.pos = origin
+	player.relocate(dest)
+	teammate.relocate(origin)
 	if player.has_ball:
 		ball.pos = dest
 	elif teammate.has_ball:
@@ -722,7 +726,7 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 		var thief: PlayerState = intercept.player
 		var landing: Vector2i = intercept.landing
 		var from_tile := thief.pos
-		thief.pos = landing
+		thief.relocate(landing)
 		_give_ball(thief)
 		return _finish_action(passer, {
 			ok = true,
@@ -844,8 +848,8 @@ func _apply_offside(passer: PlayerState, receiver: PlayerState) -> Dictionary:
 	if taker == null:
 		return {ok = false, reason = "no_taker"}
 	var origin := taker.pos
-	taker.pos = dest
-	receiver.pos = origin
+	taker.relocate(dest)
+	receiver.relocate(origin)
 	_give_ball(taker)
 	return {
 		ok = true,
@@ -942,7 +946,7 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 		return _apply_contest(player, occupant, dest)
 
 	var origin := player.pos
-	player.pos = dest
+	player.relocate(dest)
 	var gained := false
 	if player.has_ball:
 		ball.pos = dest
@@ -1026,8 +1030,8 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 	}
 
 	if roll.attacker_won:
-		occupant.pos = origin
-		player.pos = dest
+		player.relocate(dest)
+		occupant.relocate(origin)
 		result.displaced_id = occupant.id
 		if is_dribble:
 			ball.pos = dest

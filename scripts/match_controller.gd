@@ -385,12 +385,16 @@ func _present_result(result: Dictionary) -> bool:
 		if result.get("intercepted", false) and receiver != null:
 			var interceptor_piece: PlayerPiece = pieces.get(receiver.id)
 			if interceptor_piece != null:
+				var from_tile: Vector2i = result.get("interceptor_from", dest)
+				interceptor_piece.set_facing(MatchRules.step_direction(from_tile, dest))
 				tween.tween_property(interceptor_piece, "position", pitch.grid_to_world(dest), _anim(0.22))
 		var ball_target := _pass_ball_target(result, dest, receiver)
 		pitch.ball_piece.set_carried(receiver != null)
 		tween.tween_property(pitch.ball_piece, "position", ball_target, _anim(0.22))
 		return await _wait_for_tween(tween)
 	if action == "move" or action == "offside" or won:
+		var origin: Vector2i = result.get("origin", dest)
+		piece.set_facing(MatchRules.step_direction(origin, dest))
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.set_parallel(true)
@@ -399,7 +403,8 @@ func _present_result(result: Dictionary) -> bool:
 		if displaced_id >= 0:
 			var other: PlayerPiece = pieces.get(displaced_id)
 			if other != null:
-				tween.tween_property(other, "position", pitch.grid_to_world(result.origin), _anim(0.2))
+				other.set_facing(MatchRules.step_direction(dest, origin))
+				tween.tween_property(other, "position", pitch.grid_to_world(origin), _anim(0.2))
 		var ball_target := _event_ball_target(result, dest)
 		if ball_target != Vector2.INF:
 			tween.tween_property(pitch.ball_piece, "position", ball_target, _anim(0.2))
@@ -570,6 +575,7 @@ func _refresh() -> void:
 		)
 		piece.set_planned(planned)
 		piece.set_energy_ratio(state.energy_ratio())
+		piece.set_facing(state.facing)
 		piece.set_on_turn(state.team == model.current_team and (planned or model.can_select(state)))
 		piece.z_index = 5 if piece.selected else 3
 

@@ -14,6 +14,8 @@ This is what the game actually does today.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
 
+Each player **faces** one of those 8 directions (the chevron on the piece). Aether starts facing **+x**, Helix facing **−x**. After a player changes tile — move, dribble, tackle, square fight, swap, intercept cut-off, or offside restart — they face that step.
+
 ## Attributes
 
 Every player has four stats plus an **energy** pool. Hover or select a player to see them. A bar under each piece shows remaining energy.
@@ -69,36 +71,37 @@ Highlights (after you pick an action):
 
 ### Move
 
-- 1 tile, 8 directions.
+- 1 tile, 8 directions, except the square **directly behind** the way the player faces.
 - Empty tiles only (or an opponent tile, which is a contest instead).
 - Cannot walk onto a teammate. Use **swap** for that.
 - If you have the ball, it comes with you.
 - If the ball is loose on the destination, you take it.
+- After the step, the player faces the direction they just moved.
 
 ### Swap places
 
-- Adjacent teammate only.
+- Adjacent teammate only, not the square directly behind you.
 - You take their tile, they take yours.
 - Whoever had the ball keeps it and carries it to their new tile.
 - Offered together with **pass** when the carrier clicks an adjacent teammate.
 
 ### Dribble
 
-- Carrier steps onto an adjacent opponent.
+- Carrier steps onto an adjacent opponent (not the square directly behind them).
 - Roll: your **CTR** vs their **DEF**.
 - You win: you take the square, they are shoved back to where you came from, you keep the ball.
 - You lose: you stay put, they steal the ball.
 
 ### Tackle
 
-- Player **without** the ball steps onto the **carrier**.
+- Player **without** the ball steps onto the **carrier** (not the square directly behind them).
 - Roll: your **DEF** vs their **CTR**.
 - You win: you swap onto their square and take the ball.
 - You lose: nothing changes.
 
 ### Square fight
 
-- Player without the ball steps onto an opponent who also does not have the ball.
+- Player without the ball steps onto an opponent who also does not have the ball (same facing limit as a move).
 - Roll: **CTR vs CTR**.
 - You win: you swap onto that square. No ball changes hands.
 - You lose: nothing changes.
@@ -107,6 +110,7 @@ Highlights (after you pick an action):
 
 - Only the player with the ball.
 - Range: **3 tiles** (Chebyshev), to a **teammate** or an **empty square**.
+- Cannot pass into the **rear cone**: directly back and **43°** to each side. **Adjacent** tiles are excepted — you may still pass to a neighbouring cell even if it is behind you.
 - You stay put. The ball travels to the target.
 - Empty square: the ball becomes **loose** there. You cannot lay the ball into an empty net.
 - Teammate: they receive it and become the carrier. This includes the keeper standing in the net.

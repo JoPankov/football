@@ -13,6 +13,7 @@ var control: int = 8
 var stamina: int = 8
 var energy: int = 8
 var max_energy: int = 8
+var facing: Vector2i = Vector2i(1, 0)
 
 
 func _init(
@@ -27,6 +28,14 @@ func _init(
 	number = p_number
 	role = p_role
 	pos = p_pos
+	facing = MatchRules.kickoff_facing(p_team)
+
+
+func relocate(dest: Vector2i) -> void:
+	if dest == pos:
+		return
+	facing = MatchRules.step_direction(pos, dest)
+	pos = dest
 
 
 func apply_stats(stats: Dictionary) -> void:

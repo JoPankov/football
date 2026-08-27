@@ -19,6 +19,7 @@ var has_ball: bool = false
 var on_turn: bool = false
 var planned: bool = false
 var energy_ratio: float = 1.0
+var facing: Vector2i = Vector2i(1, 0)
 
 @onready var _number_label: Label = $Number
 @onready var _role_label: Label = $Role
@@ -30,6 +31,7 @@ func configure(state: PlayerState) -> void:
 	number = state.number
 	role = state.role
 	has_ball = state.has_ball
+	set_facing(state.facing)
 	if _number_label:
 		_refresh_labels()
 	queue_redraw()
@@ -60,6 +62,16 @@ func set_energy_ratio(value: float) -> void:
 	if is_equal_approx(energy_ratio, next):
 		return
 	energy_ratio = next
+	queue_redraw()
+
+
+func set_facing(value: Vector2i) -> void:
+	var next := MatchRules.normalize_facing(value)
+	if next == Vector2i.ZERO:
+		next = MatchRules.kickoff_facing(team)
+	if facing == next:
+		return
+	facing = next
 	queue_redraw()
 
 
@@ -104,15 +116,19 @@ func _draw() -> void:
 
 	_draw_energy_bar(radius)
 
-	var chevron_dir := 1.0 if team == MatchRules.Team.HOME else -1.0
-	var tip := Vector2(chevron_dir * (radius + 4.0), 0.0)
-	var wing := Vector2(-chevron_dir * 5.0, 6.0)
-	draw_colored_polygon(PackedVector2Array([
-		tip,
-		tip + wing,
-		tip + Vector2(-chevron_dir * 2.0, 0.0),
-		tip + Vector2(wing.x, -wing.y),
-	]), glow)
+	var dir := Vector2(facing)
+	if dir == Vector2.ZERO:
+		dir = Vector2.RIGHT if team == MatchRules.Team.HOME else Vector2.LEFT
+	var angle := dir.angle()
+	var chevron := PackedVector2Array([
+		Vector2(radius + 4.0, 0.0),
+		Vector2(radius - 1.0, 6.0),
+		Vector2(radius + 2.0, 0.0),
+		Vector2(radius - 1.0, -6.0),
+	])
+	for i in chevron.size():
+		chevron[i] = chevron[i].rotated(angle)
+	draw_colored_polygon(chevron, glow)
 
 
 func _draw_energy_bar(radius: float) -> void:
