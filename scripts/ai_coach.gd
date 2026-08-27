@@ -1,7 +1,7 @@
 class_name AiCoach
 extends RefCounted
 
-## Greedy Helix planner. Queues up to 3 actions on the current board.
+## Greedy Helix planner. Queues up to 3 players × 2 AP on the current board.
 ## Call only while model.current_team is the side to fill.
 
 const _MIN_KEEP := 0.4
@@ -16,7 +16,7 @@ func _fill(model: MatchModel) -> void:
 	var claimed: Dictionary = {}
 	for plan in model.plans_for(model.current_team):
 		claimed[plan.get("dest", Vector2i.ZERO)] = true
-	while model.plan_count() < MatchRules.ACTIONS_PER_SIDE:
+	while not model.planning_complete():
 		var best := _best_action(model, claimed)
 		if best.is_empty():
 			break
@@ -32,7 +32,7 @@ func _best_action(model: MatchModel, claimed: Dictionary) -> Dictionary:
 	if model.plan_count() == 0:
 		best_score = -1000.0
 	for player in model.players:
-		if not model.can_select(player) or not model.plan_of(player.id).is_empty():
+		if not model.can_select(player) or not model.can_queue(player):
 			continue
 		for dest in _dests_for(model, player):
 			for action in model.actions_for(player, dest):
@@ -47,6 +47,10 @@ func _dests_for(model: MatchModel, player: PlayerState) -> Array[Vector2i]:
 	var seen := {}
 	var dests: Array[Vector2i] = []
 	for cell in model.valid_moves(player):
+		if not seen.has(cell):
+			seen[cell] = true
+			dests.append(cell)
+	for cell in model.turn_dests(player):
 		if not seen.has(cell):
 			seen[cell] = true
 			dests.append(cell)
@@ -83,6 +87,8 @@ func _score(model: MatchModel, player: PlayerState, action: Dictionary, claimed:
 			value = 1.5
 		"move":
 			value = _score_move(model, player, dest)
+		"turn":
+			value = _score_turn(model, player, dest)
 		_:
 			value = 0.0
 	return value * energy - clash
@@ -133,6 +139,14 @@ func _score_move(model: MatchModel, player: PlayerState, dest: Vector2i) -> floa
 		)
 		value += 8.0 * float(cover)
 	return value
+
+
+func _score_turn(model: MatchModel, player: PlayerState, dest: Vector2i) -> float:
+	var from := model.planning_pos(player)
+	var new_face := MatchRules.step_direction(from, dest)
+	if new_face == Vector2i.ZERO:
+		return 0.0
+	return 3.5 * _forward_gain(player.team, from, from + new_face)
 
 
 func _forward_gain(team: int, from: Vector2i, to: Vector2i) -> float:

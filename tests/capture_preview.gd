@@ -25,7 +25,7 @@ func _run() -> void:
 	await process_frame
 	_shot(out_dir.path_join("02_selected.png"))
 
-	main.handle_cell_clicked(Vector2i(8, 5))
+	main.handle_cell_clicked(MatchRules.CENTER_SPOT + Vector2i(0, 1))
 	await create_timer(0.35).timeout
 	await process_frame
 	_shot(out_dir.path_join("03_possession.png"))

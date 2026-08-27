@@ -103,7 +103,9 @@ func teammate_cells(except_id: int = -1) -> Dictionary:
 func valid_moves(player: PlayerState) -> Array[Vector2i]:
 	if player == null:
 		return []
-	return MatchRules.move_destinations(player.pos, teammate_cells(player.id), player.facing)
+	return MatchRules.move_destinations(
+		_query_pos(player), teammate_cells(player.id), _query_facing(player)
+	)
 
 
 func contest_moves(player: PlayerState) -> Array[Vector2i]:
@@ -120,9 +122,9 @@ func contest_moves(player: PlayerState) -> Array[Vector2i]:
 func can_select(player: PlayerState) -> bool:
 	if player == null or player.team != current_team:
 		return false
-	if not plan_of(player.id).is_empty():
+	if not plans_of(player.id).is_empty():
 		return true
-	return plan_count(current_team) < MatchRules.ACTIONS_PER_SIDE
+	return acting_player_count(current_team) < MatchRules.ACTIONS_PER_SIDE
 
 
 func _acting_allowed(player: PlayerState) -> bool:
@@ -140,13 +142,78 @@ func plan_count(team: int = -1) -> int:
 
 
 func plan_of(player_id: int) -> Dictionary:
+	var plans := plans_of(player_id)
+	if plans.is_empty():
+		return {}
+	return plans[0]
+
+
+func plans_of(player_id: int) -> Array[Dictionary]:
+	var found: Array[Dictionary] = []
 	for plan in home_plans:
 		if int(plan.get("player_id", -1)) == player_id:
-			return plan
+			found.append(plan)
 	for plan in away_plans:
 		if int(plan.get("player_id", -1)) == player_id:
-			return plan
-	return {}
+			found.append(plan)
+	return found
+
+
+func acting_player_count(team: int = -1) -> int:
+	if team < 0:
+		team = current_team
+	var ids := {}
+	for plan in plans_for(team):
+		ids[int(plan.get("player_id", -1))] = true
+	return ids.size()
+
+
+func ap_spent(player_id: int) -> int:
+	return plans_of(player_id).size()
+
+
+func _query_pos(player: PlayerState) -> Vector2i:
+	if player == null:
+		return Vector2i.ZERO
+	if ignore_team_gate:
+		return player.pos
+	return planning_pos(player)
+
+
+func _query_facing(player: PlayerState) -> Vector2i:
+	if player == null:
+		return Vector2i.ZERO
+	if ignore_team_gate:
+		return player.facing
+	return planning_facing(player)
+
+
+func planning_pos(player: PlayerState) -> Vector2i:
+	if player == null:
+		return Vector2i.ZERO
+	var pos := player.pos
+	for plan in plans_of(player.id):
+		var act := str(plan.get("action", ""))
+		if act in ["move", "dribble", "tackle", "challenge", "swap"]:
+			pos = plan.get("dest", pos)
+	return pos
+
+
+func planning_facing(player: PlayerState) -> Vector2i:
+	if player == null:
+		return Vector2i.ZERO
+	var pos := player.pos
+	var facing := player.facing
+	for plan in plans_of(player.id):
+		var dest: Vector2i = plan.get("dest", pos)
+		var act := str(plan.get("action", ""))
+		if act == "turn" or act in ["move", "dribble", "tackle", "challenge", "swap"]:
+			var dir := MatchRules.step_direction(pos, dest)
+			if dir != Vector2i.ZERO:
+				facing = dir
+			if act != "turn":
+				pos = dest
+	return facing
 
 
 func clear_plan(player_id: int) -> Dictionary:
@@ -168,9 +235,12 @@ func clear_plan(player_id: int) -> Dictionary:
 func can_queue(player: PlayerState) -> bool:
 	if not _acting_allowed(player):
 		return false
-	if not plan_of(player.id).is_empty():
+	var spent := ap_spent(player.id)
+	if spent >= MatchRules.PLAYER_ACTION_POINTS:
+		return false
+	if spent > 0:
 		return true
-	return plan_count(player.team) < MatchRules.ACTIONS_PER_SIDE
+	return acting_player_count(player.team) < MatchRules.ACTIONS_PER_SIDE
 
 
 func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
@@ -180,15 +250,17 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 	var action_id := str(action.get("id", ""))
 	if action_id == "":
 		return {ok = false, reason = "no_action"}
-	clear_plan(player_id)
-	var dest: Vector2i = action.get("dest", player.pos)
+	var dest: Vector2i = action.get("dest", _query_pos(player))
+	var origin := _query_pos(player)
+	var ap_index := ap_spent(player_id)
 	var plan := {
 		player_id = player_id,
 		team = player.team,
 		action = action_id,
 		dest = dest,
 		target_id = int(action.get("target_id", -1)),
-		origin = player.pos,
+		origin = origin,
+		ap_index = ap_index,
 		label = str(action.get("label", action_id)),
 		expects_ball = (
 			not player.has_ball
@@ -217,7 +289,10 @@ func can_end_planning() -> bool:
 
 
 func planning_complete() -> bool:
-	return plan_count(current_team) >= MatchRules.ACTIONS_PER_SIDE
+	for player in players:
+		if can_queue(player):
+			return false
+	return true
 
 
 func end_planning() -> Dictionary:
@@ -240,21 +315,24 @@ func planning_carrier() -> PlayerState:
 		if seen.has(holder.id):
 			return holder
 		seen[holder.id] = true
-		var plan := plan_of(holder.id)
-		if plan.is_empty():
+		var next_holder: PlayerState = holder
+		var handed_off := false
+		for plan in plans_of(holder.id):
+			var act := str(plan.get("action", ""))
+			if act == "pass":
+				var target_id := int(plan.get("target_id", -1))
+				if target_id >= 0:
+					var nxt := player_by_id(target_id)
+					if nxt != null and nxt.team == holder.team:
+						next_holder = nxt
+						handed_off = true
+						break
+				return null
+			if act == "shoot":
+				return null
+		if not handed_off:
 			return holder
-		var act := str(plan.get("action", ""))
-		if act == "pass":
-			var target_id := int(plan.get("target_id", -1))
-			if target_id >= 0:
-				var nxt := player_by_id(target_id)
-				if nxt != null and nxt.team == holder.team:
-					holder = nxt
-					continue
-			return null
-		if act == "shoot":
-			return null
-		return holder
+		holder = next_holder
 	return holder
 
 
@@ -296,11 +374,12 @@ func can_plan_pass_to_cell(passer: PlayerState, dest: Vector2i) -> bool:
 func _pass_geometry_ok(passer: PlayerState, dest: Vector2i) -> bool:
 	if not _acting_allowed(passer):
 		return false
-	if not MatchRules.in_bounds(dest) or dest == passer.pos:
+	var from := _query_pos(passer)
+	if not MatchRules.in_bounds(dest) or dest == from:
 		return false
-	if MatchRules.chebyshev(passer.pos, dest) > MatchRules.PASS_RANGE:
+	if MatchRules.chebyshev(from, dest) > MatchRules.PASS_RANGE:
 		return false
-	if MatchRules.is_back_pass(passer.pos, dest, passer.facing):
+	if MatchRules.is_back_pass(from, dest, _query_facing(passer)):
 		return false
 	var occupant := player_at(dest)
 	if occupant == null:
@@ -322,7 +401,7 @@ func pass_cells(passer: PlayerState) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
 	if passer == null or not planning_has_ball(passer):
 		return cells
-	for dest in _cells_in_range(passer.pos, MatchRules.PASS_RANGE):
+	for dest in _cells_in_range(_query_pos(passer), MatchRules.PASS_RANGE):
 		if can_plan_pass_to_cell(passer, dest):
 			cells.append(dest)
 	return cells
@@ -392,9 +471,10 @@ func can_swap(player: PlayerState, teammate: PlayerState) -> bool:
 		return false
 	if teammate.id == player.id:
 		return false
-	if MatchRules.is_behind_step(player.pos, teammate.pos, player.facing):
+	var from := _query_pos(player)
+	if not MatchRules.is_move_step(from, teammate.pos, _query_facing(player)):
 		return false
-	return MatchRules.is_adjacent(player.pos, teammate.pos)
+	return MatchRules.is_adjacent(from, teammate.pos)
 
 
 func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
@@ -403,6 +483,8 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 		return actions
 	if not MatchRules.in_bounds(dest):
 		return actions
+	if dest in turn_dests(player):
+		actions.append({id = "turn", label = "Turn", dest = dest})
 	var occupant := player_at(dest)
 	if occupant == null:
 		if dest in valid_moves(player):
@@ -440,6 +522,7 @@ func commands_for(player: PlayerState) -> Array[Dictionary]:
 		return result
 	for spec in [
 		{id = "move", label = "Move"},
+		{id = "turn", label = "Turn"},
 		{id = "pass", label = "Pass"},
 		{id = "dribble", label = "Dribble"},
 		{id = "tackle", label = "Tackle"},
@@ -463,6 +546,8 @@ func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
 			for cell in valid_moves(player):
 				if player_at(cell) == null:
 					dests.append(cell)
+		"turn":
+			return MatchRules.turn_destinations(_query_pos(player), _query_facing(player))
 		"pass":
 			return pass_cells(player)
 		"dribble":
@@ -502,6 +587,8 @@ func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
 func action_for_command(player: PlayerState, command_id: String, dest: Vector2i) -> Dictionary:
 	if dest not in command_dests(player, command_id):
 		return {}
+	if command_id == "turn":
+		return {id = "turn", label = "Turn", dest = dest}
 	for action in actions_for(player, dest):
 		if str(action.get("id", "")) == command_id:
 			return action
@@ -517,7 +604,9 @@ func can_shoot(player: PlayerState) -> bool:
 func can_plan_shoot(player: PlayerState) -> bool:
 	if player == null or not planning_has_ball(player) or not _acting_allowed(player):
 		return false
-	return MatchRules.is_in_shooting_zone(player.pos, MatchRules.opponent_goal(player.team))
+	return MatchRules.is_in_shooting_zone(
+		_query_pos(player), MatchRules.opponent_goal(player.team)
+	)
 
 
 func shoot_cells(player: PlayerState) -> Array[Vector2i]:
@@ -531,7 +620,7 @@ func choice_cells(player: PlayerState) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
 	if player == null:
 		return cells
-	for dest in _cells_in_range(player.pos, MatchRules.PASS_RANGE):
+	for dest in _cells_in_range(_query_pos(player), MatchRules.PASS_RANGE):
 		if actions_for(player, dest).size() > 1:
 			cells.append(dest)
 	var goal := MatchRules.opponent_goal(player.team)
@@ -542,7 +631,7 @@ func choice_cells(player: PlayerState) -> Array[Vector2i]:
 
 func shot_preview(player: PlayerState) -> Dictionary:
 	var goal := MatchRules.opponent_goal(player.team)
-	var geo := MatchRules.shot_geometry(player.pos, goal)
+	var geo := MatchRules.shot_geometry(_query_pos(player), goal)
 	var range_f := MatchRules.shot_range_factor(geo.distance)
 	var angle_f := MatchRules.shot_angle_factor(geo.angle)
 	var acc := player.live_accuracy()
@@ -625,11 +714,42 @@ func apply_swap(player_id: int, teammate_id: int) -> Dictionary:
 	return result
 
 
+func turn_dests(player: PlayerState) -> Array[Vector2i]:
+	if player == null:
+		return []
+	return MatchRules.turn_destinations(_query_pos(player), _query_facing(player))
+
+
+func apply_turn(player_id: int, dest: Vector2i) -> Dictionary:
+	var player := player_by_id(player_id)
+	if player == null:
+		return {ok = false, reason = "no_player"}
+	if not _acting_allowed(player):
+		return {ok = false, reason = "wrong_team"}
+	if dest not in MatchRules.turn_destinations(player.pos, player.facing):
+		return {ok = false, reason = "illegal_turn"}
+	var origin := player.pos
+	var dir := MatchRules.step_direction(origin, dest)
+	if dir == Vector2i.ZERO:
+		return {ok = false, reason = "illegal_turn"}
+	player.facing = dir
+	return _finish_action(player, {
+		ok = true,
+		action = "turn",
+		player_id = player_id,
+		dest = dest,
+		origin = origin,
+		facing = dir,
+		attacker_label = player.label(),
+		contest_won = true,
+	})
+
+
 func interceptors_for_pass(passer: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 	var found: Array[Dictionary] = []
 	if passer == null:
 		return found
-	var start := MatchRules.tile_center(passer.pos)
+	var start := MatchRules.tile_center(_query_pos(passer))
 	var finish := MatchRules.tile_center(dest)
 	var receiver := player_at(dest)
 	for player in players:

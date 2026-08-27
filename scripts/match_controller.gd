@@ -19,6 +19,7 @@ var _pending_choice: Dictionary = {}
 var _pending_action: String = ""
 var _resolve_generation: int = 0
 var _active_tween: Tween
+var _cycle_snapshot: Dictionary = {}
 
 
 func _ready() -> void:
@@ -170,20 +171,25 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 		if same_cell:
 			return {ok = true, action = "choose_cancel"}
 
-	var occupant := model.player_at(cell)
 	var selected := _selected_player()
-	if selected != null and occupant != null and occupant.id == selected.id:
-		if not model.plan_of(occupant.id).is_empty():
-			model.clear_plan(occupant.id)
-			_deselect()
-			return {ok = true, action = "clear_plan", player_id = occupant.id}
-		_deselect()
-		return {ok = true, action = "deselect"}
 	if selected != null and _pending_action != "":
 		var command := model.action_for_command(selected, _pending_action, cell)
 		if not command.is_empty():
 			return perform_action(command)
-		if occupant != null and model.can_select(occupant):
+
+	var occupant := _occupant_for_click(cell)
+	if selected != null and _is_selected_cell(selected, cell):
+		if _pending_action != "":
+			_cancel_command()
+			return {ok = true, action = "command_cancel"}
+		if not model.plan_of(selected.id).is_empty():
+			model.clear_plan(selected.id)
+			_deselect()
+			return {ok = true, action = "clear_plan", player_id = selected.id}
+		_deselect()
+		return {ok = true, action = "deselect"}
+	if selected != null and _pending_action != "":
+		if occupant != null and model.can_select(occupant) and occupant.id != selected.id:
 			_select(occupant)
 			return {ok = true, action = "select", player_id = occupant.id}
 		return {ok = false, reason = "not_a_target"}
@@ -194,6 +200,26 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 
 	_deselect()
 	return {ok = false, reason = "no_selection"}
+
+
+func _is_selected_cell(selected: PlayerState, cell: Vector2i) -> bool:
+	return selected != null and cell == model.planning_pos(selected)
+
+
+func _occupant_for_click(cell: Vector2i) -> PlayerState:
+	var live := model.player_at(cell)
+	if live != null:
+		var previewed := model.planning_pos(live)
+		if live.team == model.current_team and previewed != live.pos and previewed != cell:
+			live = null
+		else:
+			return live
+	for player in model.players:
+		if player.team != model.current_team:
+			continue
+		if model.planning_pos(player) == cell:
+			return player
+	return null
 
 
 func _open_choice(cell: Vector2i, actions: Array[Dictionary]) -> Dictionary:
@@ -279,7 +305,11 @@ func perform_action(action: Dictionary) -> Dictionary:
 	if not result.ok:
 		return result
 	hud.last_event = result
-	_deselect()
+	if model.ap_spent(selected.id) >= MatchRules.PLAYER_ACTION_POINTS:
+		_deselect()
+	else:
+		_pending_action = ""
+		_refresh()
 	if model.planning_complete() and not settings.require_end_turn:
 		return end_planning()
 	return result
@@ -289,6 +319,7 @@ func end_planning() -> Dictionary:
 	if busy:
 		return {ok = false, reason = "busy"}
 	_cancel_choice()
+	var snapshot := _snapshot_visual_board()
 	var result := model.end_planning()
 	if not result.ok:
 		return result
@@ -301,9 +332,47 @@ func end_planning() -> Dictionary:
 			return result
 	hud.last_event = result
 	if str(result.get("action", "")) == "resolve":
+		_cycle_snapshot = snapshot
 		return _finish_resolve(result)
 	_deselect()
 	return result
+
+
+func _snapshot_visual_board() -> Dictionary:
+	var pos := {}
+	var facing := {}
+	for player in model.players:
+		pos[player.id] = player.pos
+		facing[player.id] = player.facing
+	var holder := model.carrier()
+	return {
+		pos = pos,
+		facing = facing,
+		ball_pos = model.ball.pos,
+		carrier_id = model.ball.carrier_id,
+		carrier_team = holder.team if holder != null else 0,
+	}
+
+
+func _restore_visual_board(snap: Dictionary) -> void:
+	if snap.is_empty():
+		return
+	var pos: Dictionary = snap.get("pos", {})
+	var facing: Dictionary = snap.get("facing", {})
+	for id in pieces:
+		var piece: PlayerPiece = pieces[id]
+		if piece == null:
+			continue
+		if pos.has(id):
+			piece.position = pitch.grid_to_world(pos[id])
+		if facing.has(id):
+			piece.set_facing(facing[id])
+	var carrier_id := int(snap.get("carrier_id", -1))
+	pitch.ball_piece.set_carried(carrier_id >= 0)
+	var ball_pos := pitch.grid_to_world(snap.get("ball_pos", Vector2i.ZERO))
+	if carrier_id >= 0:
+		ball_pos += pitch.carried_ball_offset(int(snap.get("carrier_team", 0)))
+	pitch.ball_piece.position = ball_pos
 
 
 func _finish_resolve(result: Dictionary) -> Dictionary:
@@ -320,6 +389,7 @@ func _finish_resolve(result: Dictionary) -> Dictionary:
 func _play_resolve(result: Dictionary) -> void:
 	busy = true
 	hud.set_resolving(true)
+	_restore_visual_board(_cycle_snapshot)
 	var token := _resolve_generation
 	var events: Array = result.get("events", [])
 	for event in events:
@@ -392,6 +462,10 @@ func _present_result(result: Dictionary) -> bool:
 		pitch.ball_piece.set_carried(receiver != null)
 		tween.tween_property(pitch.ball_piece, "position", ball_target, _anim(0.22))
 		return await _wait_for_tween(tween)
+	if action == "turn":
+		var origin: Vector2i = result.get("origin", dest)
+		piece.set_facing(MatchRules.step_direction(origin, dest))
+		return await _anim_wait(0.12)
 	if action == "move" or action == "offside" or won:
 		var origin: Vector2i = result.get("origin", dest)
 		piece.set_facing(MatchRules.step_direction(origin, dest))
@@ -475,6 +549,20 @@ func _selected_player() -> PlayerState:
 	return model.player_by_id(selected_id)
 
 
+func _sync_ball_visual() -> void:
+	if busy:
+		pitch.sync_ball(model.ball, model.carrier())
+		return
+	var holder := model.planning_carrier()
+	if holder != null:
+		var cell := model.planning_pos(holder) if holder.team == model.current_team else holder.pos
+		pitch.ball_piece.set_carried(true)
+		pitch.ball_piece.position = pitch.grid_to_world(cell) + pitch.carried_ball_offset(holder.team)
+		pitch.ball_piece.z_index = 8
+		return
+	pitch.sync_ball(model.ball, null)
+
+
 func _spawn_visuals() -> void:
 	pieces.clear()
 	for child in pitch.pieces.get_children():
@@ -521,13 +609,13 @@ func _update_pass_preview(selected: PlayerState) -> void:
 	var cells: Array[Vector2i] = []
 	for threat in threats:
 		cells.append(threat.player.pos)
-	pitch.set_pass_preview(selected.pos, hover_cell, cells)
+	pitch.set_pass_preview(model.planning_pos(selected), hover_cell, cells)
 
 
 func _hovered_player() -> PlayerState:
 	if not MatchRules.in_bounds(hover_cell):
 		return null
-	return model.player_at(hover_cell)
+	return _occupant_for_click(hover_cell)
 
 
 func _refresh() -> void:
@@ -538,11 +626,14 @@ func _refresh() -> void:
 	var choices: Array[Vector2i] = []
 	var shots: Array[Vector2i] = []
 	var offsides: Array[Vector2i] = []
+	var turns: Array[Vector2i] = []
 	if selected != null and _pending_action != "":
 		var dests := model.command_dests(selected, _pending_action)
 		match _pending_action:
 			"move":
 				moves = dests
+			"turn":
+				turns = dests
 			"pass":
 				offsides = model.offside_pass_cells(selected)
 				for cell in dests:
@@ -554,9 +645,11 @@ func _refresh() -> void:
 				choices = dests
 			"shoot":
 				shots = dests
-		pitch.set_highlights(selected.pos, moves, contests, passes, choices, shots, offsides)
+		pitch.set_highlights(
+			model.planning_pos(selected), moves, contests, passes, choices, shots, offsides, turns
+		)
 	elif selected != null:
-		pitch.set_highlights(selected.pos, [], [], [], [], [], [])
+		pitch.set_highlights(model.planning_pos(selected), [], [], [], [], [], [], [])
 	else:
 		pitch.clear_highlights()
 	_update_pass_preview(selected)
@@ -566,20 +659,23 @@ func _refresh() -> void:
 		var piece: PlayerPiece = pieces.get(state.id)
 		if piece == null:
 			continue
-		piece.position = pitch.grid_to_world(state.pos)
+		var preview := not busy and state.team == model.current_team
+		var cell := model.planning_pos(state) if preview else state.pos
+		var face := model.planning_facing(state) if preview else state.facing
+		piece.position = pitch.grid_to_world(cell)
 		piece.set_selected(selected != null and state.id == selected.id)
-		piece.set_has_ball(state.has_ball)
+		piece.set_has_ball(model.planning_has_ball(state) if preview else state.has_ball)
 		var planned := (
 			state.team == model.current_team
 			and not model.plan_of(state.id).is_empty()
 		)
 		piece.set_planned(planned)
 		piece.set_energy_ratio(state.energy_ratio())
-		piece.set_facing(state.facing)
+		piece.set_facing(face)
 		piece.set_on_turn(state.team == model.current_team and (planned or model.can_select(state)))
 		piece.z_index = 5 if piece.selected else 3
 
-	pitch.sync_ball(model.ball, model.carrier())
+	_sync_ball_visual()
 	hud.refresh(model, selected, _hovered_player(), hover_cell, _pending_action)
 
 

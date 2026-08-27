@@ -146,11 +146,11 @@ func _hint_for(
 		return "Resolution in progress — both teams' queued actions play out together."
 	if require_end_turn:
 		if holder == null:
-			return "Pick up to %d %s players (one action each). Press End Turn to lock in. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting]
-		return "Pick up to %d %s players. Press End Turn to lock in. Click a planned player twice to clear their action." % [MatchRules.ACTIONS_PER_SIDE, acting]
+			return "Pick up to %d %s players (2 AP each). Press End Turn to lock in. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting]
+		return "Pick up to %d %s players (2 AP each). Press End Turn to lock in. Click a planned player twice to clear their actions." % [MatchRules.ACTIONS_PER_SIDE, acting]
 	if holder == null:
-		return "Pick up to %d %s players (one action each). The third action ends the turn; End Turn finishes early. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting]
-	return "Pick up to %d %s players. The third action ends the turn; End Turn finishes early. Click a planned player twice to clear their action." % [MatchRules.ACTIONS_PER_SIDE, acting]
+		return "Pick up to %d %s players (2 AP each). Filling 3 players' AP ends the turn; End Turn finishes early." % [MatchRules.ACTIONS_PER_SIDE, acting]
+	return "Pick up to %d %s players (2 AP each). Filling 3 players' AP ends the turn; End Turn finishes early. Click a planned player twice to clear." % [MatchRules.ACTIONS_PER_SIDE, acting]
 
 
 func _event_line(event: Dictionary) -> String:
@@ -262,7 +262,7 @@ func refresh_log(model: MatchModel) -> void:
 func _apply_phase(model: MatchModel) -> void:
 	var home_turn := model.current_team == MatchRules.Team.HOME
 	var acting := MatchRules.team_name(model.current_team)
-	var queued := model.plan_count(model.current_team)
+	var queued := model.acting_player_count(model.current_team)
 	var left := MatchRules.ACTIONS_PER_SIDE - queued
 	var phase_color := Color("f0c14b") if _resolving else (
 		Color("3ecbff") if home_turn else Color("ff4d8d")
@@ -277,11 +277,12 @@ func _apply_phase(model: MatchModel) -> void:
 		if _resolving:
 			_turn.text = "PLAYING OUT BOTH TEAMS"
 		else:
-			var left_word := "ACTION" if left == 1 else "ACTIONS"
-			_turn.text = "%s   %d %s LEFT  ·  CYCLE %d" % [
+			var left_word := "PLAYER" if left == 1 else "PLAYERS"
+			_turn.text = "%s   %d %s LEFT  ·  %d AP  ·  CYCLE %d" % [
 				_pip_text(queued),
 				left,
 				left_word,
+				model.plan_count(model.current_team),
 				model.turn_index + 1,
 			]
 		_turn.add_theme_color_override("font_color", phase_color.lightened(0.2))
@@ -318,9 +319,13 @@ func _refresh_end_turn(model: MatchModel) -> void:
 	if _resolving:
 		_end_turn.text = "RESOLVING..."
 	elif require_end_turn and model.planning_complete():
-		_end_turn.text = "END TURN  %d/%d  — CONFIRM" % [model.plan_count(), MatchRules.ACTIONS_PER_SIDE]
+		_end_turn.text = "END TURN  %d/%d PLAYERS  — CONFIRM" % [
+			model.acting_player_count(), MatchRules.ACTIONS_PER_SIDE
+		]
 	else:
-		_end_turn.text = "END TURN  %d/%d" % [model.plan_count(), MatchRules.ACTIONS_PER_SIDE]
+		_end_turn.text = "END TURN  %d/%d PLAYERS" % [
+			model.acting_player_count(), MatchRules.ACTIONS_PER_SIDE
+		]
 
 
 func _refresh_plan_list(model: MatchModel) -> void:
@@ -330,12 +335,16 @@ func _refresh_plan_list(model: MatchModel) -> void:
 		_plan_list.text = "Playing out queued actions."
 		return
 	var lines: PackedStringArray = []
-	var queued := model.plan_count(model.current_team)
+	var queued := model.acting_player_count(model.current_team)
 	var left := MatchRules.ACTIONS_PER_SIDE - queued
 	if queued == 0:
-		lines.append("No actions queued · %d left" % left)
+		lines.append("No actions queued · %d players left" % left)
 	else:
-		lines.append("This turn  %s  ·  %d left" % [_pip_text(queued), left])
+		lines.append("This turn  %s  ·  %d AP  ·  %d players left" % [
+			_pip_text(queued),
+			model.plan_count(model.current_team),
+			left,
+		])
 	for plan in model.plans_for(model.current_team):
 		var player := model.player_by_id(int(plan.get("player_id", -1)))
 		var name := player.label() if player != null else "player"
@@ -442,7 +451,7 @@ func _build() -> void:
 	_phase.offset_bottom = -22.0
 	top.add_child(_phase)
 
-	_turn = _label("○ ○ ○   3 ACTIONS LEFT  ·  CYCLE 1", 14, Color("3ecbff"), HORIZONTAL_ALIGNMENT_CENTER)
+	_turn = _label("○ ○ ○   3 PLAYERS LEFT  ·  0 AP  ·  CYCLE 1", 14, Color("3ecbff"), HORIZONTAL_ALIGNMENT_CENTER)
 	_turn.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_turn.offset_top = 56.0
 	top.add_child(_turn)

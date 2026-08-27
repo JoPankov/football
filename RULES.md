@@ -4,13 +4,13 @@ This is what the game actually does today.
 
 ## Setup
 
-- Pitch: **18×9** tiles plus **two extra goal tiles**. `x` runs goal to goal (0 = Aether goal line, 17 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing).
-- Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 4)`, Helix net `(18, 4)`. Keepers start in the net so they do not occupy a pitch tile.
+- Pitch: **26×13** tiles plus **two extra goal tiles**. `x` runs goal to goal (0 = Aether goal line, 25 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing).
+- Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 6)`, Helix net `(26, 6)`. Each net is **one cell**. Keepers start in the net so they do not occupy a pitch tile.
 - From a net tile the keeper can step to the three adjacent pitch squares in front of goal.
 - Teams: **Aether** (home, cyan, attacks +x) vs **Helix** (away, magenta, attacks −x).
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
-- Aether **#9 ST** starts on the centre spot `(8, 4)` **with the ball**. Helix does not start in possession.
-- **Simultaneous cycles.** Aether plans **up to 3 actions** (one per player). The third action ends the turn automatically; **End Turn** can finish early with fewer. Helix then plans the same way. All queued actions then resolve together. Then Aether plans again.
+- Aether **#9 ST** starts on the centre spot `(12, 6)` **with the ball**. Helix does not start in possession.
+- **Simultaneous cycles.** Aether plans **up to 3 players**, and each of those players has **2 action points**. The turn auto-ends when all 3 players have spent both AP; **End Turn** can finish early with fewer players or leftover AP. Helix then plans the same way. All queued actions resolve together (first AP for everyone, then second AP). Then Aether plans again.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
 
@@ -41,26 +41,27 @@ Kickoff values by role:
 ### Energy
 
 - Max energy is **STA × 10**. Players start each kickoff full.
-- Each resolved action (move, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. Cancelled actions do not.
+- Each resolved action (move, turn, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. Cancelled actions do not.
 - Live ACC / DEF / CTR scale with remaining energy: full energy is 100% of the printed stat; **empty energy halves them**. In between, the drop is linear. The inspector shows `ACC 10 (13)` when fatigue has reduced the live value.
 
 ## How to take a turn
 
 1. Click any player on the team that is planning.
-2. Choose an action from the bottom bar (or press **1–9**): Move, Pass, Dribble, Tackle, Fight, Swap, Shoot. Only actions that player can currently take are listed.
-3. Click a highlighted tile. That **queues** the action — nothing moves yet.
-4. Repeat for up to **3 different players**. A gold ring marks a planned player; an arrow shows their destination.
-5. The **third** action ends the turn automatically. Click **End Turn** (or press Enter) to finish with fewer than 3.
-6. After Helix’s turn ends (third action or End Turn), all queued actions resolve. The match log lists every public event and roll (tackles, contests, moves, passes, shots).
-7. Click a planned player twice to clear their action and pick someone else — do this before the third action if you want to change who acts. Right-click or Escape cancels the current action, then the selection; Escape with nothing selected opens the menu.
+2. Choose an action from the bottom bar (or press **1–9**): Move, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot. Only actions that player can currently take are listed.
+3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can spend the second point.
+4. Repeat for up to **3 different players**, **2 AP** each. A gold ring marks a planned player; arrows show their queued steps.
+5. Filling **both AP on 3 players** ends the turn automatically. Click **End Turn** (or press Enter) to finish with fewer players or unused AP.
+6. After Helix’s turn ends, all queued actions resolve. First AP for every planned player, then second AP. The match log lists every public event and roll.
+7. Click a planned player twice to clear their actions and pick someone else. Right-click or Escape cancels the current action, then the selection; Escape with nothing selected opens the menu.
 
-You cannot pick a fourth player. The third action locks the turn.
+You cannot pick a fourth player.
 
 Hotseat: plan arrows, gold rings, and plan log lines are visible only to the team that queued them — including past cycles. Resolution events (who tackled whom, rolls, and results) are public.
 
 Highlights (after you pick an action):
 
 - **Green** — walk there
+- **White** — turn to face that square (no step)
 - **Amber** — contest an opponent on that square
 - **Blue** — pass there
 - **Red** — pass to an offside teammate
@@ -71,37 +72,44 @@ Highlights (after you pick an action):
 
 ### Move
 
-- 1 tile, 8 directions, except the square **directly behind** the way the player faces.
+- Costs **1 AP**. 1 tile into the **3-cell cone**: the square you face, plus 45° either side.
 - Empty tiles only (or an opponent tile, which is a contest instead).
 - Cannot walk onto a teammate. Use **swap** for that.
 - If you have the ball, it comes with you.
 - If the ball is loose on the destination, you take it.
 - After the step, the player faces the direction they just moved.
 
+### Turn
+
+- Costs **1 AP**. Face a new direction without leaving the square.
+- Four options: **45° and 90°** either side of current facing (not straight ahead, not 135°/180°).
+- A **180°** reverse takes **two** turns (two AP).
+- Click the adjacent tile in the direction you want to face. You do not move there.
+
 ### Swap places
 
-- Adjacent teammate only, not the square directly behind you.
+- Adjacent teammate in the **move cone** only.
 - You take their tile, they take yours.
 - Whoever had the ball keeps it and carries it to their new tile.
 - Offered together with **pass** when the carrier clicks an adjacent teammate.
 
 ### Dribble
 
-- Carrier steps onto an adjacent opponent (not the square directly behind them).
+- Carrier steps onto an opponent in the **move cone**.
 - Roll: your **CTR** vs their **DEF**.
 - You win: you take the square, they are shoved back to where you came from, you keep the ball.
 - You lose: you stay put, they steal the ball.
 
 ### Tackle
 
-- Player **without** the ball steps onto the **carrier** (not the square directly behind them).
+- Player **without** the ball steps onto the **carrier** in the **move cone**.
 - Roll: your **DEF** vs their **CTR**.
 - You win: you swap onto their square and take the ball.
 - You lose: nothing changes.
 
 ### Square fight
 
-- Player without the ball steps onto an opponent who also does not have the ball (same facing limit as a move).
+- Player without the ball steps onto an opponent in the **move cone** who also does not have the ball.
 - Roll: **CTR vs CTR**.
 - You win: you swap onto that square. No ball changes hands.
 - You lose: nothing changes.

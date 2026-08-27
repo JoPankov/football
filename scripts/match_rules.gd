@@ -1,24 +1,27 @@
 class_name MatchRules
 extends RefCounted
 
-## Pure, side-effect-free rules for the 18×9 grid.
+## Pure, side-effect-free rules for the 26×13 grid.
 
 enum Team { HOME, AWAY }
 
-const GRID_WIDTH := 18
-const GRID_HEIGHT := 9
+const GRID_WIDTH := 26
+const GRID_HEIGHT := 13
 const MOVE_DISTANCE := 1
 const PASS_RANGE := 3
 const ACTIONS_PER_SIDE := 3
+const PLAYER_ACTION_POINTS := 2
 const ACTION_ENERGY_COST := 1
 const ENERGY_PER_STAMINA := 10
 const ENERGY_EMPTY_FACTOR := 0.5
 const INTERCEPT_RADIUS := 1.0
 const TILE_SIZE := 72.0
-const CENTER_SPOT := Vector2i(8, 4)
-const AWAY_KICKOFF := Vector2i(9, 5)
-const HOME_NET := Vector2i(-1, 4)
-const AWAY_NET := Vector2i(18, 4)
+const CENTER_Y := GRID_HEIGHT / 2
+const HALFWAY_X := GRID_WIDTH / 2
+const CENTER_SPOT := Vector2i(HALFWAY_X - 1, CENTER_Y)
+const AWAY_KICKOFF := Vector2i(HALFWAY_X, CENTER_Y + 1)
+const HOME_NET := Vector2i(-1, CENTER_Y)
+const AWAY_NET := Vector2i(GRID_WIDTH, CENTER_Y)
 const SHOT_ACC_BIAS := 1
 const SHOT_RANGE_K := 0.35
 const SHOT_ANGLE_FLOOR := 0.15
@@ -31,6 +34,18 @@ const DIRECTIONS: Array[Vector2i] = [
 	Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
 	Vector2i(-1, 0), Vector2i(1, 0),
 	Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1),
+]
+
+## Clockwise 8-dir ring starting at +x (east). 45° per step.
+const FACING_RING: Array[Vector2i] = [
+	Vector2i(1, 0),
+	Vector2i(1, 1),
+	Vector2i(0, 1),
+	Vector2i(-1, 1),
+	Vector2i(-1, 0),
+	Vector2i(-1, -1),
+	Vector2i(0, -1),
+	Vector2i(1, -1),
 ]
 
 const TEAM_NAME := {
@@ -131,6 +146,61 @@ static func step_direction(from: Vector2i, to: Vector2i) -> Vector2i:
 	return normalize_facing(to - from)
 
 
+static func facing_index(facing: Vector2i) -> int:
+	var face := normalize_facing(facing)
+	for i in FACING_RING.size():
+		if FACING_RING[i] == face:
+			return i
+	return 0
+
+
+static func rotate_facing(facing: Vector2i, steps: int) -> Vector2i:
+	var n := FACING_RING.size()
+	var i := facing_index(facing) + steps
+	i %= n
+	if i < 0:
+		i += n
+	return FACING_RING[i]
+
+
+## Facing plus 45° either side: three legal step directions.
+static func move_facings(facing: Vector2i) -> Array[Vector2i]:
+	return [
+		rotate_facing(facing, -1),
+		normalize_facing(facing),
+		rotate_facing(facing, 1),
+	]
+
+
+## 45° and 90° either side, not current facing: four turn directions (180° takes two turns).
+static func turn_facings(facing: Vector2i) -> Array[Vector2i]:
+	return [
+		rotate_facing(facing, -2),
+		rotate_facing(facing, -1),
+		rotate_facing(facing, 1),
+		rotate_facing(facing, 2),
+	]
+
+
+static func is_move_step(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool:
+	var face := normalize_facing(facing)
+	if face == Vector2i.ZERO:
+		return is_adjacent(from, to)
+	return (to - from) in move_facings(face)
+
+
+static func turn_destinations(from: Vector2i, facing: Vector2i) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	var face := normalize_facing(facing)
+	if face == Vector2i.ZERO:
+		return result
+	for dir in turn_facings(face):
+		var dest: Vector2i = from + dir
+		if in_bounds(dest):
+			result.append(dest)
+	return result
+
+
 ## The one adjacent square opposite the way the player faces.
 static func is_behind_step(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool:
 	var face := normalize_facing(facing)
@@ -155,7 +225,7 @@ static func team_name(team: int) -> String:
 	return TEAM_NAME.get(team, "UNKNOWN")
 
 
-## Opponent's last third: 6 columns (18 / 3). Home attacks +x.
+## Opponent's last third: GRID_WIDTH / 3 columns. Home attacks +x.
 static func is_attacking_third(pos: Vector2i, team: int) -> bool:
 	var depth := GRID_WIDTH / 3
 	if team == Team.HOME:
@@ -163,7 +233,7 @@ static func is_attacking_third(pos: Vector2i, team: int) -> bool:
 	return pos.x < depth
 
 
-## Opponent's half. Halfway sits between x=8 and x=9. Home attacks +x.
+## Opponent's half. Halfway sits between x=HALFWAY_X-1 and x=HALFWAY_X. Home attacks +x.
 static func is_opponent_half(pos: Vector2i, team: int) -> bool:
 	if team == Team.HOME:
 		return pos.x >= GRID_WIDTH / 2
@@ -202,20 +272,22 @@ static func can_use_ball_action(has_ball: bool) -> bool:
 
 
 ## Cells in `blocked` cannot be entered (teammates). Opponent cells are legal.
-## `facing` ZERO skips the rear-square block (geometry-only callers).
+## `facing` ZERO keeps all 8 dirs (geometry-only callers). Otherwise the 3-cell move cone.
 static func move_destinations(
 	from: Vector2i,
 	blocked: Dictionary,
 	facing: Vector2i = Vector2i.ZERO
 ) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
-	for dir in DIRECTIONS:
+	var dirs: Array[Vector2i] = DIRECTIONS
+	var face := normalize_facing(facing)
+	if face != Vector2i.ZERO:
+		dirs = move_facings(face)
+	for dir in dirs:
 		var dest: Vector2i = from + dir
 		if not in_bounds(dest):
 			continue
 		if blocked.has(dest):
-			continue
-		if is_behind_step(from, dest, facing):
 			continue
 		result.append(dest)
 	return result

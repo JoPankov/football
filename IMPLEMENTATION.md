@@ -1,0 +1,440 @@
+# Sci-Fi Football — implementation
+
+Player-facing rules: [`RULES.md`](RULES.md). This file is for people (and later coding sessions) changing the game. **Trust this file and the tests over `RULES.md` for geometry and tie-breaks** — a few player-doc numbers have drifted (see [Known RULES.md drift](#known-rulesmd-drift)).
+
+Godot **4.3**. Main scene `res://scenes/main.tscn`. No autoloads; global types are `class_name` scripts.
+
+```bash
+# Play
+~/.local/bin/godot --path /home/ivan/Projects/sci-fi-football
+
+# Tests (headless SceneTree; no window)
+~/.local/bin/godot --headless --path /home/ivan/Projects/sci-fi-football --script res://tests/run_tests.gd
+```
+
+---
+
+## What this game is, in code
+
+A **simultaneous-cycle** 11v11 grid football match:
+
+1. Aether (home, cyan, attacks +x) queues up to 3 actions.
+2. Helix (away, magenta, attacks −x) queues up to 3 actions.
+3. `TurnResolver` applies both queues against the live board.
+4. Repeat. A goal resets kickoff; the conceding side plans first (except vs AI — see below).
+
+Nothing on the board moves during planning. The UI only **queues**. Resolution is the only place pieces, the ball, energy, and score change in a real match.
+
+Tests often call `MatchModel.apply_*` directly, skipping the queue. That is intentional: mechanics are tested without the planner.
+
+---
+
+## Layering (why it is split this way)
+
+```
+scenes/main.tscn
+  MatchController (Node2D, no class_name)   input, animation, mode
+    Pitch / PlayerPiece / BallPiece         drawing only
+    MatchHUD / GameMenu                     CanvasLayer UI
+    MatchModel                              authoritative state
+      MatchRules                            pure constants + math
+      Formation                             kickoff slots + role stats
+      PlayerState / BallState               data
+      CombatLog                             text + fog-of-war
+      TurnResolver                          cycle phases
+      AiCoach                               greedy Helix planner
+```
+
+| Layer | Lives in | May do | Must not do |
+|---|---|---|---|
+| Rules | `match_rules.gd` | Geometry, dice, chance math | Touch players, RNG, nodes |
+| Model | `match_model.gd` | Board, plans, apply one action | Draw, take input, know about HUD |
+| Resolver | `turn_resolver.gd` | Order a cycle of plans | Invent new mechanics |
+| Controller | `match_controller.gd` | Clicks, tweens, vs-AI / hotseat | Reimplement legality |
+| View | `pitch.gd`, `hud.gd`, pieces | Paint what the model already decided | Change match state |
+
+`MatchModel` and friends extend `RefCounted`, not `Node`, so the headless suite can construct a match with no scene tree.
+
+---
+
+## File map
+
+| Path | Role |
+|---|---|
+| `project.godot` | Name, 1280×720, main scene, Forward Plus, dark clear color |
+| `scenes/main.tscn` | `Main` + `Pitch/Pieces/Ball` + `Camera2D` + `HUD` + `GameMenu` |
+| `scenes/player.tscn` | Hex/shield piece: number + role labels |
+| `scripts/match_rules.gd` | Grid, nets, offside, intercept geometry, 1dSTAT, shot formula |
+| `scripts/match_model.gd` | Kickoff, queries, queue, apply move/pass/swap/shoot/contest |
+| `scripts/turn_resolver.gd` | Simultaneous cycle; phase order; destination clashes |
+| `scripts/player_state.gd` | Id, team, role, pos, facing, printed + live stats, energy |
+| `scripts/ball_state.gd` | `pos` + `carrier_id` (`-1` = loose) |
+| `scripts/formation.gd` | 4-4-2 kickoff coordinates and role stat table |
+| `scripts/combat_log.gd` | Sequential log; plan lines hidden from the other team |
+| `scripts/ai_coach.gd` | Greedy Helix: score legal actions, queue up to 3 |
+| `scripts/match_controller.gd` | Scene root: input, highlights, resolve playback, modes |
+| `scripts/pitch.gd` | Tile board, nets, highlights, plan arrows, pass lane |
+| `scripts/player_piece.gd` | Piece look: hex (outfield), shield (GK), energy bar, facing chevron, gold ring |
+| `scripts/ball_piece.gd` | Small gold disc; slightly smaller when carried |
+| `scripts/hud.gd` | Built in code: banner, inspector, action bar, log, forecast |
+| `scripts/game_menu.gd` | Title + pause + options; `PROCESS_MODE_ALWAYS` |
+| `scripts/game_settings.gd` | `require_end_turn`, animation speed; `user://settings.cfg` |
+| `tests/run_tests.gd` | Headless suite — the regression net |
+| `tests/capture_preview.gd` | Optional PNGs of kickoff / selection |
+
+HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markings are `_draw()` on `Pitch`.
+
+---
+
+## Coordinate system
+
+Constants live on `MatchRules`.
+
+- Pitch: **26×13**. `x` is goal-to-goal. `y` is touchline-to-touchline.
+- `x = 0` is Aether’s goal line (left). `x = 25` is Helix’s (right).
+- `y = 0` is the **top** of the screen = Aether’s left wing when attacking +x.
+- Extra **goal tiles** sit off the rectangle: Aether net `(-1, 6)`, Helix net `(26, 6)`. Each net is one cell.
+- `in_bounds` = pitch tile **or** a net. Cells like `(-1, 0)` are dead.
+- Distance is **Chebyshev** `max(|dx|, |dy|)`. A move is exactly 1 (8 directions).
+- `PlayerState.facing` is one of those 8 dirs. Kickoff: Aether `(1, 0)`, Helix `(-1, 0)`. `PlayerState.relocate` writes facing from the step.
+- `move_destinations(from, blocked, facing)` drops the one square **directly behind** `facing`. `facing == ZERO` skips that filter (geometry-only callers).
+- Back pass: `is_back_pass` is the rear cone, directly back ± `BACK_PASS_HALF_ANGLE_DEG` (43). Adjacent cells are never back passes.
+- Keepers start **in the net**. From a net, `move_destinations` yields the **3** adjacent pitch tiles (diagonals + forward). The old goal-line square in front of the net is empty at kickoff.
+
+World space (drawing only):
+
+- `TILE_SIZE = 72`.
+- Piece centre: `(cell + (0.5, 0.5)) * TILE_SIZE`.
+- Grid pick: `floor(world / TILE_SIZE)`.
+- **Intercept / shot math uses tile units**, not pixels. `MatchRules.tile_center(cell)` is `Vector2(cell)` (integer cell as float). `INTERCEPT_RADIUS = 1.0` tile. Pitch scales that by `TILE_SIZE` only when drawing the preview circle.
+
+Halfway: integer `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. Helix’s is `x < 13`. Attacking third is 8 columns: Aether `x >= 18`, Helix `x < 8`.
+
+Penalty “box” = the three **pitch** tiles adjacent to that net:
+
+- Aether: `(0, 5) (0, 6) (0, 7)`
+- Helix: `(25, 5) (25, 6) (25, 7)`
+
+Shooting zone = box plus every pitch tile Chebyshev-adjacent to any box tile (the “ring”). You cannot shoot from the net itself.
+
+---
+
+## Kickoff and identities
+
+`MatchModel.setup_kickoff(kicking_team)` **rebuilds** the 22 `PlayerState`s from `Formation.slots`. Scores are **not** reset. Plans are cleared. RNG is re-randomized. Combat log is **not** cleared — a goal just appends a header.
+
+Player ids are 0..21 in formation order (Aether 0–10, Helix 11–21). Lowest id wins some same-team ties.
+
+| | Aether | Helix |
+|---|---|---|
+| Attack | +x | −x |
+| Net | `(-1, 6)` | `(26, 6)` |
+| #9 ST kickoff cell | `(12, 6)` `CENTER_SPOT` | `(13, 7)` `AWAY_KICKOFF` |
+| Other ST | `(12, 5)` | `(13, 5)` |
+
+Default kickoff: Aether #9 has the ball. After a goal, `_award_goal` calls `setup_kickoff(opposite_team(scorer))` so the **conceding** side starts with the ball and `current_team`.
+
+Two players never share a cell. `setup_kickoff` asserts uniqueness and that the ball is held.
+
+Role stats: `Formation.base_stats`. Printed ACC/DEF/CTR/STA. Energy pool = `STA * 10`, starts full. Live stats:
+
+```
+factor = 0.5 + 0.5 * (energy / max_energy)
+live   = max(1, round(printed * factor))
+```
+
+Empty energy **halves** the printed number (rounded), it does not zero it. Each **resolved** action costs 1 energy (`_finish_action` / a few goal paths). Cancelled actions do not spend. A kickoff rebuild refills everyone.
+
+---
+
+## Possession
+
+The ball is either on a player (`carrier_id >= 0`, that player’s `has_ball == true`) or loose (`carrier_id == -1`). Always go through `_give_ball` / `_release_ball` so those two fields stay in sync.
+
+Walking onto a loose ball takes it. Walking the ball onto the **opponent net** is a goal (`_carrier_in_opponent_net`). You cannot pass into an **empty** net; you can pass to a keeper standing in their own net.
+
+---
+
+## Planning vs resolving
+
+### Queue
+
+`home_plans` / `away_plans`: arrays of dictionaries.
+
+```
+{
+  player_id, team, action, dest, target_id, origin, label,
+  expects_ball   # true if this pass/shoot/dribble is planned off an incoming pass
+}
+```
+
+Action ids: `move`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`.
+
+Rules of a queue:
+
+- One plan per player. `queue_plan` clears that player first, then appends.
+- At most `ACTIONS_PER_SIDE` (3) plans per team. A player who already has a plan can be re-queued.
+- `can_select` / `can_queue` require `player.team == current_team` unless `ignore_team_gate`.
+- `end_planning`: if Aether, flip `current_team` to Helix and return `{action = "end_planning"}`. If Helix, call `TurnResolver.resolve`.
+
+`ignore_team_gate` exists because `apply_*` still refuse the “wrong” team. The resolver sets it true so Helix actions can apply during a simultaneous cycle. Tests set it to poke Helix pieces during Aether’s turn.
+
+### Planning-time possession
+
+`has_ball` is the **real** board. `planning_carrier()` / `planning_has_ball()` walk queued **passes** on the acting team so a teammate can already queue pass / shoot / dribble as if they will receive.
+
+- Pass to a teammate: planning possession moves to that teammate (and can chain).
+- Pass to an empty square, or shoot: planning possession ends.
+- Cycle detection: if a pass loop exists, stop.
+
+`expects_ball` is set when the actor does **not** currently hold the ball but `planning_has_ball` is true. At resolve, if that pass never arrives, the follow-up is cancelled with `"pass did not arrive"` rather than `"lost the ball"`.
+
+### Ending a side
+
+- Default: the **third** queued action auto-calls `end_planning` from the controller (`planning_complete()`).
+- `End Turn` / Enter is always legal, including 0 actions (`can_end_planning()` is unconditionally true).
+- Option `GameSettings.require_end_turn`: third action only queues; player must confirm.
+
+---
+
+## How one action is applied
+
+The resolver never implements dribble/tackle itself. It calls model methods. **Stepping onto an opponent is always `apply_move`**, which dispatches:
+
+| Mover has ball? | Occupant has ball? | Resulting `action` | Dice |
+|---|---|---|---|
+| yes | (any opponent) | `dribble` | mover CTR vs occupant DEF |
+| no | yes | `tackle` | mover DEF vs occupant CTR |
+| no | no | `challenge` | CTR vs CTR |
+
+Win: swap onto the square (loser shoved to origin). Dribble win keeps the ball; tackle win steals it. Dribble loss: stay put, occupant steals the ball. Tackle/fight loss: nothing changes.
+
+Pass: `apply_pass_to`. Intercepts first (see below), then offside, then give or drop. Passer does not move.
+
+Swap: adjacent teammate only. Carrier keeps the ball and it follows them.
+
+Shoot: `apply_shoot`. Hit roll against `shot_hit_chance` (clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter). Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff).
+
+### Dice
+
+`1dSTAT`: `rng.randi_range(1, max(1, stat))`. Higher wins.
+
+Ties go to **the team with the ball** (`MatchRules.attacker_wins_ties`):
+
+- Attacker has the ball → attacker (dribble, pass-through, shot).
+- Defender has the ball → defender (tackle fails).
+- Same team, nobody has it → attacker (first claimer in clash code).
+- Opposite, nobody has it → the side whose team currently possesses, else occupant.
+
+`contest_win_chance` enumerates the `atk * def` outcomes so HUD percents match the dice, including the tie rule.
+
+### Scripted outcomes (tests only)
+
+On the model, left `null` in play:
+
+- `scripted_attacker_wins`: bool — force contest winner; dice are faked so the log still reads `1dN=…`.
+- `scripted_first_intercept_wins`: bool — first interceptor takes it, or passer beats **every** interceptor.
+- `scripted_shot_outcome`: `"goal"` / `"save"` / `"miss"`.
+
+Do not use these from game code.
+
+---
+
+## TurnResolver — cycle phases
+
+`TurnResolver.resolve(model)` copies `home_plans + away_plans` into `remaining`, logs `── Resolve cycle N ──`, sets `ignore_team_gate`, then:
+
+1. **Tackles** (`tackle`) — lowest `player_id` first inside a phase.
+2. **Ball** (`pass`, `shoot`) — not id order. Always play the **current carrier’s** pass/shot next, so a pass can feed another pass or a shot. If the carrier has no ball action left, lowest id in the leftover batch.
+3. **Dribbles**
+4. **Square fights** (`challenge`)
+5. **Destination contests** — remaining **moves** that share a dest:
+   - Same team: 1dCTR, tie via `attacker_wins_ties` (ball / lower id). Losers cancelled `"lost the square fight"`. Winner stays in `remaining` for the move phase.
+   - Opposite, one has the ball: treat as **tackle** (DEF vs CTR). Winner may steal.
+   - Opposite, neither has the ball: CTR vs CTR square fight. Winner also collects a loose ball on that tile if `apply_move` runs onto it.
+6. **Moves and swaps**
+
+A result with `reset == true` (goal) **stops the cycle**. Leftover plans are cancelled `"play stopped — goal"`. Kickoff already ran inside `_award_goal`.
+
+If no goal: leftover plans cancelled `"could not be completed"`, `current_team = HOME`, `turn_index += 1`.
+
+Then both plan arrays clear and the gate is restored.
+
+**Re-check legality at apply time.** Plans were aimed at the planning board. After earlier phases, dest may be illegal, the carrier may have lost the ball, a swap partner may have moved. `_apply_plan` cancels with a reason instead of forcing the action. If a player was shoved, the action is tried from the **new** tile (`valid_moves` / `can_pass_to_cell` use current `player.pos`).
+
+Pass destinations stored as a teammate `target_id` are resolved to that player’s **current** cell, not the queued `dest`, so a moving receiver can still be found.
+
+---
+
+## Intercepts
+
+Computed in **tile space**. Segment = passer tile centre → target tile centre. An opponent intercepts if their 1-tile-radius circle touches the segment at `t > 0` (standing only next to the passer does not count). Teammates and the intended receiver never intercept.
+
+Order: increasing `t` along the pass. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). First failure steals.
+
+Landing: snap the closest point on the segment to a tile; if occupied, search nearby free tiles. Interceptor leaves their old cell empty.
+
+`scripted_first_intercept_wins == false` means “beat every interceptor”, not “only beat the first”.
+
+---
+
+## Offside
+
+Position check (`MatchRules.is_offside_position`): in opponent’s half, strictly nearer the opponent goal than the **ball/passer** cell, and fewer than two opponents as near that goal as the receiver (level counts as covering). Keeper counts. Level with the ball is onside.
+
+Only a **completed pass to a teammate** is an offence. Empty-square passes, carrying, swapping, collecting a loose ball: never offside. Intercept happens **before** offside; a stolen pass is not flagged.
+
+Restart: closest opponent (Chebyshev, then lowest id) swaps onto the receiver’s tile and takes the ball.
+
+---
+
+## Combat log and hotseat fog
+
+`CombatLog` stores `{kind, text, team?, hidden_from_opponent?}`.
+
+Hidden from the opponent:
+
+- `queue` events (PLAN lines)
+- `note(..., team)` such as “AETHER locked in N actions.”
+
+Public: resolution events, headers, phase titles.
+
+Viewers:
+
+- `VIEWER_ALL` (`-1`): everything (tests, debug).
+- `VIEWER_PUBLIC` (`-2`): hide all private lines. HUD uses this **while resolving**.
+- A team id: that team’s private lines + all public.
+
+HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plans`) and gold rings are **only** the acting team’s queue, including past cycles — you never see the other side’s arrows.
+
+---
+
+## Controller / UI
+
+`match_controller.gd` is the scene root.
+
+**Input**
+
+- Left click cell → `handle_cell_clicked`.
+- Right click / Esc: cancel pending command, then deselect, then open pause menu.
+- Enter: `end_planning`.
+- 1–9 / keypad: Nth button currently shown in `commands_for` (not a fixed action map).
+
+**Command-first UX.** Select a player → `_pending_action` defaults to `"move"` if they have a walk. Bottom bar lists only commands with at least one dest. Then click a highlighted tile → `action_for_command` → `queue_plan`.
+
+Why not “click the tile then pick Move/Pass”? One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). The old chooser is still in the HUD (`show_choices`) and `_open_choice` still exists on the controller, but **nothing calls `_open_choice`**. Do not revive it without wiring; current tests assume command-then-tile.
+
+Highlight colours (pitch): green walk, amber contest, blue pass, red offside pass, purple swap (`choice_cells` reused for this), gold shot.
+
+Selecting a **planned** player twice clears their plan (`clear_plan`) so you can pick someone else before the third action locks.
+
+**Resolve playback.** `animate_moves` is false on `headless` and in tests. When true, `_play_resolve` sets `busy`, walks `result.events`, tweens pieces/ball, then respawns on kickoff reset. `_resolve_generation` invalidates an in-flight tween if New Game is pressed mid-animation.
+
+**Camera.** `_frame_camera` fits `pitch.world_rect()` (including both nets) into `hud.play_area()` — the rectangle left of the 308px log and between the top/bottom bars.
+
+**Menu.** Title on first graphical launch (`open_title`, tree paused). Pause: Esc with nothing selected. Options persist via `GameSettings` (`user://settings.cfg`) so New Game does not wipe them. `anim_scale()` = `5 / speed` (1 = slowest, 10 = fastest, 5 = original timing).
+
+---
+
+## Vs AI vs hotseat
+
+Human is **always Aether**. `vs_ai` is a flag on the controller, not the model.
+
+On each cycle `_begin_vs_ai_cycle` → `_preplan_ai`:
+
+1. `current_team = AWAY`
+2. `AiCoach.fill_plans(model)` — greedy, up to 3, avoids stacking dests when it can
+3. `current_team = HOME`
+
+Helix therefore commits **before** Aether queues, on the current board, without seeing Aether’s plans. That matches simultaneous play. (In hotseat Helix plans second, but also cannot see Aether’s arrows/log.)
+
+When Aether `end_planning`s, the controller immediately `end_planning`s again (Helix is already filled) so the player does not sit through a Helix turn. After a goal that would make Helix kick off, vs-AI **still** puts Aether in the planner’s chair (`current_team = HOME`) after preplanning Helix.
+
+`AiCoach` scoring (rough): shoot ≫ walk-in goal ≫ through-pass with forward gain ≫ tackle ≫ dribble ≫ collect loose ball ≫ move toward ball / forward. Offside passes are heavily penalised. First action of a side uses a very low keep-threshold so Helix always tries to queue at least one thing.
+
+---
+
+## Result dictionaries
+
+Almost every public function returns `{ok, action, ...}`. The log formatter and the tween code both switch on `action`. Keep these keys stable:
+
+| `action` | Meaning |
+|---|---|
+| `queue` | Plan stored; board unchanged |
+| `end_planning` | Side locked; other team to move |
+| `resolve` | Cycle done; `events` is the playback list |
+| `move` / `dribble` / `tackle` / `challenge` / `swap` / `pass` / `shoot` / `offside` / `clash` | Applied |
+| `cancelled` | Plan dropped; `reason` / `reason_text` |
+
+Useful flags: `contest_won`, `gained_possession`, `lost_possession`, `intercepted`, `goal`, `reset`, `hit`, `saved`, `expects_ball` (on the plan, not the event), `displaced_id` (shove/swap partner), `player_id` / `defender_id` / `receiver_id`.
+
+If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._apply_plan` + phase lists, `CombatLog.format_result`, controller `_present_result` / highlights, `AiCoach._score`, and tests.
+
+---
+
+## Tests
+
+`tests/run_tests.gd` extends `SceneTree`, `call_deferred("_run")`, `quit(0|1)`.
+
+It covers rules math, kickoff, contests, pass/intercept/offside/shoot, full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan.
+
+Controller tests instantiate `main.tscn`, set `animate_moves = false`, and often `queue_free()` the instance. They reach into HUD private fields (`_end_turn`, `_forecast`) — ugly but load-bearing.
+
+When you change a rule, **add or extend a test in the same file**. Prefer `scripted_*` over seeding RNG.
+
+`tests/capture_preview.gd` is a manual screenshot helper (`/tmp/sci-fi-football/*.png`), not part of the suite.
+
+---
+
+## Invariants (break these and something subtle dies)
+
+1. **Model is truth.** Visual positions are synced from `PlayerState.pos` in `_refresh` except during a tween. After a tween, `_refresh` / `_spawn_visuals` snap back.
+2. **Never two players on one cell.** Contests swap; intercepts refuse occupied landings; moves onto teammates are illegal (use swap).
+3. **`has_ball` and `ball.carrier_id` stay paired.** Only `_give_ball` / `_release_ball`.
+4. **Planning does not mutate the board.** If a click moves a piece immediately, you bypassed `queue_plan`.
+5. **Resolver is the only multi-action path.** Phase order is the design. Do not “just apply plans in queue order”.
+6. **Pass range and move range are different.** Move = 1. Pass = 3 Chebyshev. Adjacent empty/teammate is a chooser in the **model** (`actions_for`), a command pick in the **UI**.
+7. **Live stats for dice and previews.** Always `live_accuracy()` etc., never the printed field, except when showing `ACC 10 (13)`.
+8. **Fog is a view filter**, not deleted data. `as_text()` with no args still contains PLAN lines.
+
+---
+
+## Not implemented (do not pretend they exist)
+
+- Fouls, cards, clock, extra time, named set pieces beyond kickoff.
+- Pass inaccuracy other than intercepts (a non-intercepted pass always arrives).
+- Substitutions, stamina recovery, injuries.
+- Network play. Hotseat is same-machine; vs-AI is local greedy Helix.
+- Aether AI. Vs-AI human is Aether.
+
+---
+
+## Known RULES.md drift
+
+Fix the player doc if you touch these; until then, **code + tests win**:
+
+| Topic | RULES.md | Code / tests |
+|---|---|---|
+| Opponent’s half | Aether `x ≥ 6`, Helix `x ≤ 5` | Aether `x >= 13`, Helix `x < 13` |
+| Helix penalty box | `(11, 2..4)` | `(17, 3) (17, 4) (17, 5)` |
+| Aether penalty box | `(0, 2..4)` | `(0, 3) (0, 4) (0, 5)` |
+| Intercept ties | “to the interceptor” in that section | Ties to the passer (team with the ball), matching the Contests section |
+
+---
+
+## Where to edit, by job
+
+| You want to… | Start here |
+|---|---|
+| Change grid size, pass range, energy, shot curve, intercept radius | `MatchRules` constants + tests |
+| Change kickoff shape or role stats | `Formation` |
+| Change when an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` |
+| Change what an action **does** | `MatchModel.apply_*` |
+| Change simultaneous order / clash rules | `TurnResolver` |
+| Change Helix personality | `AiCoach._score` |
+| Change click / hotkey / animation | `match_controller.gd` |
+| Change look of the board or pieces | `pitch.gd` / `player_piece.gd` |
+| Change HUD chrome | `hud.gd` `_build*` |
+| Persist a new option | `GameSettings` + `GameMenu` options panel |
+
+After a rules change, run the headless suite before considering it done.

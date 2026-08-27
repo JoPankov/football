@@ -2,7 +2,8 @@ class_name TurnResolver
 extends RefCounted
 
 ## Resolves one planned cycle: Aether's queued actions + Helix's queued actions.
-## Order: tackles, passes/shots (follow the ball), dribbles, square fights, destination contests, moves/swaps.
+## Each player may have two AP. Wave 0 is every player's first AP, wave 1 the second.
+## Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination contests, moves/swaps.
 
 
 static func resolve(model: MatchModel) -> Dictionary:
@@ -14,30 +15,47 @@ static func resolve(model: MatchModel) -> Dictionary:
 	model.combat_log.header("── Resolve cycle %d ──" % (model.turn_index + 1))
 	model.ignore_team_gate = true
 	var events: Array[Dictionary] = []
-	var remaining := _copy_plans(plans)
+	var all_plans := _copy_plans(plans)
 	var reset := false
 
-	reset = _run_phase(model, remaining, events, ["tackle"], "Tackles")
-	if not reset:
-		reset = _run_ball_phase(model, remaining, events)
-	if not reset:
-		reset = _run_phase(model, remaining, events, ["dribble"], "Dribbles")
-	if not reset:
-		reset = _run_phase(model, remaining, events, ["challenge"], "Square fights")
-	if not reset:
-		reset = _resolve_destination_clashes(model, remaining, events)
-	if not reset:
-		reset = _run_phase(model, remaining, events, ["move", "swap"], "Movement")
-
-	if reset:
-		for leftover in remaining:
-			events.append(_cancel(model, leftover, "play stopped — goal"))
-	else:
+	for wave in MatchRules.PLAYER_ACTION_POINTS:
+		if reset:
+			break
+		var remaining: Array[Dictionary] = []
+		for plan in all_plans:
+			if int(plan.get("ap_index", 0)) == wave:
+				remaining.append(plan)
+		if remaining.is_empty():
+			continue
+		if wave > 0:
+			model.combat_log.note("Second actions")
+		reset = _run_phase(model, remaining, events, ["turn"], "Turns")
+		if not reset:
+			reset = _run_phase(model, remaining, events, ["tackle"], "Tackles")
+		if not reset:
+			reset = _run_ball_phase(model, remaining, events)
+		if not reset:
+			reset = _run_phase(model, remaining, events, ["dribble"], "Dribbles")
+		if not reset:
+			reset = _run_phase(model, remaining, events, ["challenge"], "Square fights")
+		if not reset:
+			reset = _resolve_destination_clashes(model, remaining, events)
+		if not reset:
+			reset = _run_phase(model, remaining, events, ["move", "swap"], "Movement")
+		if reset:
+			for leftover in remaining:
+				events.append(_cancel(model, leftover, "play stopped — goal"))
+			for plan in all_plans:
+				if int(plan.get("ap_index", 0)) > wave:
+					events.append(_cancel(model, plan, "play stopped — goal"))
+			break
 		for leftover in remaining:
 			events.append(_cancel(model, leftover, "could not be completed"))
+
+	if not reset:
 		model.current_team = MatchRules.Team.HOME
 		model.turn_index += 1
-		model.combat_log.note("Next: AETHER plans 3 actions.")
+		model.combat_log.note("Next: AETHER plans 3 players (2 AP each).")
 
 	model.home_plans.clear()
 	model.away_plans.clear()
@@ -75,7 +93,7 @@ static func _run_phase(
 	batch.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.player_id) < int(b.player_id))
 	model.combat_log.note(title)
 	for plan in batch:
-		_drop_plan(remaining, int(plan.player_id))
+		_drop_plan(remaining, int(plan.player_id), int(plan.get("ap_index", 0)))
 		var result := _apply_plan(model, plan)
 		events.append(result)
 		if result.get("reset", false):
@@ -97,8 +115,8 @@ static func _run_ball_phase(
 	model.combat_log.note("Ball")
 	while not batch.is_empty():
 		var plan := _next_ball_plan(model, batch)
-		_drop_plan(remaining, int(plan.player_id))
-		_drop_plan(batch, int(plan.player_id))
+		_drop_plan(remaining, int(plan.player_id), int(plan.get("ap_index", 0)))
+		_drop_plan(batch, int(plan.player_id), int(plan.get("ap_index", 0)))
 		var result := _apply_plan(model, plan)
 		events.append(result)
 		if result.get("reset", false):
@@ -395,6 +413,9 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 			if not model.can_shoot(player):
 				return _cancel(model, plan, "shot no longer legal")
 			result = model.apply_shoot(player.id)
+		"turn":
+			var dest: Vector2i = plan.get("dest", player.pos)
+			result = model.apply_turn(player.id, dest)
 		_:
 			return _cancel(model, plan, "unknown action")
 	if not result.get("ok", false):
@@ -405,10 +426,13 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 	return result
 
 
-static func _drop_plan(remaining: Array[Dictionary], player_id: int) -> void:
+static func _drop_plan(remaining: Array[Dictionary], player_id: int, ap_index: int = -1) -> void:
 	for i in range(remaining.size() - 1, -1, -1):
-		if int(remaining[i].get("player_id", -1)) == player_id:
-			remaining.remove_at(i)
+		if int(remaining[i].get("player_id", -1)) != player_id:
+			continue
+		if ap_index >= 0 and int(remaining[i].get("ap_index", 0)) != ap_index:
+			continue
+		remaining.remove_at(i)
 
 
 static func _cancel(model: MatchModel, plan: Dictionary, reason: String) -> Dictionary:

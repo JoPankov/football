@@ -152,6 +152,11 @@ static func format_result(event: Dictionary) -> String:
 			event.get("attacker_label", "mover"),
 			event.get("defender_label", "teammate"),
 		]
+	if action == "turn":
+		return "TURN  %s  faces %s" % [
+			event.get("attacker_label", "player"),
+			cell_text(event.get("dest", Vector2i.ZERO)),
+		]
 	if action == "move":
 		return "MOVE  %s  →  %s" % [
 			event.get("attacker_label", event.get("label", "player")),
@@ -193,5 +198,7 @@ static func plan_summary(plan: Dictionary) -> String:
 			return "swap → %s" % cell_text(dest)
 		"dribble", "tackle", "challenge":
 			return "%s → %s" % [action, cell_text(dest)]
+		"turn":
+			return "turn → %s" % cell_text(dest)
 		_:
 			return "move → %s" % cell_text(dest)

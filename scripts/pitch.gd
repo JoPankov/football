@@ -21,8 +21,13 @@ const SHOOT_FILL := Color(1.0, 0.85, 0.25, 0.38)
 const SHOOT_LINE := Color("ffe27a")
 const OFFSIDE_FILL := Color(1.0, 0.28, 0.32, 0.34)
 const OFFSIDE_LINE := Color("ff6b73")
+const TURN_FILL := Color(0.85, 0.9, 1.0, 0.22)
+const TURN_LINE := Color("d7e4ff")
 const SELECT_FILL := Color(1.0, 0.92, 0.45, 0.22)
 const HOVER_FILL := Color(1.0, 1.0, 1.0, 0.08)
+const PLAN_MOVE := Color("ffe27a")
+const PLAN_TURN := Color("6dff8a")
+const PLAN_PASS := Color("6fd3ff")
 
 var selected_cell: Vector2i = Vector2i(-1, -1)
 var hover_cell: Vector2i = Vector2i(-1, -1)
@@ -32,6 +37,7 @@ var pass_cells: Array[Vector2i] = []
 var choice_cells: Array[Vector2i] = []
 var shoot_cells: Array[Vector2i] = []
 var offside_cells: Array[Vector2i] = []
+var turn_cells: Array[Vector2i] = []
 var plan_markers: Array[Dictionary] = []
 var pass_lane_from: Vector2i = Vector2i(-1, -1)
 var pass_lane_to: Vector2i = Vector2i(-1, -1)
@@ -77,7 +83,8 @@ func set_highlights(
 	passes: Array[Vector2i] = [],
 	choices: Array[Vector2i] = [],
 	shots: Array[Vector2i] = [],
-	offsides: Array[Vector2i] = []
+	offsides: Array[Vector2i] = [],
+	turns: Array[Vector2i] = []
 ) -> void:
 	selected_cell = selected
 	move_cells = moves
@@ -86,6 +93,7 @@ func set_highlights(
 	choice_cells = choices
 	shoot_cells = shots
 	offside_cells = offsides
+	turn_cells = turns
 	queue_redraw()
 
 
@@ -236,6 +244,10 @@ func _draw_interactive(tile: float) -> void:
 		var rect := Rect2(Vector2(cell) * tile + Vector2(8, 8), Vector2(tile - 16, tile - 16))
 		draw_rect(rect, CHOICE_FILL)
 		draw_rect(rect, CHOICE_LINE, false, 2.0)
+	for cell in turn_cells:
+		var rect := Rect2(Vector2(cell) * tile + Vector2(18, 18), Vector2(tile - 36, tile - 36))
+		draw_rect(rect, TURN_FILL)
+		draw_rect(rect, TURN_LINE, false, 1.6)
 	for cell in shoot_cells:
 		var rect := Rect2(Vector2(cell) * tile + Vector2(4, 4), Vector2(tile - 8, tile - 8))
 		draw_rect(rect, SHOOT_FILL)
@@ -245,24 +257,46 @@ func _draw_interactive(tile: float) -> void:
 func _draw_plans() -> void:
 	var tile := MatchRules.TILE_SIZE
 	for plan in plan_markers:
+		var act := str(plan.get("action", ""))
 		var from_cell: Vector2i = plan.get("origin", Vector2i.ZERO)
 		var to_cell: Vector2i = plan.get("dest", from_cell)
-		var team := int(plan.get("team", MatchRules.Team.HOME))
-		var color := Color("3ecbff") if team == MatchRules.Team.HOME else Color("ff4d8d")
 		var start := grid_to_world(from_cell)
 		var finish := grid_to_world(to_cell)
+		if act == "turn":
+			_draw_turn_arrow(start, finish)
+			continue
+		var color := PLAN_PASS if act in ["pass", "shoot"] else PLAN_MOVE
 		if from_cell != to_cell:
-			draw_line(start, finish, Color(color, 0.75), 2.0, true)
-			var tip := (finish - start).normalized() * 10.0
-			var side := tip.orthogonal() * 0.45
-			draw_colored_polygon(PackedVector2Array([
-				finish,
-				finish - tip + side,
-				finish - tip - side,
-			]), color)
+			_draw_plan_arrow(start, finish, color, 2.6, 12.0)
 		var rect := Rect2(Vector2(to_cell) * tile + Vector2(16, 16), Vector2(tile - 32, tile - 32))
 		draw_rect(rect, Color(color, 0.18))
 		draw_rect(rect, color, false, 1.6)
+
+
+func _draw_turn_arrow(start: Vector2, finish: Vector2) -> void:
+	var delta := finish - start
+	if delta == Vector2.ZERO:
+		return
+	var dir := delta.normalized()
+	var tile := MatchRules.TILE_SIZE
+	var shaft_start := start + dir * (tile * 0.20)
+	var shaft_end := start + dir * (tile * 0.46)
+	_draw_plan_arrow(shaft_start, shaft_end, PLAN_TURN, 3.4, 9.0)
+
+
+func _draw_plan_arrow(start: Vector2, finish: Vector2, color: Color, width: float, head: float) -> void:
+	var delta := finish - start
+	if delta.length_squared() < 1.0:
+		return
+	var dir := delta.normalized()
+	draw_line(start, finish, Color(color, 0.92), width, true)
+	var tip := dir * head
+	var side := dir.orthogonal() * (head * 0.48)
+	draw_colored_polygon(PackedVector2Array([
+		finish + dir * 1.5,
+		finish - tip + side,
+		finish - tip - side,
+	]), color)
 
 
 func _draw_pass_preview() -> void:

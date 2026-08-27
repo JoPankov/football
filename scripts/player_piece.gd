@@ -105,30 +105,17 @@ func _draw() -> void:
 		draw_circle(Vector2.ZERO, radius + 7.0, Color(glow, 0.12))
 
 	var outline := glow if (selected or on_turn) else glow.darkened(0.25)
+	draw_circle(Vector2.ZERO, radius, fill)
+	draw_arc(Vector2.ZERO, radius, 0.0, TAU, 48, outline, 2.6, true)
 	if role == "GK":
-		_draw_shield(radius, fill, outline)
-	else:
-		_draw_hex(radius, fill, outline)
+		draw_arc(Vector2.ZERO, radius * 0.78, 0.0, TAU, 40, outline, 1.7, true)
 
 	draw_circle(Vector2.ZERO, radius * 0.46, FACE)
 	if has_ball:
 		draw_arc(Vector2.ZERO, radius + 3.0, 0.0, TAU, 40, Color("f5e6a8"), 2.0, true)
 
 	_draw_energy_bar(radius)
-
-	var dir := Vector2(facing)
-	if dir == Vector2.ZERO:
-		dir = Vector2.RIGHT if team == MatchRules.Team.HOME else Vector2.LEFT
-	var angle := dir.angle()
-	var chevron := PackedVector2Array([
-		Vector2(radius + 4.0, 0.0),
-		Vector2(radius - 1.0, 6.0),
-		Vector2(radius + 2.0, 0.0),
-		Vector2(radius - 1.0, -6.0),
-	])
-	for i in chevron.size():
-		chevron[i] = chevron[i].rotated(angle)
-	draw_colored_polygon(chevron, glow)
+	_draw_facing(radius, glow)
 
 
 func _draw_energy_bar(radius: float) -> void:
@@ -147,25 +134,30 @@ func _draw_energy_bar(radius: float) -> void:
 	draw_rect(Rect2(origin, Vector2(bar_w, bar_h)), Color(1, 1, 1, 0.22), false, 1.0)
 
 
-func _draw_hex(radius: float, fill: Color, outline: Color) -> void:
-	var pts := PackedVector2Array()
-	for i in 6:
-		var angle := deg_to_rad(-90.0 + float(i) * 60.0)
-		pts.append(Vector2(cos(angle), sin(angle)) * radius)
-	draw_colored_polygon(pts, fill)
-	pts.append(pts[0])
-	draw_polyline(pts, outline, 2.2, true)
-
-
-func _draw_shield(radius: float, fill: Color, outline: Color) -> void:
-	var pts := PackedVector2Array([
-		Vector2(0, -radius),
-		Vector2(radius * 0.78, -radius * 0.45),
-		Vector2(radius * 0.72, radius * 0.25),
-		Vector2(0, radius),
-		Vector2(-radius * 0.72, radius * 0.25),
-		Vector2(-radius * 0.78, -radius * 0.45),
+func _draw_facing(radius: float, glow: Color) -> void:
+	var dir := Vector2(facing)
+	if dir == Vector2.ZERO:
+		dir = Vector2.RIGHT if team == MatchRules.Team.HOME else Vector2.LEFT
+	dir = dir.normalized()
+	var ortho := dir.orthogonal()
+	var tip := dir * (radius + 12.0)
+	var base := dir * (radius - 8.0)
+	var wing := 9.5
+	var outer := PackedVector2Array([
+		tip + dir * 1.5,
+		base + ortho * (wing + 1.6),
+		base - ortho * (wing + 1.6),
 	])
-	draw_colored_polygon(pts, fill)
-	pts.append(pts[0])
-	draw_polyline(pts, outline, 2.2, true)
+	var inner := PackedVector2Array([
+		tip,
+		base + dir * 1.5 + ortho * wing,
+		base + dir * 1.5 - ortho * wing,
+	])
+	draw_colored_polygon(outer, Color("071018"))
+	draw_colored_polygon(inner, Color("fff4b0"))
+	var accent := PackedVector2Array([
+		tip - dir * 3.0,
+		base + dir * 3.5 + ortho * (wing * 0.45),
+		base + dir * 3.5 - ortho * (wing * 0.45),
+	])
+	draw_colored_polygon(accent, glow.lightened(0.15))
