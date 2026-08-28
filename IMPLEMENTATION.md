@@ -21,7 +21,7 @@ A **simultaneous-cycle** 11v11 grid football match:
 1. Aether (home, cyan, attacks +x) queues up to 3 actions.
 2. Helix (away, magenta, attacks −x) queues up to 3 actions.
 3. `TurnResolver` applies both queues against the live board.
-4. Repeat. A goal resets kickoff; the conceding side plans first (except vs AI — see below).
+4. Repeat. A goal resets kickoff; the conceding side has the ball and plans first. Helix’s restart is the 180° of Aether’s 4-4-2. Vs-AI still preplans Helix invisibly and always leaves Aether in the chair — including after a Helix kickoff.
 
 Nothing on the board moves during planning. The UI only **queues**. Resolution is the only place pieces, the ball, energy, and score change in a real match.
 
@@ -121,16 +121,20 @@ Shooting zone = box plus every pitch tile Chebyshev-adjacent to any box tile (th
 
 ## Kickoff and identities
 
-`MatchModel.setup_kickoff(kicking_team)` **rebuilds** the 22 `PlayerState`s from `Formation.slots`. Scores are **not** reset. Plans are cleared. RNG is re-randomized. Combat log is **not** cleared — a goal just appends a header.
+`MatchModel.setup_kickoff(kicking_team)` **rebuilds** the 22 `PlayerState`s from `Formation.slots(team, kicking_team)`. Scores are **not** reset. Plans are cleared. RNG is re-randomized. Combat log is **not** cleared — a goal just appends a header. `current_team` and `awaiting_other_side` reset so the kicking side plans first; the second `end_planning` of the cycle resolves.
 
 Player ids are 0..21 in formation order (Aether 0–10, Helix 11–21). Lowest id wins some same-team ties.
 
-| | Aether | Helix |
+`Formation` stores Aether’s kicking 4-4-2 (`_home`) and Helix’s receiving 4-4-2 (`_away`). When Helix kicks, both arrays are rotated 180° with `MatchRules.mirror_cell` (`x' = 25-x`, `y' = 12-y`).
+
+| | Aether kicking | Helix kicking |
 |---|---|---|
 | Attack | +x | −x |
 | Net | `(-1, 6)` | `(26, 6)` |
-| #9 ST kickoff cell | `(12, 6)` `CENTER_SPOT` | `(13, 7)` `AWAY_KICKOFF` |
-| Other ST | `(12, 5)` | `(13, 5)` |
+| Kicking #9 ST | `(12, 6)` `CENTER_SPOT` | `(13, 6)` `AWAY_SPOT` |
+| Kicking other ST | `(12, 5)` | `(13, 7)` |
+| Receiving #9 ST | Aether is kicking | `(11, 5)` (mirror of `AWAY_KICKOFF`) |
+| Receiving other ST | `(14, 5)` / `(14, 7)` `AWAY_KICKOFF` | `(11, 7)` |
 
 Default kickoff: Aether #9 has the ball. After a goal, `_award_goal` calls `setup_kickoff(opposite_team(scorer))` so the **conceding** side starts with the ball and `current_team`.
 
@@ -164,7 +168,8 @@ Walking onto a loose ball takes it. Walking the ball onto the **opponent net** i
 ```
 {
   player_id, team, action, dest, target_id, origin, label,
-  expects_ball   # true if this pass/shoot/dribble is planned off an incoming pass
+  expects_ball    # true if this pass/shoot/dribble is planned off a pass or a collect
+  expects_reason  # "pass did not arrive" or "did not get the ball"
 }
 ```
 
@@ -175,19 +180,23 @@ Rules of a queue:
 - One plan per player. `queue_plan` clears that player first, then appends.
 - At most `ACTIONS_PER_SIDE` (3) plans per team. A player who already has a plan can be re-queued.
 - `can_select` / `can_queue` require `player.team == current_team` unless `ignore_team_gate`.
-- `end_planning`: if Aether, flip `current_team` to Helix and return `{action = "end_planning"}`. If Helix, call `TurnResolver.resolve`.
+- `end_planning`: the first lock of a cycle (`awaiting_other_side` is false) flips `current_team` to the other side and returns `{action = "end_planning"}`. The second lock calls `TurnResolver.resolve`. After a Helix kickoff, Helix is first and Aether is second.
 
 `ignore_team_gate` exists because `apply_*` still refuse the “wrong” team. The resolver sets it true so Helix actions can apply during a simultaneous cycle. Tests set it to poke Helix pieces during Aether’s turn.
 
 ### Planning-time possession
 
-`has_ball` is the **real** board. `planning_carrier()` / `planning_has_ball()` walk queued **passes** on the acting team so a teammate can already queue pass / shoot / dribble as if they will receive.
+`has_ball` is the **real** board. `planning_carrier()` / `planning_has_ball()` walk the acting team’s queue so a player can already queue pass / shoot / dribble as if they will have the ball.
 
 - Pass to a teammate: planning possession moves to that teammate (and can chain).
-- Pass to an empty square, or shoot: planning possession ends.
+- Pass to an empty square: planning possession ends, unless a teammate has queued a **move** onto that square — they collect it and can chain.
+- Shoot: planning possession ends.
+- Loose ball: the first queued **move** onto the ball’s cell collects it for planning.
 - Cycle detection: if a pass loop exists, stop.
 
-`expects_ball` is set when the actor does **not** currently hold the ball but `planning_has_ball` is true. At resolve, if that pass never arrives, the follow-up is cancelled with `"pass did not arrive"` rather than `"lost the ball"`.
+The real ball never moves during planning. Resolve playback snaps pieces and the ball back to the pre-cycle snapshot, then plays the events.
+
+`expects_ball` is set when the actor does **not** currently hold the ball but `planning_has_ball` is true. At resolve, if they still do not have it, the follow-up is cancelled (`"pass did not arrive"` after a teammate pass, `"did not get the ball"` after a collect) rather than `"lost the ball"`.
 
 ### Ending a side
 
@@ -256,7 +265,7 @@ Do not use these from game code.
 
 A result with `reset == true` (goal) **stops the cycle**. Leftover plans are cancelled `"play stopped — goal"`. Kickoff already ran inside `_award_goal`.
 
-If no goal: leftover plans cancelled `"could not be completed"`, `current_team = HOME`, `turn_index += 1`.
+If no goal: leftover plans cancelled `"could not be completed"`, `current_team = HOME`, `turn_index += 1`. Always clears `awaiting_other_side` so the next cycle’s first lock is Aether (or the kicking side after a goal, already reset inside `setup_kickoff`).
 
 Then both plan arrays clear and the gate is restored.
 
@@ -317,10 +326,10 @@ HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plan
 
 - Left click cell → `handle_cell_clicked`.
 - Right click / Esc: cancel pending command, then deselect, then open pause menu.
-- Enter: `end_planning`.
+- Enter / Space: `end_planning`. Space is taken in `_input` so a focused action button cannot steal it.
 - 1–9 / keypad: Nth button currently shown in `commands_for` (not a fixed action map).
 
-**Command-first UX.** Select a player → `_pending_action` defaults to `"move"` if they have a walk. Bottom bar lists only commands with at least one dest. Then click a highlighted tile → `action_for_command` → `queue_plan`.
+**Command-first UX.** Select a player → `_pending_action` defaults to `"move"` if they have a walk. After a queued action with AP remaining, Move is re-armed so consecutive tiles chain. Bottom bar lists only commands with at least one dest. Then click a highlighted tile → `action_for_command` → `queue_plan`.
 
 Why not “click the tile then pick Move/Pass”? One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). The old chooser is still in the HUD (`show_choices`) and `_open_choice` still exists on the controller, but **nothing calls `_open_choice`**. Do not revive it without wiring; current tests assume command-then-tile.
 
@@ -348,7 +357,7 @@ On each cycle `_begin_vs_ai_cycle` → `_preplan_ai`:
 
 Helix therefore commits **before** Aether queues, on the current board, without seeing Aether’s plans. That matches simultaneous play. (In hotseat Helix plans second, but also cannot see Aether’s arrows/log.)
 
-When Aether `end_planning`s, the controller immediately `end_planning`s again (Helix is already filled) so the player does not sit through a Helix turn. After a goal that would make Helix kick off, vs-AI **still** puts Aether in the planner’s chair (`current_team = HOME`) after preplanning Helix.
+When Aether `end_planning`s, the controller immediately `end_planning`s again (Helix is already filled) so the player does not sit through a Helix turn. After a Helix kickoff, vs-AI still preplans Helix, marks Helix as already locked (`awaiting_other_side`), and puts Aether in the chair. Helix arrows stay hidden. Aether’s End Turn is the second lock of the cycle and resolves immediately. Clicks are ignored only as a safety net if `current_team` is ever AWAY in vs-AI.
 
 `AiCoach` scoring (rough): shoot ≫ walk-in goal ≫ through-pass with forward gain ≫ tackle ≫ dribble ≫ collect loose ball ≫ move toward ball / forward. Offside passes are heavily penalised. First action of a side uses a very low keep-threshold so Helix always tries to queue at least one thing.
 

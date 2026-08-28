@@ -7,6 +7,8 @@ const _TurnResolver := preload("res://scripts/turn_resolver.gd")
 ## Authoritative match state. No nodes, no visuals.
 
 var current_team: int = MatchRules.Team.HOME
+## False until the side that plans first this cycle has locked in.
+var awaiting_other_side: bool = false
 var turn_index: int = 0
 var home_score: int = 0
 var away_score: int = 0
@@ -30,7 +32,7 @@ func setup_kickoff(kicking_team: int = MatchRules.Team.HOME) -> void:
 	players.clear()
 	var next_id := 0
 	for team in [MatchRules.Team.HOME, MatchRules.Team.AWAY]:
-		for slot in Formation.slots(team):
+		for slot in Formation.slots(team, kicking_team):
 			var player := PlayerState.new(
 				next_id,
 				team,
@@ -45,15 +47,12 @@ func setup_kickoff(kicking_team: int = MatchRules.Team.HOME) -> void:
 	home_plans.clear()
 	away_plans.clear()
 	current_team = kicking_team
+	awaiting_other_side = false
 	turn_index = 0
 	ignore_team_gate = false
 	rng.randomize()
 	combat_log.header("Kickoff — %s plans first." % MatchRules.team_name(kicking_team))
-	var kicker: PlayerState = null
-	if kicking_team == MatchRules.Team.HOME:
-		kicker = player_at(MatchRules.CENTER_SPOT)
-	else:
-		kicker = player_at(MatchRules.AWAY_KICKOFF)
+	var kicker := player_at(MatchRules.kickoff_spot(kicking_team))
 	assert(kicker != null and kicker.team == kicking_team, "Kickoff taker missing.")
 	_give_ball(kicker)
 	assert(_positions_unique(), "Kickoff spawned two players on the same cell.")
@@ -267,6 +266,7 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 			and planning_has_ball(player)
 			and action_id in ["pass", "shoot", "dribble"]
 		),
+		expects_reason = _expects_ball_reason(player),
 	}
 	plans_for(player.team).append(plan)
 	var result := {
@@ -300,16 +300,19 @@ func end_planning() -> Dictionary:
 		MatchRules.team_name(current_team),
 		plan_count(current_team),
 	], current_team)
-	if current_team == MatchRules.Team.HOME:
-		current_team = MatchRules.Team.AWAY
+	if not awaiting_other_side:
+		awaiting_other_side = true
+		current_team = MatchRules.opposite_team(current_team)
 		return {ok = true, action = "end_planning", next_team = current_team}
 	return _TurnResolver.resolve(self)
 
 
 func planning_carrier() -> PlayerState:
 	var holder := carrier()
-	if holder == null or holder.team != current_team:
+	if holder != null and holder.team != current_team:
 		return holder
+	if holder == null:
+		holder = _planning_collector_at(ball.pos)
 	var seen := {}
 	while holder != null:
 		if seen.has(holder.id):
@@ -327,6 +330,11 @@ func planning_carrier() -> PlayerState:
 						next_holder = nxt
 						handed_off = true
 						break
+				var collector := _planning_collector_at(plan.get("dest", Vector2i.ZERO))
+				if collector != null:
+					next_holder = collector
+					handed_off = true
+					break
 				return null
 			if act == "shoot":
 				return null
@@ -334,6 +342,24 @@ func planning_carrier() -> PlayerState:
 			return holder
 		holder = next_holder
 	return holder
+
+
+func _planning_collector_at(dest: Vector2i) -> PlayerState:
+	for plan in plans_for(current_team):
+		if str(plan.get("action", "")) != "move":
+			continue
+		var plan_dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+		if plan_dest != dest:
+			continue
+		return player_by_id(int(plan.get("player_id", -1)))
+	return null
+
+
+func _expects_ball_reason(player: PlayerState) -> String:
+	var real := carrier()
+	if real != null and real.team == player.team:
+		return "pass did not arrive"
+	return "did not get the ball"
 
 
 func planning_has_ball(player: PlayerState) -> bool:

@@ -94,7 +94,7 @@ func refresh(
 	_refresh_plan_list(model)
 	refresh_log(model)
 
-	var holder := model.carrier()
+	var holder := model.planning_carrier() if not _resolving else model.carrier()
 	if holder == null:
 		_possession.text = "BALL: LOOSE"
 		_possession.add_theme_color_override("font_color", Color("f5e6a8"))
@@ -397,6 +397,7 @@ func _command_button(text: String) -> Button:
 	var button := Button.new()
 	button.text = text
 	button.custom_minimum_size = Vector2(108, 36)
+	button.focus_mode = Control.FOCUS_NONE
 	button.mouse_filter = Control.MOUSE_FILTER_STOP
 	button.add_theme_font_size_override("font_size", 14)
 	button.add_theme_color_override("font_color", Color("d6e4ee"))

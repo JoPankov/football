@@ -72,8 +72,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			if not _cancel_command():
 				_deselect()
-	elif event is InputEventKey and event.pressed and (event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
+	elif _is_end_turn_key(event):
 		end_planning()
+		get_viewport().set_input_as_handled()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		_try_command_hotkey(event.keycode)
 	elif event is InputEventMouseMotion:
@@ -131,14 +132,19 @@ func _begin_vs_ai_cycle() -> void:
 	if not vs_ai or model == null:
 		return
 	_preplan_ai()
+	# Helix kickoff still preplans invisibly. The human never sits through a Helix
+	# chair — Helix is already locked, Aether plans the same cycle immediately.
+	if model.current_team == MatchRules.Team.AWAY:
+		model.awaiting_other_side = true
 	model.current_team = MatchRules.Team.HOME
 
 
 func _preplan_ai() -> void:
+	var previous := model.current_team
 	model.away_plans.clear()
 	model.current_team = MatchRules.Team.AWAY
 	AiCoach.fill_plans(model)
-	model.current_team = MatchRules.Team.HOME
+	model.current_team = previous
 
 
 func _quit_game() -> void:
@@ -161,6 +167,8 @@ func _on_settings_changed() -> void:
 func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 	if busy:
 		return {ok = false, reason = "busy"}
+	if vs_ai and model != null and model.current_team == MatchRules.Team.AWAY:
+		return {ok = false, reason = "ai_planning"}
 	if not MatchRules.in_bounds(cell):
 		_deselect()
 		return {ok = false, reason = "out_of_bounds"}
@@ -261,6 +269,24 @@ func select_command(action_id: String) -> Dictionary:
 	return {ok = true, action = "command", command = action_id, dests = dests}
 
 
+func _input(event: InputEvent) -> void:
+	if busy or get_tree().paused:
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
+		end_planning()
+		get_viewport().set_input_as_handled()
+
+
+func _is_end_turn_key(event: InputEvent) -> bool:
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return false
+	return (
+		event.keycode == KEY_ENTER
+		or event.keycode == KEY_KP_ENTER
+		or event.keycode == KEY_SPACE
+	)
+
+
 func _try_command_hotkey(keycode: int) -> void:
 	var index := -1
 	if keycode >= KEY_1 and keycode <= KEY_9:
@@ -308,7 +334,7 @@ func perform_action(action: Dictionary) -> Dictionary:
 	if model.ap_spent(selected.id) >= MatchRules.PLAYER_ACTION_POINTS:
 		_deselect()
 	else:
-		_pending_action = ""
+		_arm_move(selected)
 		_refresh()
 	if model.planning_complete() and not settings.require_end_turn:
 		return end_planning()
@@ -324,12 +350,13 @@ func end_planning() -> Dictionary:
 	if not result.ok:
 		return result
 	if vs_ai and str(result.get("action", "")) == "end_planning":
-		if model.plan_count() == 0:
-			_preplan_ai()
-			model.current_team = MatchRules.Team.AWAY
-		result = model.end_planning()
-		if not result.ok:
-			return result
+		if model.current_team == MatchRules.Team.AWAY:
+			if model.plan_count() == 0:
+				_preplan_ai()
+				model.current_team = MatchRules.Team.AWAY
+			result = model.end_planning()
+			if not result.ok:
+				return result
 	hud.last_event = result
 	if str(result.get("action", "")) == "resolve":
 		_cycle_snapshot = snapshot
@@ -530,10 +557,14 @@ func _event_ball_target(result: Dictionary, dest: Vector2i) -> Vector2:
 
 func _select(player: PlayerState) -> void:
 	selected_id = player.id
-	_pending_action = ""
-	if not model.command_dests(player, "move").is_empty():
-		_pending_action = "move"
+	_arm_move(player)
 	_refresh()
+
+
+func _arm_move(player: PlayerState) -> void:
+	_pending_action = ""
+	if player != null and not model.command_dests(player, "move").is_empty():
+		_pending_action = "move"
 
 
 func _deselect() -> void:

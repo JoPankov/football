@@ -56,6 +56,7 @@ static func resolve(model: MatchModel) -> Dictionary:
 		model.current_team = MatchRules.Team.HOME
 		model.turn_index += 1
 		model.combat_log.note("Next: AETHER plans 3 players (2 AP each).")
+	model.awaiting_other_side = false
 
 	model.home_plans.clear()
 	model.away_plans.clear()
@@ -381,7 +382,9 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 		return _cancel(model, plan, "player missing")
 	var action := str(plan.get("action", ""))
 	if action in ["pass", "shoot", "dribble"] and not player.has_ball:
-		var reason := "pass did not arrive" if bool(plan.get("expects_ball", false)) else "lost the ball"
+		var reason := "lost the ball"
+		if bool(plan.get("expects_ball", false)):
+			reason = str(plan.get("expects_reason", "pass did not arrive"))
 		return _cancel(model, plan, reason)
 	if action == "tackle":
 		var occupant := model.player_at(plan.get("dest", player.pos))

@@ -1,0 +1,188 @@
+# Sci-Fi Football — read this first
+
+This is the onboarding note for a new coding session. It is **not** the rules bible and **not** the implementation map. Those are:
+
+| File | Audience | Use it for |
+|---|---|---|
+| **This file** | Agents and new sessions | What the game is, how the repo is layered, how to run it, what not to break |
+| [`RULES.md`](RULES.md) | Players | How a match feels to play. Geometry numbers here have drifted; do not copy them into code |
+| [`IMPLEMENTATION.md`](IMPLEMENTATION.md) | People changing the game | File map, phase order, result dictionaries, invariants, where to edit |
+
+**Truth order when they disagree:** `scripts/` + `tests/run_tests.gd` > `IMPLEMENTATION.md` > `RULES.md`.
+
+Godot **4.3**. GDScript. No autoloads. Shared types are `class_name` scripts. Model objects extend `RefCounted`, not `Node`, so the headless suite can construct a match without a scene tree.
+
+```bash
+# Play
+~/.local/bin/godot --path /home/ivan/Projects/sci-fi-football
+
+# Tests (headless SceneTree; no window)
+~/.local/bin/godot --headless --path /home/ivan/Projects/sci-fi-football --script res://tests/run_tests.gd
+```
+
+After a rules change, run the suite before considering it done. Prefer adding a test in `tests/run_tests.gd` in the same change. Prefer `scripted_*` flags on `MatchModel` over seeding RNG.
+
+---
+
+## Pushing to GitHub (PAT)
+
+Remote is HTTPS: `https://github.com/JoPankov/football.git` (`origin`). Default branch is `main`.
+
+When the user pastes a **personal access token** and asks to push, use it for that push and then forget it.
+
+- Do **not** store the token in the remote URL, `git config`, a file, or the repo.
+- Do **not** echo the token in commit messages, logs, or chat.
+- Do **not** remind the user to revoke it. They issue short-lived tokens and revoke them themselves.
+
+Non-interactive push (token as password; GitHub username is `JoPankov`):
+
+```bash
+git push "https://JoPankov:${PAT}@github.com/JoPankov/football.git" HEAD:main
+```
+
+Prefer passing the token via an env var in that one command, not by rewriting `origin`. Classic or fine-grained PATs both work as the password on HTTPS. Scope needs `repo` (classic) or Contents + Metadata on this repository (fine-grained).
+
+If `origin` is already ahead/behind, say so before pushing. Do not force-push `main` unless the user asked.
+
+---
+
+## What this game is
+
+A **turn-based, simultaneous-cycle, 11v11 grid football** match with a sci-fi skin. It is not a real-time football sim, not a board-game port of a licensed ruleset, and not networked.
+
+Two sides:
+
+- **Aether** — home, cyan, attacks **+x** (left → right). Human always plays Aether.
+- **Helix** — away, magenta, attacks **−x**. Either a second hotseat player or a local greedy AI (`AiCoach`).
+
+Pitch: **26×13** tiles plus **two extra goal tiles** outside the rectangle: Aether net `(-1, 6)`, Helix net `(26, 6)`. Keepers start in the net. Distance is **Chebyshev** (`max(|dx|, |dy|)`). Facing is one of the 8 directions.
+
+Each cycle:
+
+1. Aether **queues** up to **3 players**, **2 action points** each. Nothing on the board moves.
+2. Helix does the same (in vs-AI, Helix is pre-planned *before* Aether queues, still without seeing Aether’s plans).
+3. `TurnResolver` applies both queues in waves (first AP for everyone, then second AP). Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination clashes, then moves/swaps.
+4. Repeat. A goal rebuilds kickoff; the conceding side has the ball and plans first. Helix’s restart is the 180° of Aether’s 4-4-2. Vs-AI still preplans Helix invisibly and always leaves Aether in the chair — including after a Helix kickoff.
+
+The UI only **queues**. Resolution is the only place pieces, the ball, energy, and score change in a real match. Tests often call `MatchModel.apply_*` directly and skip the queue — that is intentional.
+
+There is no clock, no fouls, no substitutions, no pass inaccuracy other than intercepts, and no Aether AI.
+
+---
+
+## Mental model (keep this or you will implement the wrong thing)
+
+```
+scenes/main.tscn
+  MatchController (Node2D, no class_name)   input, animation, vs-AI / hotseat
+    Pitch / PlayerPiece / BallPiece         drawing only
+    MatchHUD / GameMenu                     CanvasLayer UI (built in code)
+    MatchModel                              authoritative state
+      MatchRules                            pure constants + math
+      Formation                             kickoff slots + role stats
+      PlayerState / BallState               data
+      CombatLog                             text + fog-of-war
+      TurnResolver                          cycle phases
+      AiCoach                               greedy Helix planner
+```
+
+| Layer | May do | Must not do |
+|---|---|---|
+| `MatchRules` | Geometry, dice math, chance formulas | Touch players, RNG, nodes |
+| `MatchModel` | Board, plans, apply one action | Draw, take input, know about HUD |
+| `TurnResolver` | Order a cycle of already-queued plans | Invent new mechanics |
+| Controller | Clicks, tweens, modes | Reimplement legality |
+| View | Paint what the model already decided | Change match state |
+
+If a click moves a piece immediately, you bypassed `queue_plan`. If you “just apply plans in queue order”, you skipped the resolver.
+
+---
+
+## Planning, not moving
+
+- Command-first UX: select a player, pick an action (Move is armed by default and stays armed after the first step), click a highlighted tile. One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). Do not revive the old tile-then-chooser without wiring; tests assume command-then-tile.
+- A player’s queued actions are an array, not a single slot. `ap_spent` = number of that player’s plans. Cap is `PLAYER_ACTION_POINTS` (2). Cap on distinct acting players is `ACTIONS_PER_SIDE` (3).
+- `planning_pos` / `planning_facing` / `planning_has_ball` walk the acting team’s queue so the second AP, a pass-fed teammate, and a player who steps onto a loose ball can be planned against the *intended* board. The real `PlayerState.pos` / `has_ball` do not change until resolve. If they never actually get the ball, those follow-up actions are cancelled.
+- Filling both AP on 3 players auto-ends the side unless `GameSettings.require_end_turn`. End Turn / Enter / Space is always legal, including 0 actions.
+- Hotseat fog: plan arrows, gold rings, and PLAN log lines are visible only to the team that queued them. Resolution events are public.
+
+Action ids in code: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`.
+
+---
+
+## Geometry agents get wrong
+
+Constants live on `MatchRules`. Do not hardcode 12-wide / 9-tall leftovers from older commits.
+
+- `x = 0` is Aether’s goal line (left of screen). `x = 25` is Helix’s. `y = 0` is the **top** touchline = Aether’s left wing.
+- Nets are playable (`in_bounds`). Cells like `(-1, 0)` are dead. From a net the keeper has **3** steps onto the pitch (forward + both diagonals).
+- Halfway is `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. Helix’s is `x < 13`. `RULES.md` still says `x ≥ 6` / `x ≤ 5` — that is wrong.
+- Penalty box = the three **pitch** tiles adjacent to that net: Aether `(0, 5) (0, 6) (0, 7)`, Helix `(25, 5) (25, 6) (25, 7)`. Shooting zone = box plus every pitch tile Chebyshev-adjacent to any box tile. You cannot shoot from the net itself.
+- Move = 1 tile into the **3-cell cone** (facing ± 45°). Turn faces 45° or 90° either side (not 180°; that takes two turns). Pass range = 3 Chebyshev, not into the rear cone except adjacent cells.
+- Kickoff: Aether #9 ST on `CENTER_SPOT` `(12, 6)` with the ball. Helix #9 on `AWAY_KICKOFF` `(14, 7)` when receiving. When Helix kicks, that 4-4-2 is rotated 180° (`AWAY_SPOT` `(13, 6)` with the ball). Two players never share a cell.
+- Intercept and shot math use **tile units**, not pixels. `MatchRules.tile_center(cell)` is `Vector2(cell)`. `TILE_SIZE = 72` is drawing only.
+- Live stats, not printed stats, go to dice and HUD percents. Empty energy **halves** ACC/DEF/CTR; it does not zero them.
+
+`IMPLEMENTATION.md`’s “Known RULES.md drift” table itself still has some pre-26×13 numbers. When in doubt, read `MatchRules` and the tests.
+
+---
+
+## File map (short)
+
+| Path | Role |
+|---|---|
+| `project.godot` | Name, 1280×720, main scene, Forward Plus |
+| `scenes/main.tscn` | `Main` + pitch + camera + HUD + menu |
+| `scripts/match_rules.gd` | Grid, nets, facing, offside, intercepts, 1dSTAT, shot formula |
+| `scripts/match_model.gd` | Kickoff, queries, queue, `apply_*` |
+| `scripts/turn_resolver.gd` | Waves + phase order + destination clashes |
+| `scripts/formation.gd` | 4-4-2 slots and role stat table |
+| `scripts/player_state.gd` / `ball_state.gd` | Data. Ball: `carrier_id == -1` means loose |
+| `scripts/combat_log.gd` | Sequential log; plan lines hidden from the other team |
+| `scripts/ai_coach.gd` | Greedy Helix |
+| `scripts/match_controller.gd` | Scene root. Human is always Aether |
+| `scripts/pitch.gd` / `player_piece.gd` / `ball_piece.gd` | Drawing |
+| `scripts/hud.gd` / `game_menu.gd` / `game_settings.gd` | UI chrome; settings in `user://settings.cfg` |
+| `tests/run_tests.gd` | The regression net. Extend this file; do not start a second suite |
+| `tests/capture_preview.gd` | Manual screenshots, not part of the suite |
+
+HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markings are `_draw()` on `Pitch`.
+
+---
+
+## Invariants (break these and something subtle dies)
+
+1. **Model is truth.** Visual positions snap back from `PlayerState.pos` after a tween.
+2. **Never two players on one cell.** Contests swap; intercepts refuse occupied landings; walking onto a teammate is illegal (use swap).
+3. **`has_ball` and `ball.carrier_id` stay paired.** Only `_give_ball` / `_release_ball`.
+4. **Planning does not mutate the board.**
+5. **Resolver is the only multi-action path.** Phase order is the design.
+6. **Pass range and move range are different.** Move = 1. Pass = 3.
+7. **Dice use live stats** (`live_accuracy()` etc.).
+8. **Fog is a view filter**, not deleted data. `CombatLog.as_text()` with no args still contains PLAN lines.
+9. **Almost every public function returns `{ok, action, ...}`.** The log formatter and the tween code switch on `action`. Keep those keys stable. If you add an action, update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, `AiCoach._score`, and tests.
+
+---
+
+## Where to edit, by job
+
+| You want to… | Start here |
+|---|---|
+| Grid size, pass range, energy, shot curve, intercept radius, facing cones | `MatchRules` + tests |
+| Kickoff shape or role stats | `Formation` |
+| When an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` / `can_queue` |
+| What an action **does** | `MatchModel.apply_*` |
+| Simultaneous order / clash rules | `TurnResolver` |
+| Helix personality | `AiCoach._score` |
+| Click / hotkey / animation | `match_controller.gd` |
+| Board or piece look | `pitch.gd` / `player_piece.gd` |
+| HUD chrome | `hud.gd` `_build*` |
+| Persist a new option | `GameSettings` + `GameMenu` options panel |
+
+Do not pretend fouls, a clock, named set pieces beyond kickoff, substitutions, injuries, stamina recovery, network play, or Aether AI exist.
+
+---
+
+## Stale comments you will meet
+
+A few file headers still talk about “up to 3 actions” from before 2-AP planning. The live caps are `ACTIONS_PER_SIDE = 3` players and `PLAYER_ACTION_POINTS = 2`. Trust the constants and `TurnResolver.resolve`, not the oldest sentence in a script.

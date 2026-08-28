@@ -19,7 +19,10 @@ const TILE_SIZE := 72.0
 const CENTER_Y := GRID_HEIGHT / 2
 const HALFWAY_X := GRID_WIDTH / 2
 const CENTER_SPOT := Vector2i(HALFWAY_X - 1, CENTER_Y)
-const AWAY_KICKOFF := Vector2i(HALFWAY_X, CENTER_Y + 1)
+## Helix's kicking cell: 180° of CENTER_SPOT through the pitch centre.
+const AWAY_SPOT := Vector2i(HALFWAY_X, CENTER_Y)
+## Helix #9 when Aether kicks — one cell off the centre so they cannot contest.
+const AWAY_KICKOFF := Vector2i(HALFWAY_X + 1, CENTER_Y + 1)
 const HOME_NET := Vector2i(-1, CENTER_Y)
 const AWAY_NET := Vector2i(GRID_WIDTH, CENTER_Y)
 const SHOT_ACC_BIAS := 1
@@ -130,6 +133,15 @@ static func is_adjacent(from: Vector2i, to: Vector2i) -> bool:
 
 static func opposite_team(team: int) -> int:
 	return Team.AWAY if team == Team.HOME else Team.HOME
+
+
+## 180° through the pitch centre. Maps Aether's kickoff shape onto Helix's.
+static func mirror_cell(pos: Vector2i) -> Vector2i:
+	return Vector2i((GRID_WIDTH - 1) - pos.x, (GRID_HEIGHT - 1) - pos.y)
+
+
+static func kickoff_spot(team: int) -> Vector2i:
+	return CENTER_SPOT if team == Team.HOME else AWAY_SPOT
 
 
 static func kickoff_facing(team: int) -> Vector2i:

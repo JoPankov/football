@@ -3,14 +3,27 @@ extends RefCounted
 
 ## 4-4-2 kickoff on the 26×13 grid. Home attacks +x, away attacks −x.
 ## y=0 is the top touchline (home's left wing).
-## Forwards and mids sit 3 tiles apart around halfway so kickoff passes still reach.
+## Forwards and central mids sit 3 tiles apart around halfway so kickoff passes still reach.
+## The receiving strikers start one cell off the centre so they cannot contest the first pass.
+## When Helix kicks, both shapes are rotated 180° through the pitch centre.
 ## The extra length sits behind the back four; full-backs stay on the touchlines.
 
 
-static func slots(team: int) -> Array[Dictionary]:
-	if team == MatchRules.Team.HOME:
-		return _home()
-	return _away()
+static func slots(team: int, kicking_team: int = MatchRules.Team.HOME) -> Array[Dictionary]:
+	var kicking := team == kicking_team
+	var shape := _home() if kicking else _away()
+	if kicking_team == MatchRules.Team.HOME:
+		return shape
+	return _mirrored(shape)
+
+
+static func _mirrored(source: Array[Dictionary]) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for slot in source:
+		var copy: Dictionary = slot.duplicate()
+		copy.pos = MatchRules.mirror_cell(slot.pos)
+		out.append(copy)
+	return out
 
 
 static func _home() -> Array[Dictionary]:
@@ -41,10 +54,10 @@ static func _away() -> Array[Dictionary]:
 		_slot(4, "LCB", Vector2i(last - 2, cy + 1)),
 		_slot(5, "LB", Vector2i(last - 2, MatchRules.GRID_HEIGHT - 1)),
 		_slot(6, "RM", Vector2i(last - 9, 0)),
-		_slot(7, "RCM", Vector2i(last - 9, cy - 1)),
-		_slot(8, "LCM", Vector2i(last - 9, cy + 1)),
+		_slot(7, "RCM", Vector2i(last - 8, cy - 1)),
+		_slot(8, "LCM", Vector2i(last - 8, cy + 1)),
 		_slot(11, "LM", Vector2i(last - 9, MatchRules.GRID_HEIGHT - 1)),
-		_slot(10, "ST", Vector2i(MatchRules.HALFWAY_X, cy - 1)),
+		_slot(10, "ST", Vector2i(MatchRules.HALFWAY_X + 1, cy - 1)),
 		_slot(9, "ST", MatchRules.AWAY_KICKOFF),
 	]
 
