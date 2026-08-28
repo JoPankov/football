@@ -59,9 +59,9 @@ Pitch: **26×13** tiles plus **two extra goal tiles** outside the rectangle: Aet
 
 Each cycle:
 
-1. Aether **queues** up to **3 players**, **2 action points** each. Nothing on the board moves.
+1. Aether **queues** up to **3 players**, **6 action points** each. Nothing on the board moves.
 2. Helix does the same (in vs-AI, Helix is pre-planned *before* Aether queues, still without seeing Aether’s plans).
-3. `TurnResolver` applies both queues in waves (first AP for everyone, then second AP). Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination clashes, then moves/swaps.
+3. `TurnResolver` applies both queues in waves (first action for everyone, then second, …). Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination clashes, then moves/swaps. Straight steps cost 2 AP, diagonal 3 AP. A shot spends leftover AP for +3% hit each and ends that player’s turn.
 4. Repeat. A goal rebuilds kickoff; the conceding side has the ball and plans first. Helix’s restart is the 180° of Aether’s 4-4-2. Vs-AI still preplans Helix invisibly and always leaves Aether in the chair — including after a Helix kickoff.
 
 The UI only **queues**. Resolution is the only place pieces, the ball, energy, and score change in a real match. Tests often call `MatchModel.apply_*` directly and skip the queue — that is intentional.
@@ -101,9 +101,9 @@ If a click moves a piece immediately, you bypassed `queue_plan`. If you “just 
 ## Planning, not moving
 
 - Command-first UX: select a player, pick an action (Move is armed by default and stays armed after the first step), click a highlighted tile. One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). Do not revive the old tile-then-chooser without wiring; tests assume command-then-tile.
-- A player’s queued actions are an array, not a single slot. `ap_spent` = number of that player’s plans. Cap is `PLAYER_ACTION_POINTS` (2). Cap on distinct acting players is `ACTIONS_PER_SIDE` (3).
+- A player’s queued actions are an array, not a single slot. `ap_spent` = sum of each plan’s `ap_cost`. Cap is `PLAYER_ACTION_POINTS` (6). Orthogonal steps cost 2, diagonal 3, turn/pass 1. A shot costs every leftover AP. Cap on distinct acting players is `ACTIONS_PER_SIDE` (3).
 - `planning_pos` / `planning_facing` / `planning_has_ball` walk the acting team’s queue so the second AP, a pass-fed teammate, and a player who steps onto a loose ball can be planned against the *intended* board. The real `PlayerState.pos` / `has_ball` do not change until resolve. If they never actually get the ball, those follow-up actions are cancelled.
-- Filling both AP on 3 players auto-ends the side unless `GameSettings.require_end_turn`. End Turn / Enter / Space is always legal, including 0 actions.
+- Filling all 6 AP on 3 players auto-ends the side unless `GameSettings.require_end_turn`. End Turn / Enter / Space is always legal, including 0 actions.
 - Hotseat fog: plan arrows, gold rings, and PLAN log lines are visible only to the team that queued them. Resolution events are public.
 
 Action ids in code: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`.
@@ -185,4 +185,4 @@ Do not pretend fouls, a clock, named set pieces beyond kickoff, substitutions, i
 
 ## Stale comments you will meet
 
-A few file headers still talk about “up to 3 actions” from before 2-AP planning. The live caps are `ACTIONS_PER_SIDE = 3` players and `PLAYER_ACTION_POINTS = 2`. Trust the constants and `TurnResolver.resolve`, not the oldest sentence in a script.
+A few file headers still talk about “up to 3 actions” from before 6-AP planning. The live caps are `ACTIONS_PER_SIDE = 3` players and `PLAYER_ACTION_POINTS = 6`. Trust the constants and `TurnResolver.resolve`, not the oldest sentence in a script.

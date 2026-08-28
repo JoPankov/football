@@ -2,7 +2,8 @@ class_name TurnResolver
 extends RefCounted
 
 ## Resolves one planned cycle: Aether's queued actions + Helix's queued actions.
-## Each player may have two AP. Wave 0 is every player's first AP, wave 1 the second.
+## Each player has 6 AP. Waves are action sequence (first action, then second, …),
+## not AP slots — a 2-AP ortho step and a 3-AP diagonal still share wave 0.
 ## Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination contests, moves/swaps.
 
 
@@ -28,7 +29,7 @@ static func resolve(model: MatchModel) -> Dictionary:
 		if remaining.is_empty():
 			continue
 		if wave > 0:
-			model.combat_log.note("Second actions")
+			model.combat_log.note("Action %d" % (wave + 1))
 		reset = _run_phase(model, remaining, events, ["turn"], "Turns")
 		if not reset:
 			reset = _run_phase(model, remaining, events, ["tackle"], "Tackles")
@@ -55,7 +56,9 @@ static func resolve(model: MatchModel) -> Dictionary:
 	if not reset:
 		model.current_team = MatchRules.Team.HOME
 		model.turn_index += 1
-		model.combat_log.note("Next: AETHER plans 3 players (2 AP each).")
+		model.combat_log.note(
+			"Next: AETHER plans 3 players (%d AP each)." % MatchRules.PLAYER_ACTION_POINTS
+		)
 	model.awaiting_other_side = false
 
 	model.home_plans.clear()
@@ -415,7 +418,7 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 		"shoot":
 			if not model.can_shoot(player):
 				return _cancel(model, plan, "shot no longer legal")
-			result = model.apply_shoot(player.id)
+			result = model.apply_shoot(player.id, int(plan.get("ap_left", 0)))
 		"turn":
 			var dest: Vector2i = plan.get("dest", player.pos)
 			result = model.apply_turn(player.id, dest)

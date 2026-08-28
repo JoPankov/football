@@ -129,28 +129,42 @@ func _hint_for(
 		if hover_cell in model.command_dests(selected, pending_action):
 			var planning_holder := model.planning_carrier()
 			var possession := planning_holder.team if planning_holder != null else -1
-			return MatchRules.contest_preview(
+			var contest := MatchRules.contest_preview(
 				selected,
 				hovered,
 				model.planning_has_ball(selected),
 				possession
-			).text
-	if selected != null and pending_action != "":
-		return "Click a highlighted tile to queue %s for %s. Right-click or Esc cancels." % [
+			)
+			return "%s  (%d AP)" % [contest.text, model.action_cost_for(selected, pending_action, hover_cell)]
+	if pending_action in ["move", "swap"] and selected != null and hover_cell in model.command_dests(selected, pending_action):
+		return "Click to queue %s for %s (%d AP). Right-click or Esc cancels." % [
 			pending_action.to_upper(),
 			selected.label(),
+			model.action_cost_for(selected, pending_action, hover_cell),
+		]
+	if selected != null and pending_action != "":
+		return "Click a highlighted tile to queue %s for %s (%d/%d AP). Right-click or Esc cancels." % [
+			pending_action.to_upper(),
+			selected.label(),
+			model.ap_remaining(selected.id),
+			MatchRules.PLAYER_ACTION_POINTS,
 		]
 	if selected != null:
-		return "Pick an action for %s, then click a highlighted tile. Keys 1–9 select actions." % selected.label()
+		return "Pick an action for %s (%d/%d AP), then click a highlighted tile. Keys 1–9 select actions." % [
+			selected.label(),
+			model.ap_remaining(selected.id),
+			MatchRules.PLAYER_ACTION_POINTS,
+		]
 	if _resolving:
 		return "Resolution in progress — both teams' queued actions play out together."
+	var ap_each := MatchRules.PLAYER_ACTION_POINTS
 	if require_end_turn:
 		if holder == null:
-			return "Pick up to %d %s players (2 AP each). Press End Turn to lock in. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting]
-		return "Pick up to %d %s players (2 AP each). Press End Turn to lock in. Click a planned player twice to clear their actions." % [MatchRules.ACTIONS_PER_SIDE, acting]
+			return "Pick up to %d %s players (%d AP each). Press End Turn to lock in. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
+		return "Pick up to %d %s players (%d AP each). Press End Turn to lock in. Click a planned player twice to clear their actions." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
 	if holder == null:
-		return "Pick up to %d %s players (2 AP each). Filling 3 players' AP ends the turn; End Turn finishes early." % [MatchRules.ACTIONS_PER_SIDE, acting]
-	return "Pick up to %d %s players (2 AP each). Filling 3 players' AP ends the turn; End Turn finishes early. Click a planned player twice to clear." % [MatchRules.ACTIONS_PER_SIDE, acting]
+		return "Pick up to %d %s players (%d AP each). Filling 3 players' AP ends the turn; End Turn finishes early." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
+	return "Pick up to %d %s players (%d AP each). Filling 3 players' AP ends the turn; End Turn finishes early. Click a planned player twice to clear." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
 
 
 func _event_line(event: Dictionary) -> String:
@@ -278,11 +292,12 @@ func _apply_phase(model: MatchModel) -> void:
 			_turn.text = "PLAYING OUT BOTH TEAMS"
 		else:
 			var left_word := "PLAYER" if left == 1 else "PLAYERS"
-			_turn.text = "%s   %d %s LEFT  ·  %d AP  ·  CYCLE %d" % [
+			_turn.text = "%s   %d %s LEFT  ·  %d/%d AP  ·  CYCLE %d" % [
 				_pip_text(queued),
 				left,
 				left_word,
-				model.plan_count(model.current_team),
+				model.team_ap_spent(model.current_team),
+				MatchRules.ACTIONS_PER_SIDE * MatchRules.PLAYER_ACTION_POINTS,
 				model.turn_index + 1,
 			]
 		_turn.add_theme_color_override("font_color", phase_color.lightened(0.2))
@@ -340,9 +355,10 @@ func _refresh_plan_list(model: MatchModel) -> void:
 	if queued == 0:
 		lines.append("No actions queued · %d players left" % left)
 	else:
-		lines.append("This turn  %s  ·  %d AP  ·  %d players left" % [
+		lines.append("This turn  %s  ·  %d/%d AP  ·  %d players left" % [
 			_pip_text(queued),
-			model.plan_count(model.current_team),
+			model.team_ap_spent(model.current_team),
+			MatchRules.ACTIONS_PER_SIDE * MatchRules.PLAYER_ACTION_POINTS,
 			left,
 		])
 	for plan in model.plans_for(model.current_team):
@@ -612,10 +628,12 @@ func _show_forecast(
 
 
 func _shot_forecast_text(preview: Dictionary) -> String:
-	return "%s\nd = %.2f tiles   θ = %.0f°   hit %d%%   save %d%%" % [
+	return "%s\nd = %.2f tiles   θ = %.0f°   leftover AP %d (+%d%%)   hit %d%%   save %d%%" % [
 		str(preview.get("header", "shoot")),
 		float(preview.get("distance", 0.0)),
 		float(preview.get("angle_deg", 0.0)),
+		int(preview.get("remaining_ap", 0)),
+		int(round(float(preview.get("leftover_bonus", 0.0)) * 100.0)),
 		int(round(float(preview.get("hit_chance", 0.0)) * 100.0)),
 		int(round(float(preview.get("save_chance", 0.0)) * 100.0)),
 	]

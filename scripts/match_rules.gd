@@ -10,7 +10,10 @@ const GRID_HEIGHT := 13
 const MOVE_DISTANCE := 1
 const PASS_RANGE := 3
 const ACTIONS_PER_SIDE := 3
-const PLAYER_ACTION_POINTS := 2
+const PLAYER_ACTION_POINTS := 6
+const DEFAULT_ACTION_COST := 1
+const MOVE_ORTHO_COST := 2
+const MOVE_DIAG_COST := 3
 const ACTION_ENERGY_COST := 1
 const ENERGY_PER_STAMINA := 10
 const ENERGY_EMPTY_FACTOR := 0.5
@@ -28,6 +31,9 @@ const AWAY_NET := Vector2i(GRID_WIDTH, CENTER_Y)
 const SHOT_ACC_BIAS := 1
 const SHOT_RANGE_K := 0.35
 const SHOT_ANGLE_FLOOR := 0.15
+## +3 percentage points of hit chance per leftover AP spent on the shot.
+const SHOT_AP_HIT_BONUS := 0.03
+const STEP_ACTIONS: Array[String] = ["move", "dribble", "tackle", "challenge", "swap"]
 ## Rear pass cone: directly back plus this many degrees to each side.
 const BACK_PASS_HALF_ANGLE_DEG := 43.0
 
@@ -113,10 +119,47 @@ static func shot_angle_factor(angle_rad: float) -> float:
 	return maxf(SHOT_ANGLE_FLOOR, cos(angle_rad))
 
 
-static func shot_hit_chance(accuracy: int, distance: float, angle_rad: float) -> float:
+static func shot_ap_bonus(remaining_ap: int) -> float:
+	return SHOT_AP_HIT_BONUS * float(maxi(0, remaining_ap))
+
+
+static func shot_hit_chance(
+	accuracy: int,
+	distance: float,
+	angle_rad: float,
+	remaining_ap: int = 0
+) -> float:
 	var acc_term := float(accuracy) / float(accuracy + SHOT_ACC_BIAS)
 	var hit := acc_term * shot_range_factor(distance) * shot_angle_factor(angle_rad)
+	hit += shot_ap_bonus(remaining_ap)
 	return clampf(hit, 0.05, 0.98)
+
+
+static func is_diagonal_step(from: Vector2i, to: Vector2i) -> bool:
+	var delta := to - from
+	return delta.x != 0 and delta.y != 0
+
+
+static func step_ap_cost(from: Vector2i, to: Vector2i) -> int:
+	if from == to:
+		return DEFAULT_ACTION_COST
+	if is_diagonal_step(from, to):
+		return MOVE_DIAG_COST
+	return MOVE_ORTHO_COST
+
+
+## Shoot spends every leftover AP. Steps cost 2 orthogonal / 3 diagonal. Else 1.
+static func action_ap_cost(
+	action_id: String,
+	from: Vector2i,
+	to: Vector2i,
+	remaining_ap: int
+) -> int:
+	if action_id == "shoot":
+		return maxi(1, remaining_ap)
+	if action_id in STEP_ACTIONS:
+		return step_ap_cost(from, to)
+	return DEFAULT_ACTION_COST
 
 
 static func in_bounds(pos: Vector2i) -> bool:

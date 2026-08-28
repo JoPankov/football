@@ -11,7 +11,7 @@ This is what the game actually does today.
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
 - Aether **#9 ST** starts on the centre spot `(12, 6)` **with the ball**. Helix does not start in possession.
 - After **Helix** scores, that same Aether kickoff is used again. After **Aether** scores, the whole 4-4-2 is rotated 180° through the pitch centre: Helix **#9 ST** takes `(13, 6)` with the ball, and Aether’s strikers sit one cell off the centre so they cannot contest the first pass.
-- **Simultaneous cycles.** The kicking team plans first. Aether plans **up to 3 players** at match start (and after Helix scores); Helix plans first after Aether scores. Each of those players has **2 action points**. The turn auto-ends when all 3 players have spent both AP; **End Turn** can finish early with fewer players or leftover AP. The other side then plans the same way. All queued actions resolve together (first AP for everyone, then second AP). Then Aether plans again.
+- **Simultaneous cycles.** The kicking team plans first. Aether plans **up to 3 players** at match start (and after Helix scores); Helix plans first after Aether scores. Each of those players has **6 action points**. The turn auto-ends when all 3 players have spent their AP; **End Turn** can finish early with fewer players or leftover AP. The other side then plans the same way. All queued actions resolve together (everyone’s first action, then second, and so on). Then Aether plans again.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
 
@@ -49,10 +49,10 @@ Kickoff values by role:
 
 1. Click any player on the team that is planning.
 2. Choose an action from the bottom bar (or press **1–9**): Move, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after the first step so you can chain-click tiles.
-3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can spend the second point.
-4. Repeat for up to **3 different players**, **2 AP** each. A gold ring marks a planned player; arrows show their queued steps.
-5. Filling **both AP on 3 players** ends the turn automatically. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
-6. After Helix’s turn ends, all queued actions resolve. First AP for every planned player, then second AP. The match log lists every public event and roll.
+3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps.
+4. Repeat for up to **3 different players**, **6 AP** each. A gold ring marks a planned player; arrows show their queued steps.
+5. Filling **all 6 AP on 3 players** ends the turn automatically. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
+6. After Helix’s turn ends, all queued actions resolve. First action for every planned player, then second, and so on. The match log lists every public event and roll.
 7. Click a planned player twice to clear their actions and pick someone else. Right-click or Escape cancels the current action, then the selection; Escape with nothing selected opens the menu.
 
 You cannot pick a fourth player.
@@ -73,7 +73,8 @@ Highlights (after you pick an action):
 
 ### Move
 
-- Costs **1 AP**. 1 tile into the **3-cell cone**: the square you face, plus 45° either side.
+- Costs **2 AP** straight (orthogonal) or **3 AP** diagonally. 1 tile into the **3-cell cone**: the square you face, plus 45° either side.
+- You cannot queue a step you cannot afford. With 2 AP left you can still walk straight, but not diagonally.
 - Empty tiles only (or an opponent tile, which is a contest instead).
 - Cannot walk onto a teammate. Use **swap** for that.
 - If you have the ball, it comes with you.
@@ -90,6 +91,7 @@ Highlights (after you pick an action):
 
 ### Swap places
 
+- Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
 - Adjacent teammate in the **move cone** only.
 - You take their tile, they take yours.
 - Whoever had the ball keeps it and carries it to their new tile.
@@ -97,6 +99,7 @@ Highlights (after you pick an action):
 
 ### Dribble
 
+- Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
 - Carrier steps onto an opponent in the **move cone**.
 - Roll: your **CTR** vs their **DEF**.
 - You win: you take the square, they are shoved back to where you came from, you keep the ball.
@@ -104,6 +107,7 @@ Highlights (after you pick an action):
 
 ### Tackle
 
+- Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
 - Player **without** the ball steps onto the **carrier** in the **move cone**.
 - Roll: your **DEF** vs their **CTR**.
 - You win: you swap onto their square and take the ball.
@@ -111,6 +115,7 @@ Highlights (after you pick an action):
 
 ### Square fight
 
+- Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
 - Player without the ball steps onto an opponent in the **move cone** who also does not have the ball.
 - Roll: **CTR vs CTR**.
 - You win: you swap onto that square. No ball changes hands.
@@ -118,6 +123,7 @@ Highlights (after you pick an action):
 
 ### Pass
 
+- Costs **1 AP**.
 - Only the player with the ball.
 - Range: **3 tiles** (Chebyshev), to a **teammate** or an **empty square**.
 - Cannot pass into the **rear cone**: directly back and **43°** to each side. **Adjacent** tiles are excepted — you may still pass to a neighbouring cell even if it is behind you.
@@ -133,7 +139,7 @@ Highlights (after you pick an action):
 
 ## Simultaneous resolution
 
-Actions are planned against the current board, then resolve in this order:
+Actions are planned against the current board, then resolve **wave by wave** (everyone’s first queued action, then second, …). Inside a wave:
 
 1. **Tackles**
 2. **Passes and shots** — the ball travels next, following the current carrier so a pass can feed another pass or a shot. A pass to a teammate who also queued a move arrives first; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
@@ -209,6 +215,8 @@ Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 
 ### Shoot
 
+Shooting **spends every leftover AP** and **ends that player’s turn**. Each leftover point adds **+3 percentage points** to hit chance: 1 AP left → +3%, 5 AP left → +15%, a first-action shot with all 6 AP → +18%.
+
 You may shoot if you have the ball and stand in the **shooting zone** of the opponent net:
 
 - The **penalty box**: the three pitch tiles adjacent to that goal tile. Aether box `(0, 2) (0, 3) (0, 4)`. Helix box `(11, 2) (11, 3) (11, 4)`.
@@ -219,7 +227,8 @@ The goal tile highlights gold. Click it to shoot. If the tile also allows move o
 Hover the goal to see:
 
 ```
-hit = ACC/(ACC+1) x range x angle
+hit = ACC/(ACC+1) x range x angle + leftover
+leftover = 0.03 x remaining AP
 range = 1 / (1 + 0.35 x (d-1))
 angle = max(0.15, cos theta)
 save = P(keeper 1dDEF > shooter 1dACC)   if a keeper is on the goal tile, else 0

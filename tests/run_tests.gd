@@ -151,6 +151,7 @@ func _test_facing() -> void:
 func _test_action_points() -> void:
 	print("-- action points")
 	var east := Vector2i(1, 0)
+	_assert(MatchRules.PLAYER_ACTION_POINTS == 6, "each player has 6 AP")
 	_assert(MatchRules.move_facings(east).size() == 3, "move has 3 facings")
 	_assert(Vector2i(1, 0) in MatchRules.move_facings(east), "move includes current facing")
 	var turns := MatchRules.turn_facings(east)
@@ -159,23 +160,34 @@ func _test_action_points() -> void:
 	_assert(Vector2i(-1, 0) not in turns, "turn excludes 180°")
 	_assert(Vector2i(0, 1) in turns and Vector2i(0, -1) in turns, "turn includes 90°")
 	_assert(MatchRules.rotate_facing(east, 4) == Vector2i(-1, 0), "four 45° steps is 180°")
+	_assert(MatchRules.step_ap_cost(Vector2i(5, 5), Vector2i(6, 5)) == 2, "straight step costs 2 AP")
+	_assert(MatchRules.step_ap_cost(Vector2i(5, 5), Vector2i(6, 6)) == 3, "diagonal step costs 3 AP")
+	_assert(MatchRules.action_ap_cost("turn", Vector2i(5, 5), Vector2i(5, 6), 6) == 1, "turn costs 1 AP")
+	_assert(MatchRules.action_ap_cost("pass", Vector2i(5, 5), Vector2i(7, 5), 6) == 1, "pass costs 1 AP")
+	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 5) == 5, "shot spends leftover AP")
+	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 1) == 1, "shot with 1 AP spends that point")
+	_assert(is_equal_approx(MatchRules.shot_ap_bonus(1), 0.03), "+3% hit per leftover AP")
+	_assert(is_equal_approx(MatchRules.shot_ap_bonus(5), 0.15), "5 leftover AP is +15% hit")
 
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var st := model.player_at(MatchRules.CENTER_SPOT)
 	_assert(model.ap_spent(st.id) == 0, "fresh player has spent 0 AP")
+	_assert(model.ap_remaining(st.id) == 6, "fresh player has 6 AP")
+	_assert(_spot(1, 1) in model.command_dests(st, "move"), "diagonal is legal with a full AP pool")
 	var first := model.queue_plan(st.id, {id = "move", dest = _spot(1, 0), label = "Move"})
 	_assert(first.ok, "first AP queues")
-	_assert(model.ap_spent(st.id) == 1 and model.can_queue(st), "second AP is still available")
+	_assert(int(first.plan.get("ap_cost", 0)) == 2, "orthogonal move costs 2 AP")
+	_assert(model.ap_spent(st.id) == 2 and model.can_queue(st), "4 AP remain after a straight step")
 	_assert(model.acting_player_count() == 1, "one player is acting")
 	var turn_dests := model.command_dests(st, "turn")
 	_assert(not turn_dests.is_empty(), "turn dests exist after a queued move")
 	var turn_cmd := model.action_for_command(st, "turn", turn_dests[0])
 	_assert(not turn_cmd.is_empty() and turn_cmd.get("id") == "turn", "turn click maps after a queued move")
 	var turn := model.queue_plan(st.id, turn_cmd)
-	_assert(turn.ok, "second AP can be a turn")
-	_assert(model.ap_spent(st.id) == 2, "two AP spent")
-	_assert(not model.can_queue(st), "player is out of AP")
+	_assert(turn.ok, "leftover AP can be a turn")
+	_assert(model.ap_spent(st.id) == 3, "straight move then turn spends 3 AP")
+	_assert(model.can_queue(st), "player still has leftover AP")
 	_assert(not model.planning_complete(), "other player slots remain")
 	model.end_planning()
 	var resolved := model.end_planning()
@@ -185,6 +197,66 @@ func _test_action_points() -> void:
 		st.facing == MatchRules.step_direction(_spot(1, 0), turn_dests[0]),
 		"move then turn faces the clicked square"
 	)
+
+	var spend := MatchModel.new()
+	spend.setup_kickoff()
+	var runner := spend.player_at(MatchRules.CENTER_SPOT)
+	_assert(spend.queue_plan(runner.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "first straight step queues")
+	_assert(spend.queue_plan(runner.id, {id = "move", dest = _spot(2, 0), label = "Move"}).ok, "second straight step queues")
+	_assert(spend.ap_spent(runner.id) == 4, "two straight steps spend 4 AP")
+	_assert(_spot(3, 0) in spend.command_dests(runner, "move"), "2 leftover AP still allow a straight step")
+	_assert(_spot(3, 1) not in spend.command_dests(runner, "move"), "2 leftover AP cannot afford a diagonal")
+	var refused := spend.queue_plan(runner.id, {id = "move", dest = _spot(3, 1), label = "Move"})
+	_assert(not refused.ok, "queue rejects a diagonal the player cannot afford")
+	_assert(spend.queue_plan(runner.id, {id = "move", dest = _spot(3, 0), label = "Move"}).ok, "third straight step spends the last 2 AP")
+	_assert(spend.ap_spent(runner.id) == 6, "three straight steps spend the full 6 AP")
+	_assert(not spend.can_queue(runner), "player is out of AP")
+
+	var diag := MatchModel.new()
+	diag.setup_kickoff()
+	var cutter := diag.player_at(MatchRules.CENTER_SPOT)
+	var cut := diag.queue_plan(cutter.id, {id = "move", dest = _spot(1, 1), label = "Move"})
+	_assert(cut.ok, "diagonal step queues")
+	_assert(int(cut.plan.get("ap_cost", 0)) == 3, "diagonal move costs 3 AP")
+	_assert(diag.ap_remaining(cutter.id) == 3, "3 AP remain after a diagonal")
+
+	var shot_model := MatchModel.new()
+	shot_model.setup_kickoff()
+	var shooter := shot_model.player_at(MatchRules.CENTER_SPOT)
+	shooter.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
+	shot_model.ball.pos = shooter.pos
+	_assert(shot_model.can_plan_shoot(shooter), "penalty-box carrier can shoot")
+	var full_shot := shot_model.queue_plan(shooter.id, {id = "shoot", dest = MatchRules.AWAY_NET, label = "Shoot"})
+	_assert(full_shot.ok, "first-action shot queues")
+	_assert(int(full_shot.plan.get("ap_cost", 0)) == 6, "shot spends every leftover AP")
+	_assert(int(full_shot.plan.get("ap_left", 0)) == 6, "shot records leftover AP before the spend")
+	_assert(shot_model.ap_spent(shooter.id) == 6, "shot ends the player's AP")
+	_assert(not shot_model.can_queue(shooter), "player cannot queue after a shot")
+	var preview6 := shot_model.shot_preview(shooter, 6)
+	var preview1 := shot_model.shot_preview(shooter, 1)
+	_assert(preview6.remaining_ap == 6, "preview accepts leftover AP")
+	_assert(
+		is_equal_approx(float(preview6.leftover_bonus), 0.18),
+		"6 leftover AP is +18% hit"
+	)
+	_assert(
+		is_equal_approx(float(preview1.leftover_bonus), 0.03),
+		"1 leftover AP is +3% hit"
+	)
+	_assert(float(preview6.hit_chance) >= float(preview1.hit_chance), "more leftover AP hits more often")
+
+	var paced := MatchModel.new()
+	paced.setup_kickoff()
+	var paced_st := paced.player_at(MatchRules.CENTER_SPOT)
+	paced_st.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
+	paced.ball.pos = paced_st.pos
+	var turn_away := paced.queue_plan(paced_st.id, {id = "turn", dest = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y - 1), label = "Turn"})
+	_assert(turn_away.ok, "turn before a shot spends 1 AP")
+	var leftover_shot := paced.queue_plan(paced_st.id, {id = "shoot", dest = MatchRules.AWAY_NET, label = "Shoot"})
+	_assert(leftover_shot.ok, "shot after a turn still queues")
+	_assert(int(leftover_shot.plan.get("ap_left", 0)) == 5, "shot after a 1-AP turn has 5 leftover")
+	_assert(int(leftover_shot.plan.get("ap_cost", 0)) == 5, "that shot spends the remaining 5")
+	_assert(not paced.can_queue(paced_st), "shot still ends the player's turn")
 
 	var about := MatchModel.new()
 	about.setup_kickoff()
@@ -1268,6 +1340,16 @@ func _test_shooting() -> void:
 	var hit_wide := MatchRules.shot_hit_chance(13, wide.distance, wide.angle)
 	_assert(hit_close > hit_deep, "closer shots hit more often")
 	_assert(hit_close > hit_wide, "straighter shots hit more often")
+	var hit_close_5 := MatchRules.shot_hit_chance(13, close.distance, close.angle, 5)
+	_assert(
+		is_equal_approx(hit_close_5, clampf(hit_close + 0.15, 0.05, 0.98)),
+		"5 leftover AP add 15 percentage points of hit"
+	)
+	var hit_1 := MatchRules.shot_hit_chance(13, close.distance, close.angle, 1)
+	_assert(
+		is_equal_approx(hit_1, clampf(hit_close + 0.03, 0.05, 0.98)),
+		"1 leftover AP adds 3 percentage points of hit"
+	)
 
 	var model := MatchModel.new()
 	model.setup_kickoff()
@@ -1283,7 +1365,10 @@ func _test_shooting() -> void:
 	_assert("shoot" in ids, "clicking the net offers shoot")
 	var preview := model.shot_preview(st)
 	_assert(preview.text.contains("hit = ACC/(ACC+"), "preview shows the hit formula")
+	_assert(preview.text.contains("leftover AP"), "preview shows leftover AP bonus")
 	_assert(preview.text.contains("goal = hit"), "preview shows the goal product")
+	_assert(int(preview.get("remaining_ap", -1)) == 6, "unspent shooter previews a 6 AP shot")
+	_assert(is_equal_approx(float(preview.get("leftover_bonus", 0.0)), 0.18), "unspent shooter gets +18% hit")
 	_assert(preview.keeper_in_net, "helix keeper starts in the net")
 
 	model.scripted_shot_outcome = "goal"
@@ -1369,7 +1454,8 @@ func _test_controller_click_flow() -> void:
 	_assert(chain._pending_action == "move", "move stays selected so the next tile can chain")
 	var second_step: Dictionary = chain.handle_cell_clicked(_spot(2, 0))
 	_assert(second_step.get("action") == "queue", "second move click chains without re-selecting the action")
-	_assert(chain.model.ap_spent(chain.model.player_at(MatchRules.CENTER_SPOT).id) == 2, "two chained moves spend both AP")
+	_assert(chain.model.ap_spent(chain.model.player_at(MatchRules.CENTER_SPOT).id) == 4, "two chained straight moves spend 4 AP")
+	_assert(chain.selected_id >= 0, "player stays selected with leftover AP after two steps")
 	chain.queue_free()
 
 	var pickup_ui: Node = packed.instantiate()
@@ -1439,14 +1525,15 @@ func _test_controller_click_flow() -> void:
 	_assert(not second_turn_dests.is_empty(), "second-action turn has highlighted cells")
 	var cancel_on_piece: Dictionary = move_then_turn.handle_cell_clicked(_spot(1, 0))
 	_assert(cancel_on_piece.get("action") == "command_cancel", "clicking the previewed player cancels turn")
-	_assert(move_then_turn.model.ap_spent(stepper.id) == 1, "cancelling turn keeps the queued move")
+	_assert(move_then_turn.model.ap_spent(stepper.id) == 2, "cancelling turn keeps the queued 2-AP move")
 	move_then_turn.select_command("turn")
 	var second_turn_click: Dictionary = move_then_turn.handle_cell_clicked(second_turn_dests[0])
 	_assert(
 		second_turn_click.get("action") == "queue",
 		"clicking a turn highlight after a move queues the turn (got %s)" % str(second_turn_click)
 	)
-	_assert(move_then_turn.model.ap_spent(stepper.id) == 2, "move then turn spends both AP")
+	_assert(move_then_turn.model.ap_spent(stepper.id) == 3, "move then turn spends 3 AP")
+	_assert(move_then_turn.model.can_queue(stepper), "leftover AP remain after move then turn")
 	_assert(
 		move_then_turn.pieces[stepper.id].facing
 		== MatchRules.step_direction(_spot(1, 0), second_turn_dests[0]),
@@ -1710,7 +1797,7 @@ func _test_game_menu() -> void:
 		last = main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
 	_assert(last.get("action") == "queue", "third action only queues when end turn is required")
 	_assert(main.model.current_team == MatchRules.Team.HOME, "aether still plans until end turn")
-	_assert(not main.hud._end_turn.text.contains("CONFIRM"), "three 1-AP plans are not a full 2-AP lock")
+	_assert(not main.hud._end_turn.text.contains("CONFIRM"), "three leftover-AP players are not a full 6-AP lock")
 	var locked: Dictionary = main.end_planning()
 	_assert(locked.get("action") == "end_planning", "end turn still locks after three queued actions")
 	_assert(main.model.current_team == MatchRules.Team.AWAY, "helix plans after a confirmed end turn")
@@ -1758,7 +1845,7 @@ func _test_vs_ai() -> void:
 	_assert(helix_n >= 1, "helix preplanned before aether queued")
 	_assert(
 		helix_n <= MatchRules.ACTIONS_PER_SIDE * MatchRules.PLAYER_ACTION_POINTS,
-		"helix stays within 3 players × 2 AP"
+		"helix stays within 3 players × 6 AP"
 	)
 	_assert(
 		main.model.acting_player_count(MatchRules.Team.AWAY) <= MatchRules.ACTIONS_PER_SIDE,

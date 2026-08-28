@@ -18,8 +18,8 @@ Godot **4.3**. Main scene `res://scenes/main.tscn`. No autoloads; global types a
 
 A **simultaneous-cycle** 11v11 grid football match:
 
-1. Aether (home, cyan, attacks +x) queues up to 3 actions.
-2. Helix (away, magenta, attacks −x) queues up to 3 actions.
+1. Aether (home, cyan, attacks +x) queues up to 3 players × 6 AP.
+2. Helix (away, magenta, attacks −x) queues up to 3 players × 6 AP.
 3. `TurnResolver` applies both queues against the live board.
 4. Repeat. A goal resets kickoff; the conceding side has the ball and plans first. Helix’s restart is the 180° of Aether’s 4-4-2. Vs-AI still preplans Helix invisibly and always leaves Aether in the chair — including after a Helix kickoff.
 
@@ -168,6 +168,9 @@ Walking onto a loose ball takes it. Walking the ball onto the **opponent net** i
 ```
 {
   player_id, team, action, dest, target_id, origin, label,
+  ap_index,       # sequence of this action (resolve wave), not AP spent
+  ap_cost,        # 2 ortho / 3 diagonal / 1 turn-pass / leftover for shoot
+  ap_left,        # remaining AP before this action (shot hit bonus)
   expects_ball    # true if this pass/shoot/dribble is planned off a pass or a collect
   expects_reason  # "pass did not arrive" or "did not get the ball"
 }
@@ -177,8 +180,8 @@ Action ids: `move`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`
 
 Rules of a queue:
 
-- One plan per player. `queue_plan` clears that player first, then appends.
-- At most `ACTIONS_PER_SIDE` (3) plans per team. A player who already has a plan can be re-queued.
+- Many plans per player, capped by leftover AP. `queue_plan` appends.
+- At most `ACTIONS_PER_SIDE` (3) distinct players per team. A player who already has a plan can queue more until they spend 6 AP.
 - `can_select` / `can_queue` require `player.team == current_team` unless `ignore_team_gate`.
 - `end_planning`: the first lock of a cycle (`awaiting_other_side` is false) flips `current_team` to the other side and returns `{action = "end_planning"}`. The second lock calls `TurnResolver.resolve`. After a Helix kickoff, Helix is first and Aether is second.
 
@@ -200,7 +203,7 @@ The real ball never moves during planning. Resolve playback snaps pieces and the
 
 ### Ending a side
 
-- Default: the **third** queued action auto-calls `end_planning` from the controller (`planning_complete()`).
+- Default: filling **all leftover AP on 3 players** auto-calls `end_planning` from the controller (`planning_complete()`).
 - `End Turn` / Enter is always legal, including 0 actions (`can_end_planning()` is unconditionally true).
 - Option `GameSettings.require_end_turn`: third action only queues; player must confirm.
 
@@ -222,7 +225,7 @@ Pass: `apply_pass_to`. Intercepts first (see below), then offside, then give or 
 
 Swap: adjacent teammate only. Carrier keeps the ball and it follows them.
 
-Shoot: `apply_shoot`. Hit roll against `shot_hit_chance` (clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter). Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff).
+Shoot: `apply_shoot(player_id, remaining_ap)`. Hit roll against `shot_hit_chance` plus **+3 percentage points per leftover AP** (clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter). The shot spends every leftover AP and ends that player’s planning. Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff).
 
 ### Dice
 
@@ -251,7 +254,9 @@ Do not use these from game code.
 
 ## TurnResolver — cycle phases
 
-`TurnResolver.resolve(model)` copies `home_plans + away_plans` into `remaining`, logs `── Resolve cycle N ──`, sets `ignore_team_gate`, then:
+`TurnResolver.resolve(model)` copies `home_plans + away_plans` into `remaining`, logs `── Resolve cycle N ──`, sets `ignore_team_gate`, then loops waves by each plan’s `ap_index` (action sequence, 0..5). A 2-AP walk and a 3-AP diagonal still share wave 0 if they were each player’s first queued action.
+
+Inside a wave:
 
 1. **Tackles** (`tackle`) — lowest `player_id` first inside a phase.
 2. **Ball** (`pass`, `shoot`) — not id order. Always play the **current carrier’s** pass/shot next, so a pass can feed another pass or a shot. If the carrier has no ball action left, lowest id in the leftover batch.
@@ -435,7 +440,7 @@ Fix the player doc if you touch these; until then, **code + tests win**:
 
 | You want to… | Start here |
 |---|---|
-| Change grid size, pass range, energy, shot curve, intercept radius | `MatchRules` constants + tests |
+| Change grid size, pass range, energy, AP pool, move costs, shot curve, intercept radius | `MatchRules` constants + tests |
 | Change kickoff shape or role stats | `Formation` |
 | Change when an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` |
 | Change what an action **does** | `MatchModel.apply_*` |

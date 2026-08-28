@@ -1,6 +1,6 @@
 extends Node2D
 
-## Grid, 11v11. Each side plans up to 3 actions; the third locks the turn.
+## Grid, 11v11. Each side plans up to 3 players (6 AP each); filling their AP locks the turn.
 
 @onready var pitch: Pitch = $Pitch
 @onready var hud: MatchHUD = $HUD

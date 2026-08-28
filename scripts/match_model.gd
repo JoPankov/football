@@ -168,7 +168,37 @@ func acting_player_count(team: int = -1) -> int:
 
 
 func ap_spent(player_id: int) -> int:
-	return plans_of(player_id).size()
+	var spent := 0
+	for plan in plans_of(player_id):
+		spent += int(plan.get("ap_cost", MatchRules.DEFAULT_ACTION_COST))
+	return spent
+
+
+func ap_remaining(player_id: int) -> int:
+	return maxi(0, MatchRules.PLAYER_ACTION_POINTS - ap_spent(player_id))
+
+
+func team_ap_spent(team: int = -1) -> int:
+	if team < 0:
+		team = current_team
+	var spent := 0
+	for plan in plans_for(team):
+		spent += int(plan.get("ap_cost", MatchRules.DEFAULT_ACTION_COST))
+	return spent
+
+
+func action_cost_for(player: PlayerState, action_id: String, dest: Vector2i) -> int:
+	if player == null:
+		return MatchRules.PLAYER_ACTION_POINTS + 1
+	return MatchRules.action_ap_cost(
+		action_id, _query_pos(player), dest, ap_remaining(player.id)
+	)
+
+
+func can_afford(player: PlayerState, action_id: String, dest: Vector2i) -> bool:
+	if player == null:
+		return false
+	return action_cost_for(player, action_id, dest) <= ap_remaining(player.id)
 
 
 func _query_pos(player: PlayerState) -> Vector2i:
@@ -251,7 +281,11 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 		return {ok = false, reason = "no_action"}
 	var dest: Vector2i = action.get("dest", _query_pos(player))
 	var origin := _query_pos(player)
-	var ap_index := ap_spent(player_id)
+	var remaining := ap_remaining(player_id)
+	var cost := MatchRules.action_ap_cost(action_id, origin, dest, remaining)
+	if cost > remaining:
+		return {ok = false, reason = "not_enough_ap"}
+	var ap_index := plans_of(player_id).size()
 	var plan := {
 		player_id = player_id,
 		team = player.team,
@@ -260,6 +294,8 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 		target_id = int(action.get("target_id", -1)),
 		origin = origin,
 		ap_index = ap_index,
+		ap_cost = cost,
+		ap_left = remaining,
 		label = str(action.get("label", action_id)),
 		expects_ball = (
 			not player.has_ball
@@ -538,13 +574,19 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 		if can_swap(player, occupant):
 			actions.append({id = "swap", label = "Swap places", target_id = occupant.id, dest = dest})
 	if can_plan_shoot(player) and dest == MatchRules.opponent_goal(player.team):
-		actions.append({id = "shoot", label = "Shoot", dest = dest})
-	return actions
+		var leftover := ap_remaining(player.id)
+		var bonus_pct := int(round(MatchRules.shot_ap_bonus(leftover) * 100.0))
+		actions.append({id = "shoot", label = "Shoot +%d%%" % bonus_pct, dest = dest})
+	var affordable: Array[Dictionary] = []
+	for action in actions:
+		if can_afford(player, str(action.get("id", "")), action.get("dest", dest)):
+			affordable.append(action)
+	return affordable
 
 
 func commands_for(player: PlayerState) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	if player == null or not can_select(player):
+	if player == null or not can_select(player) or not can_queue(player):
 		return result
 	for spec in [
 		{id = "move", label = "Move"},
@@ -559,13 +601,18 @@ func commands_for(player: PlayerState) -> Array[Dictionary]:
 		var dests := command_dests(player, str(spec.id))
 		if dests.is_empty():
 			continue
-		result.append({id = spec.id, label = spec.label, dests = dests})
+		var label := str(spec.label)
+		if str(spec.id) == "shoot":
+			var leftover := ap_remaining(player.id)
+			var bonus_pct := int(round(MatchRules.shot_ap_bonus(leftover) * 100.0))
+			label = "Shoot +%d%%" % bonus_pct
+		result.append({id = spec.id, label = label, dests = dests})
 	return result
 
 
 func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
 	var dests: Array[Vector2i] = []
-	if player == null or not can_select(player):
+	if player == null or not can_select(player) or not can_queue(player):
 		return dests
 	match command_id:
 		"move":
@@ -573,9 +620,9 @@ func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
 				if player_at(cell) == null:
 					dests.append(cell)
 		"turn":
-			return MatchRules.turn_destinations(_query_pos(player), _query_facing(player))
+			dests = MatchRules.turn_destinations(_query_pos(player), _query_facing(player))
 		"pass":
-			return pass_cells(player)
+			dests = pass_cells(player)
 		"dribble":
 			if planning_has_ball(player):
 				for cell in contest_moves(player):
@@ -606,8 +653,12 @@ func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
 				if can_swap(player, other):
 					dests.append(other.pos)
 		"shoot":
-			return shoot_cells(player)
-	return dests
+			dests = shoot_cells(player)
+	var affordable: Array[Vector2i] = []
+	for cell in dests:
+		if can_afford(player, command_id, cell):
+			affordable.append(cell)
+	return affordable
 
 
 func action_for_command(player: PlayerState, command_id: String, dest: Vector2i) -> Dictionary:
@@ -655,14 +706,18 @@ func choice_cells(player: PlayerState) -> Array[Vector2i]:
 	return cells
 
 
-func shot_preview(player: PlayerState) -> Dictionary:
+func shot_preview(player: PlayerState, remaining_ap: int = -1) -> Dictionary:
+	if remaining_ap < 0:
+		remaining_ap = 0 if ignore_team_gate else ap_remaining(player.id)
 	var goal := MatchRules.opponent_goal(player.team)
 	var geo := MatchRules.shot_geometry(_query_pos(player), goal)
 	var range_f := MatchRules.shot_range_factor(geo.distance)
 	var angle_f := MatchRules.shot_angle_factor(geo.angle)
 	var acc := player.live_accuracy()
 	var acc_term := float(acc) / float(acc + MatchRules.SHOT_ACC_BIAS)
-	var hit := MatchRules.shot_hit_chance(acc, geo.distance, geo.angle)
+	var leftover_bonus := MatchRules.shot_ap_bonus(remaining_ap)
+	var leftover_pct := int(round(leftover_bonus * 100.0))
+	var hit := MatchRules.shot_hit_chance(acc, geo.distance, geo.angle, remaining_ap)
 	var keeper := player_at(goal)
 	var keeper_in_net := keeper != null and keeper.team != player.team
 	var save := 0.0
@@ -674,12 +729,14 @@ func shot_preview(player: PlayerState) -> Dictionary:
 	lines.append("d = %.2f tiles   θ = %.0f°" % [geo.distance, geo.angle_deg])
 	lines.append("range = 1 / (1 + %.2f×(d−1)) = %.2f" % [MatchRules.SHOT_RANGE_K, range_f])
 	lines.append("angle = max(%.2f, cos θ) = %.2f" % [MatchRules.SHOT_ANGLE_FLOOR, angle_f])
-	lines.append("hit = ACC/(ACC+%d) × range × angle" % MatchRules.SHOT_ACC_BIAS)
-	lines.append("    = %d/%d × %.2f × %.2f = %d%%" % [
+	lines.append("leftover AP = %d  (+%d%% hit)" % [remaining_ap, leftover_pct])
+	lines.append("hit = ACC/(ACC+%d) × range × angle + leftover" % MatchRules.SHOT_ACC_BIAS)
+	lines.append("    = %d/%d × %.2f × %.2f + %.2f = %d%%" % [
 		acc,
 		acc + MatchRules.SHOT_ACC_BIAS,
 		range_f,
 		angle_f,
+		leftover_bonus,
 		int(round(hit * 100.0)),
 	])
 	if keeper_in_net:
@@ -697,8 +754,11 @@ func shot_preview(player: PlayerState) -> Dictionary:
 		save_chance = save,
 		goal_chance = goal_p,
 		keeper_in_net = keeper_in_net,
+		remaining_ap = remaining_ap,
+		leftover_bonus = leftover_bonus,
 		text = "\n".join(lines),
-		header = "shoot  goal %d%%  (hit %d%%, save %d%%)" % [
+		header = "shoot  +%d%% AP  goal %d%%  (hit %d%%, save %d%%)" % [
+			leftover_pct,
 			int(round(goal_p * 100.0)),
 			int(round(hit * 100.0)),
 			int(round(save * 100.0)),
@@ -1014,11 +1074,13 @@ func _apply_offside(passer: PlayerState, receiver: PlayerState) -> Dictionary:
 	}
 
 
-func apply_shoot(player_id: int) -> Dictionary:
+func apply_shoot(player_id: int, remaining_ap: int = -1) -> Dictionary:
 	var player := player_by_id(player_id)
 	if not can_shoot(player):
 		return {ok = false, reason = "illegal_shot"}
-	var preview := shot_preview(player)
+	if remaining_ap < 0:
+		remaining_ap = 0 if ignore_team_gate else ap_remaining(player_id)
+	var preview := shot_preview(player, remaining_ap)
 	var goal := MatchRules.opponent_goal(player.team)
 	var hit: bool = rng.randf() < float(preview.hit_chance)
 	var saved: bool = false
@@ -1058,6 +1120,8 @@ func apply_shoot(player_id: int) -> Dictionary:
 		away_score = away_score,
 		attacker_label = player.label(),
 		header = preview.header,
+		remaining_ap = remaining_ap,
+		leftover_bonus = preview.leftover_bonus,
 	}
 	if not hit:
 		_release_ball(goal)

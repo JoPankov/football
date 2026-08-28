@@ -1,7 +1,7 @@
 class_name AiCoach
 extends RefCounted
 
-## Greedy Helix planner. Queues up to 3 players × 2 AP on the current board.
+## Greedy Helix planner. Queues up to 3 players × 6 AP on the current board.
 ## Call only while model.current_team is the side to fill.
 
 const _MIN_KEEP := 0.4

@@ -189,16 +189,21 @@ static func dice_text(stat: int, roll: int) -> String:
 static func plan_summary(plan: Dictionary) -> String:
 	var action := str(plan.get("action", "act"))
 	var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+	var cost := int(plan.get("ap_cost", MatchRules.DEFAULT_ACTION_COST))
+	var core := ""
 	match action:
 		"pass":
-			return "pass → %s" % cell_text(dest)
+			core = "pass → %s" % cell_text(dest)
 		"shoot":
-			return "shoot at %s" % cell_text(dest)
+			var leftover := int(plan.get("ap_left", cost))
+			var bonus := int(round(MatchRules.shot_ap_bonus(leftover) * 100.0))
+			core = "shoot at %s (+%d%%)" % [cell_text(dest), bonus]
 		"swap":
-			return "swap → %s" % cell_text(dest)
+			core = "swap → %s" % cell_text(dest)
 		"dribble", "tackle", "challenge":
-			return "%s → %s" % [action, cell_text(dest)]
+			core = "%s → %s" % [action, cell_text(dest)]
 		"turn":
-			return "turn → %s" % cell_text(dest)
+			core = "turn → %s" % cell_text(dest)
 		_:
-			return "move → %s" % cell_text(dest)
+			core = "move → %s" % cell_text(dest)
+	return "%s  %d AP" % [core, cost]
