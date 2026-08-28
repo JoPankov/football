@@ -64,7 +64,7 @@ scenes/main.tscn
 | `project.godot` | Name, 1280×720, main scene, Forward Plus, dark clear color |
 | `scenes/main.tscn` | `Main` + `Pitch/Pieces/Ball` + `Camera2D` + `HUD` + `GameMenu` |
 | `scenes/player.tscn` | Hex/shield piece: number + role labels |
-| `scripts/match_rules.gd` | Grid, nets, offside, intercept geometry, 1dSTAT, shot formula |
+| `scripts/match_rules.gd` | Grid, nets, offside, intercept geometry / reach, 1dSTAT, shot formula |
 | `scripts/match_model.gd` | Kickoff, queries, queue, apply move/pass/swap/shoot/contest |
 | `scripts/turn_resolver.gd` | Simultaneous cycle; phase order; destination clashes |
 | `scripts/player_state.gd` | Id, team, role, pos, facing, printed + live stats, energy |
@@ -284,7 +284,7 @@ Pass destinations stored as a teammate `target_id` are resolved to that player�
 
 Computed in **tile space**. Segment = passer tile centre → target tile centre. An opponent intercepts if their 1-tile-radius circle touches the segment at `t > 0` (standing only next to the passer does not count). Teammates and the intended receiver never intercept.
 
-Order: increasing `t` along the pass. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). First failure steals.
+Order: increasing `t` along the pass. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). Intercept chance is then multiplied by `reach = 1 / (1 + INTERCEPT_DIST_K * dist)` (`INTERCEPT_DIST_K = 1`, so 1 tile off the lane keeps half). First failure steals — interceptor must win the dice and pass the reach roll.
 
 Landing: snap the closest point on the segment to a tile; if occupied, search nearby free tiles. Interceptor leaves their old cell empty.
 
@@ -432,7 +432,6 @@ Fix the player doc if you touch these; until then, **code + tests win**:
 | Opponent’s half | Aether `x ≥ 6`, Helix `x ≤ 5` | Aether `x >= 13`, Helix `x < 13` |
 | Helix penalty box | `(11, 2..4)` | `(17, 3) (17, 4) (17, 5)` |
 | Aether penalty box | `(0, 2..4)` | `(0, 3) (0, 4) (0, 5)` |
-| Intercept ties | “to the interceptor” in that section | Ties to the passer (team with the ball), matching the Contests section |
 
 ---
 
@@ -440,7 +439,7 @@ Fix the player doc if you touch these; until then, **code + tests win**:
 
 | You want to… | Start here |
 |---|---|
-| Change grid size, pass range, energy, AP pool, move costs, shot curve, intercept radius | `MatchRules` constants + tests |
+| Change grid size, pass range, energy, AP pool, move costs, shot curve, intercept radius / reach | `MatchRules` constants + tests |
 | Change kickoff shape or role stats | `Formation` |
 | Change when an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` |
 | Change what an action **does** | `MatchModel.apply_*` |

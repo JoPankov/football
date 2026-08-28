@@ -18,6 +18,8 @@ const ACTION_ENERGY_COST := 1
 const ENERGY_PER_STAMINA := 10
 const ENERGY_EMPTY_FACTOR := 0.5
 const INTERCEPT_RADIUS := 1.0
+## Off-lane intercept penalty: on the pass line is 1.0; 1 tile off is 1/(1+K).
+const INTERCEPT_DIST_K := 1.0
 const TILE_SIZE := 72.0
 const CENTER_Y := GRID_HEIGHT / 2
 const HALFWAY_X := GRID_WIDTH / 2
@@ -520,3 +522,15 @@ static func segment_intersects_circle(a: Vector2, b: Vector2, p: Vector2, radius
 	var along_lane: bool = hit.t > 0.0001
 	hit.hits = along_lane and hit.dist <= radius + 0.0001
 	return hit
+
+
+## Fraction of intercept chance kept at this distance from the pass segment.
+static func intercept_reach_factor(dist: float) -> float:
+	return 1.0 / (1.0 + INTERCEPT_DIST_K * maxf(0.0, dist))
+
+
+## Chance the passer beats this interceptor, including the off-lane reach penalty.
+static func intercept_through_chance(accuracy: int, defense: int, dist: float) -> float:
+	var through := contest_win_chance(accuracy, defense, true)
+	var intercept := (1.0 - through) * intercept_reach_factor(dist)
+	return 1.0 - intercept

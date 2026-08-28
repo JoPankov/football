@@ -187,11 +187,11 @@ When the carrier is selected and you hover a legal pass tile:
 - Standing only next to the passer (not along the lane) does not count.
 - Teammates and the intended receiver never intercept.
 
-Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass. Ties go to the interceptor.
+Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass. Ties go to the **passer**. Standing off the pass line then cuts intercept chance: `reach = 1 / (1 + dist)`, so a player 1 tile off the lane keeps **half** their intercept chance. They must win the dice **and** make the reach.
 
-- Preview lists each interceptor’s intercept / through chance.
+- Preview lists each interceptor’s intercept / through chance and how far they sit off the lane.
 - **Pass success** is the chance of beating every interceptor (independent rolls, multiplied).
-- First interceptor who wins: they **move to the cut-off tile** (nearest square to the point where their circle meets the pass line) and take the ball there. Their old tile is left empty.
+- First interceptor who wins the dice and makes the reach: they **move to the cut-off tile** (nearest square to the point where their circle meets the pass line) and take the ball there. Their old tile is left empty.
 - If that landing square is occupied, they take the closest free square to the intercept point.
 - If every interceptor fails, the pass arrives as planned — unless the receiver is offside, in which case the offside restart happens instead.
 

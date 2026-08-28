@@ -688,6 +688,24 @@ func _test_intercepts() -> void:
 	_assert(not miss.hits, "just outside the radius does not intercept")
 	var beside_start := MatchRules.segment_intersects_circle(Vector2(0, 0), Vector2(4, 0), Vector2(0, 1), radius)
 	_assert(not beside_start.hits, "player only next to the passer does not intercept")
+	_assert(is_equal_approx(MatchRules.intercept_reach_factor(0.0), 1.0), "on the lane keeps full intercept chance")
+	_assert(
+		is_equal_approx(MatchRules.intercept_reach_factor(1.0), 0.5),
+		"1 tile off the lane keeps half intercept chance"
+	)
+	_assert(
+		MatchRules.intercept_reach_factor(0.5) > MatchRules.intercept_reach_factor(1.0),
+		"reach falls as the interceptor sits further off the lane"
+	)
+	var on_lane := MatchRules.intercept_through_chance(16, 8, 0.0)
+	var off_lane := MatchRules.intercept_through_chance(16, 8, 1.0)
+	var raw_through := MatchRules.contest_win_chance(16, 8, true)
+	_assert(is_equal_approx(on_lane, raw_through), "on-lane through chance is the raw ACC vs DEF contest")
+	_assert(off_lane > on_lane, "1 tile off the lane is easier to pass through")
+	_assert(
+		is_equal_approx(1.0 - off_lane, (1.0 - on_lane) * MatchRules.intercept_reach_factor(1.0)),
+		"off-lane intercept chance is scaled by reach"
+	)
 
 	var model := MatchModel.new()
 	model.setup_kickoff()
@@ -695,8 +713,24 @@ func _test_intercepts() -> void:
 	var lane := _spot(3, 0)
 	var threats := model.interceptors_for_pass(st, lane)
 	_assert(threats.size() >= 2, "a lane through midfield has interceptors")
+	for threat in threats:
+		var expected := MatchRules.intercept_through_chance(
+			st.live_accuracy(), threat.player.live_defense(), float(threat.dist)
+		)
+		_assert(
+			is_equal_approx(float(threat.through), expected),
+			"threat through chance includes the off-lane penalty"
+		)
+		if float(threat.dist) > 0.05:
+			_assert(
+				float(threat.through) > MatchRules.contest_win_chance(
+					st.live_accuracy(), threat.player.live_defense(), true
+				),
+				"off-lane interceptor is easier to beat than the raw contest"
+			)
 	var preview := model.pass_preview(st, lane)
 	_assert(preview.text.contains("ACC vs"), "preview lists ACC vs DEF")
+	_assert(preview.text.contains("tiles off"), "preview shows distance off the lane")
 	_assert(preview.text.contains("Pass success:"), "preview shows total pass success")
 	_assert(
 		preview.text.contains("intercept") or preview.total < 1.0,
@@ -721,6 +755,39 @@ func _test_intercepts() -> void:
 	var done := clean.apply_pass_to(kicker.id, lane)
 	_assert(not done.get("intercepted", false), "beating every interceptor completes the pass")
 	_assert(clean.ball.is_loose() and clean.ball.pos == lane, "completed pass still lands on the square")
+
+	var spaced := MatchModel.new()
+	spaced.setup_kickoff()
+	var passer := spaced.player_at(MatchRules.CENTER_SPOT)
+	var dest := Vector2i(passer.pos.x + 3, passer.pos.y)
+	var park_y := 0
+	var helix: Array[PlayerState] = []
+	for player in spaced.players:
+		if player.team != MatchRules.Team.AWAY or player.role == "GK":
+			continue
+		helix.append(player)
+		player.pos = Vector2i(MatchRules.GRID_WIDTH - 1, park_y)
+		park_y += 1
+	_assert(helix.size() >= 2, "helix field players exist to place on and off the lane")
+	var on_player: PlayerState = helix[0]
+	var off_player: PlayerState = helix[1]
+	on_player.defense = 8
+	off_player.defense = 8
+	on_player.energy = on_player.max_energy
+	off_player.energy = off_player.max_energy
+	on_player.pos = Vector2i(passer.pos.x + 2, passer.pos.y)
+	off_player.pos = Vector2i(passer.pos.x + 2, passer.pos.y + 1)
+	var placed := spaced.interceptors_for_pass(passer, dest)
+	_assert(placed.size() == 2, "only the two placed helix players threaten the pass")
+	var on_first := float(placed[0].dist) < float(placed[1].dist)
+	var on_threat: Dictionary = placed[0] if on_first else placed[1]
+	var off_threat: Dictionary = placed[1] if on_first else placed[0]
+	_assert(is_equal_approx(float(on_threat.dist), 0.0), "on-lane interceptor sits on the pass")
+	_assert(is_equal_approx(float(off_threat.dist), 1.0), "off-lane interceptor sits 1 tile off")
+	_assert(
+		int(off_threat.intercept_percent) < int(on_threat.intercept_percent),
+		"same DEF intercepts less often from 1 tile off the lane"
+	)
 
 
 func _test_swap_and_choice() -> void:

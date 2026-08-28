@@ -850,12 +850,16 @@ func interceptors_for_pass(passer: PlayerState, dest: Vector2i) -> Array[Diction
 		)
 		if not hit.hits:
 			continue
-		var through := MatchRules.contest_win_chance(passer.live_accuracy(), player.live_defense(), true)
+		var dist := float(hit.dist)
+		var through := MatchRules.intercept_through_chance(
+			passer.live_accuracy(), player.live_defense(), dist
+		)
 		found.append({
 			player = player,
 			player_id = player.id,
 			t = hit.t,
-			dist = hit.dist,
+			dist = dist,
+			reach = MatchRules.intercept_reach_factor(dist),
 			closest = hit.closest,
 			through = through,
 			through_percent = int(round(through * 100.0)),
@@ -872,10 +876,11 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 	for threat in threats:
 		total *= float(threat.through)
 		lines.append(
-			"%s: %d ACC vs %d DEF = %d%% intercept (%d%% through)" % [
+			"%s: %d ACC vs %d DEF, %.1f tiles off = %d%% intercept (%d%% through)" % [
 				threat.player.label(),
 				passer.live_accuracy(),
 				threat.player.live_defense(),
+				float(threat.dist),
 				threat.intercept_percent,
 				threat.through_percent,
 			]
@@ -1010,6 +1015,9 @@ func _resolve_pass_intercepts(passer: PlayerState, dest: Vector2i) -> Dictionary
 			true
 		)
 		if not roll.attacker_won:
+			var reach := MatchRules.intercept_reach_factor(float(threat.dist))
+			if rng.randf() >= reach:
+				continue
 			return {
 				intercepted = true,
 				player = threat.player,

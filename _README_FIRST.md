@@ -168,7 +168,7 @@ HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markin
 
 | You want to… | Start here |
 |---|---|
-| Grid size, pass range, energy, shot curve, intercept radius, facing cones | `MatchRules` + tests |
+| Grid size, pass range, energy, shot curve, intercept radius / reach, facing cones | `MatchRules` + tests |
 | Kickoff shape or role stats | `Formation` |
 | When an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` / `can_queue` |
 | What an action **does** | `MatchModel.apply_*` |

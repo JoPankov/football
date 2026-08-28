@@ -645,10 +645,11 @@ func _pass_forecast_text(passer: PlayerState, preview: Dictionary) -> String:
 		var player: PlayerState = threat.get("player", null)
 		var name := player.label() if player != null else "interceptor"
 		bits.append(
-			"%s: %d ACC vs %d DEF = %d%% intercept (%d%% through)" % [
+			"%s: %d ACC vs %d DEF, %.1f tiles off = %d%% intercept (%d%% through)" % [
 				name,
 				passer.live_accuracy() if passer != null else 0,
 				player.live_defense() if player != null else 0,
+				float(threat.get("dist", 0.0)),
 				int(threat.get("intercept_percent", 0)),
 				int(threat.get("through_percent", 0)),
 			]
