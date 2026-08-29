@@ -97,7 +97,7 @@ Constants live on `MatchRules`.
 - `in_bounds` = pitch tile **or** a net. Cells like `(-1, 0)` are dead.
 - Distance is **Chebyshev** `max(|dx|, |dy|)`. A move is exactly 1 (8 directions).
 - Pass range is **Euclidean**: `MatchRules.in_pass_range` is cell-centre distance `<= PASS_RANGE` (5 tile lengths). The highlight is a circle, not a Chebyshev square.
-- `PlayerState.facing` is one of those 8 dirs. Kickoff: Aether `(1, 0)`, Helix `(-1, 0)`. `PlayerState.relocate` writes facing from the step.
+- `PlayerState.facing` is one of those 8 dirs. Kickoff: Aether `(1, 0)`, Helix `(-1, 0)`. `PlayerState.relocate` writes facing from the step. `turn_facings` is the other 7 dirs. `turn_ap_cost` is 1 AP for 1–2 ring steps (45°/90°) and 2 AP for 3–4 (135°/180°). `action_ap_cost(..., facing)` needs the current facing for turns.
 - `move_destinations(from, blocked, facing)` drops the one square **directly behind** `facing`. `facing == ZERO` skips that filter (geometry-only callers).
 - Back pass: `is_back_pass` is the rear cone, directly back ± `BACK_PASS_HALF_ANGLE_DEG` (43). Adjacent cells are never back passes.
 - Keepers start **in the net**. From a net, `move_destinations` yields the **3** adjacent pitch tiles (diagonals + forward). The old goal-line square in front of the net is empty at kickoff.
@@ -172,7 +172,7 @@ Walking onto a loose ball takes it. Walking the ball onto the **opponent net** i
 {
   player_id, team, action, dest, target_id, origin, label,
   ap_index,       # sequence of this action for this player (0, 1, …)
-  ap_cost,        # 2 ortho / 3 diagonal / 1 turn-pass / leftover for shoot
+  ap_cost,        # 2 ortho / 3 diagonal / 1–2 turn / 1 pass / leftover for shoot
   ap_end,         # cumulative AP after this action = resolve wave (1..6)
   ap_left,        # remaining AP before this action (shot hit bonus)
   expects_ball    # true if this pass/shoot/dribble is planned off a pass or a collect
@@ -180,7 +180,7 @@ Walking onto a loose ball takes it. Walking the ball onto the **opponent net** i
 }
 ```
 
-Action ids: `move`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`, `done`.
+Action ids: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`, `done`.
 
 Rules of a queue:
 
@@ -232,7 +232,7 @@ Pass: `apply_pass_to`. Intercepts first (see below), then offside, then give or 
 
 Swap: adjacent teammate only. Carrier keeps the ball and it follows them.
 
-Shoot: `apply_shoot(player_id, remaining_ap)`. Hit roll against `shot_hit_chance` (Gaussian/erf base plus **+3 percentage points per leftover AP**, clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter). The shot spends every leftover AP and ends that player’s planning. Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff).
+Shoot: `apply_shoot(player_id, remaining_ap)`. Intercepts first (`_resolve_pass_intercepts` on shooter → opponent net, same as a pass; the keeper in the net is the dest occupant so they do not intercept). If stolen, interceptor cuts to the landing and takes the ball (`intercepted`, no hit roll). Else hit roll against `shot_hit_chance` (Gaussian/erf base plus **+3 percentage points per leftover AP**, clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter). The shot spends every leftover AP and ends that player’s planning. Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff). `shot_preview.goal_chance` is `through × hit × (1 − save)`. Hovering the net with Shoot selected draws the pass lane and intercept circles.
 
 ### Dice
 
@@ -291,13 +291,13 @@ Pass destinations stored as a teammate `target_id` are resolved to that player�
 
 ## Intercepts
 
-Computed in **tile space**. Segment = passer tile centre → target tile centre. An opponent intercepts if their 1-tile-radius circle touches the segment at `t > 0` (standing only next to the passer does not count). Teammates and the intended receiver never intercept.
+Computed in **tile space**. Segment = passer / shooter tile centre → target tile centre. Shots reuse `interceptors_for_pass` / `_resolve_pass_intercepts` with dest = opponent net. An opponent intercepts if their 1-tile-radius circle touches the segment at `t > 0` (standing only next to the passer does not count). Teammates and the intended receiver never intercept. A keeper standing in the net is that dest occupant, so they save rather than intercept.
 
-Order: increasing `t` along the pass. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). Intercept chance is then multiplied by `reach = 1 / (1 + INTERCEPT_DIST_K * dist)` (`INTERCEPT_DIST_K = 1`, so 1 tile off the lane keeps half). First failure steals — interceptor must win the dice and pass the reach roll.
+Order: increasing `t` along the lane. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). Intercept chance is then multiplied by `reach = 1 / (1 + INTERCEPT_DIST_K * dist)` (`INTERCEPT_DIST_K = 1`, so 1 tile off the lane keeps half). First failure steals — interceptor must win the dice and pass the reach roll.
 
 Landing: snap the closest point on the segment to a tile; if occupied, search nearby free tiles. Interceptor leaves their old cell empty.
 
-`scripted_first_intercept_wins == false` means “beat every interceptor”, not “only beat the first”.
+`scripted_first_intercept_wins == false` means “beat every interceptor”, not “only beat the first”. It applies to shots as well as passes.
 
 ---
 
@@ -339,7 +339,7 @@ HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plan
 **Input**
 
 - Left click cell → `handle_cell_clicked`.
-- Right click / Esc: cancel pending command, then deselect, then open pause menu.
+- Right click adjacent cell of the selected player → queue `turn` (`handle_cell_right_clicked`). 1 AP up to 90°, 2 AP for 135°/180°. Otherwise cancel pending command, then deselect. Esc: cancel pending command, then deselect, then open pause menu.
 - Enter / Space: `end_planning`. Space is taken in `_input` so a focused action button cannot steal it.
 - 1–9 / keypad: Nth button currently shown in `commands_for` (not a fixed action map).
 
@@ -347,7 +347,7 @@ HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plan
 
 Why not “click the tile then pick Move/Pass”? One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). The old chooser is still in the HUD (`show_choices`) and `_open_choice` still exists on the controller, but **nothing calls `_open_choice`**. Do not revive it without wiring; current tests assume command-then-tile.
 
-Highlight colours (pitch): green walk, amber contest, blue pass, red offside pass, purple swap (`choice_cells` reused for this), gold shot.
+Highlight colours (pitch): green walk, white turn, amber contest, blue pass, red offside pass, purple swap (`choice_cells` reused for this), gold shot. Pass hover and Shoot-on-net hover share `set_pass_preview` (lane + intercept circles). Right-click queues a turn even when Move is armed (a 45° cell is both a walk and a turn).
 
 Selecting a **planned** player twice clears their plan (`clear_plan`) so you can pick someone else before the third action locks.
 
@@ -399,7 +399,7 @@ If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._ap
 
 `tests/run_tests.gd` extends `SceneTree`, `call_deferred("_run")`, `quit(0|1)`.
 
-It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside/shoot, full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan.
+It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside/shoot (including shot intercepts), full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan.
 
 Controller tests instantiate `main.tscn`, set `animate_moves = false`, and often `queue_free()` the instance. They reach into HUD private fields (`_end_turn`, `_forecast`) — ugly but load-bearing.
 
@@ -436,7 +436,7 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 
 | You want to… | Start here |
 |---|---|
-| Change grid size, pass range, energy, AP pool, move costs, shot curve, intercept radius / reach, tackle angle penalties | `MatchRules` constants + tests |
+| Change grid size, pass range, energy, AP pool, move costs, turn costs, shot curve, intercept radius / reach, tackle angle penalties | `MatchRules` constants + tests |
 | Change kickoff shape or role stats | `Formation` |
 | Change when an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` |
 | Change what an action **does** | `MatchModel.apply_*` |

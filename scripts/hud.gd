@@ -137,14 +137,33 @@ func _hint_for(
 				possession
 			)
 			return "%s  (%d AP)" % [contest.text, model.action_cost_for(selected, pending_action, hover_cell)]
+	var turn_dest := (
+		selected != null
+		and hover_cell in model.command_dests(selected, "turn")
+	)
+	var turn_cost := (
+		model.action_cost_for(selected, "turn", hover_cell) if turn_dest else 0
+	)
 	if pending_action in ["move", "swap"] and selected != null and hover_cell in model.command_dests(selected, pending_action):
-		return "Click to queue %s for %s (%d AP). Right-click or Esc cancels." % [
+		if turn_dest:
+			return "Click to queue %s for %s (%d AP). Right-click to turn (%d AP)." % [
+				pending_action.to_upper(),
+				selected.label(),
+				model.action_cost_for(selected, pending_action, hover_cell),
+				turn_cost,
+			]
+		return "Click to queue %s for %s (%d AP). Right-click an adjacent tile to turn. Esc cancels." % [
 			pending_action.to_upper(),
 			selected.label(),
 			model.action_cost_for(selected, pending_action, hover_cell),
 		]
+	if turn_dest:
+		return "Click or right-click to turn %s that way (%d AP). Esc cancels." % [
+			selected.label(),
+			turn_cost,
+		]
 	if selected != null and pending_action != "":
-		return "Click a highlighted tile to queue %s for %s (%d/%d AP). Right-click or Esc cancels." % [
+		return "Click a highlighted tile to queue %s for %s (%d/%d AP). Right-click an adjacent tile to turn (1–2 AP). Esc cancels." % [
 			pending_action.to_upper(),
 			selected.label(),
 			model.ap_remaining(selected.id),
@@ -153,7 +172,7 @@ func _hint_for(
 	if selected != null and model.player_is_done(selected.id):
 		return "%s is done this turn. Click them twice to clear their plan." % selected.label()
 	if selected != null:
-		return "Pick an action for %s (%d/%d AP), then click a highlighted tile. Keys 1–9 select actions. Done parks leftover AP." % [
+		return "Pick an action for %s (%d/%d AP), then click a highlighted tile. Right-click an adjacent tile to turn (1 AP up to 90°, 2 AP for 135°/180°). Keys 1–9 select actions. Done parks leftover AP." % [
 			selected.label(),
 			model.ap_remaining(selected.id),
 			MatchRules.PLAYER_ACTION_POINTS,
@@ -632,7 +651,7 @@ func _show_forecast(
 	pending_action: String = ""
 ) -> void:
 	if pending_action == "shoot" and selected != null and hover_cell == MatchRules.opponent_goal(selected.team):
-		_forecast_label.text = _shot_forecast_text(model.shot_preview(selected))
+		_forecast_label.text = _shot_forecast_text(selected, model.shot_preview(selected))
 		_forecast.visible = true
 		return
 	if pending_action == "pass" and selected != null and model.can_plan_pass_to_cell(selected, hover_cell):
@@ -642,17 +661,38 @@ func _show_forecast(
 	_forecast.visible = false
 
 
-func _shot_forecast_text(preview: Dictionary) -> String:
-	return "%s\nd = %.2f tiles (%.1f m)   θ = %.0f°   leftover AP %d (+%d%%)   hit %d%%   save %d%%" % [
-		str(preview.get("header", "shoot")),
-		float(preview.get("distance", 0.0)),
-		float(preview.get("distance_m", 0.0)),
-		float(preview.get("angle_deg", 0.0)),
-		int(preview.get("remaining_ap", 0)),
-		int(round(float(preview.get("leftover_bonus", 0.0)) * 100.0)),
-		int(round(float(preview.get("hit_chance", 0.0)) * 100.0)),
-		int(round(float(preview.get("save_chance", 0.0)) * 100.0)),
+func _shot_forecast_text(shooter: PlayerState, preview: Dictionary) -> String:
+	var bits: PackedStringArray = [
+		"%s   d = %.2f tiles (%.1f m)   θ = %.0f°   leftover AP %d (+%d%%)   hit %d%%   save %d%%" % [
+			str(preview.get("header", "shoot")),
+			float(preview.get("distance", 0.0)),
+			float(preview.get("distance_m", 0.0)),
+			float(preview.get("angle_deg", 0.0)),
+			int(preview.get("remaining_ap", 0)),
+			int(round(float(preview.get("leftover_bonus", 0.0)) * 100.0)),
+			int(round(float(preview.get("hit_chance", 0.0)) * 100.0)),
+			int(round(float(preview.get("save_chance", 0.0)) * 100.0)),
+		]
 	]
+	var threats: Array = preview.get("threats", [])
+	for threat in threats:
+		var player: PlayerState = threat.get("player", null)
+		var name := player.label() if player != null else "interceptor"
+		bits.append(
+			"%s: %d ACC vs %d DEF, %.1f tiles off = %d%% intercept (%d%% through)" % [
+				name,
+				shooter.live_accuracy() if shooter != null else 0,
+				player.live_defense() if player != null else 0,
+				float(threat.get("dist", 0.0)),
+				int(threat.get("intercept_percent", 0)),
+				int(threat.get("through_percent", 0)),
+			]
+		)
+	if threats.is_empty():
+		bits.append("No interceptors.")
+	else:
+		bits.append("Through: %d%%" % int(preview.get("through_percent", 100)))
+	return "   ·   ".join(bits)
 
 
 func _pass_forecast_text(passer: PlayerState, preview: Dictionary) -> String:

@@ -116,6 +116,15 @@ static func format_result(event: Dictionary) -> String:
 			cell_text(event.get("dest", Vector2i.ZERO)),
 			event.get("winner_label", "winner"),
 		]
+	if event.get("intercepted", false):
+		return "INTERCEPT  %s %s %s  vs  %s %s %s" % [
+			event.get("attacker_label", "passer"),
+			event.get("attacker_stat_name", "ACC"),
+			dice_text(event.get("attacker_stat", 0), event.get("attacker_dice", 0)),
+			event.get("defender_label", "interceptor"),
+			event.get("defender_stat_name", "DEF"),
+			dice_text(event.get("defender_stat", 0), event.get("defender_dice", 0)),
+		]
 	if event.get("goal", false) and action != "shoot":
 		return "GOAL  walked in  %d—%d" % [event.get("home_score", 0), event.get("away_score", 0)]
 	if action == "shoot":
@@ -134,15 +143,6 @@ static func format_result(event: Dictionary) -> String:
 			event.get("taker_label", "defender"),
 		]
 	if action == "pass":
-		if event.get("intercepted", false):
-			return "INTERCEPT  %s %s %s  vs  %s %s %s" % [
-				event.get("attacker_label", "passer"),
-				event.get("attacker_stat_name", "ACC"),
-				dice_text(event.get("attacker_stat", 0), event.get("attacker_dice", 0)),
-				event.get("defender_label", "interceptor"),
-				event.get("defender_stat_name", "DEF"),
-				dice_text(event.get("defender_stat", 0), event.get("defender_dice", 0)),
-			]
 		return "PASS  %s  →  %s" % [
 			event.get("attacker_label", "passer"),
 			event.get("defender_label", "receiver"),

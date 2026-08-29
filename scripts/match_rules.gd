@@ -15,6 +15,8 @@ const PLAYER_ACTION_POINTS := 6
 const DEFAULT_ACTION_COST := 1
 const MOVE_ORTHO_COST := 2
 const MOVE_DIAG_COST := 3
+## One AP turns up to this many 45° ring steps (90°). 135° and 180° cost 2 AP.
+const TURN_STEPS_PER_AP := 2
 const ACTION_ENERGY_COST := 1
 const ENERGY_PER_STAMINA := 10
 const ENERGY_EMPTY_FACTOR := 0.5
@@ -232,17 +234,41 @@ static func step_ap_cost(from: Vector2i, to: Vector2i) -> int:
 	return MOVE_ORTHO_COST
 
 
-## Shoot spends every leftover AP. Done costs 0. Steps cost 2 orthogonal / 3 diagonal. Else 1.
+## Shortest 45° steps between two facings, 0 through 4.
+static func facing_steps(from_facing: Vector2i, to_facing: Vector2i) -> int:
+	var a := facing_index(from_facing)
+	var b := facing_index(to_facing)
+	var n := FACING_RING.size()
+	var delta := absi(a - b)
+	return mini(delta, n - delta)
+
+
+## 1 AP for 45°/90°, 2 AP for 135°/180°. Current facing and zero vectors are illegal.
+static func turn_ap_cost(from_facing: Vector2i, to_facing: Vector2i) -> int:
+	var wanted := normalize_facing(to_facing)
+	if wanted == Vector2i.ZERO:
+		return PLAYER_ACTION_POINTS + 1
+	var steps := facing_steps(from_facing, wanted)
+	if steps <= 0:
+		return PLAYER_ACTION_POINTS + 1
+	return ceili(float(steps) / float(TURN_STEPS_PER_AP))
+
+
+## Shoot spends every leftover AP. Done costs 0. Steps cost 2 orthogonal / 3 diagonal.
+## Turn costs 1 AP up to 90°, 2 AP for 135°/180°. Else 1.
 static func action_ap_cost(
 	action_id: String,
 	from: Vector2i,
 	to: Vector2i,
-	remaining_ap: int
+	remaining_ap: int,
+	facing: Vector2i = Vector2i.ZERO
 ) -> int:
 	if action_id == "done":
 		return 0
 	if action_id == "shoot":
 		return maxi(1, remaining_ap)
+	if action_id == "turn":
+		return turn_ap_cost(facing, step_direction(from, to))
 	if action_id in STEP_ACTIONS:
 		return step_ap_cost(from, to)
 	return DEFAULT_ACTION_COST
@@ -334,14 +360,12 @@ static func move_facings(facing: Vector2i) -> Array[Vector2i]:
 	]
 
 
-## 45° and 90° either side, not current facing: four turn directions (180° takes two turns).
+## All 7 other facings. 45°/90° cost 1 AP; 135°/180° cost 2 AP.
 static func turn_facings(facing: Vector2i) -> Array[Vector2i]:
-	return [
-		rotate_facing(facing, -2),
-		rotate_facing(facing, -1),
-		rotate_facing(facing, 1),
-		rotate_facing(facing, 2),
-	]
+	var result: Array[Vector2i] = []
+	for steps in range(1, FACING_RING.size()):
+		result.append(rotate_facing(facing, steps))
+	return result
 
 
 static func is_move_step(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool:

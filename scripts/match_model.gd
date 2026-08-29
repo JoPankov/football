@@ -202,7 +202,11 @@ func action_cost_for(player: PlayerState, action_id: String, dest: Vector2i) -> 
 	if player == null:
 		return MatchRules.PLAYER_ACTION_POINTS + 1
 	return MatchRules.action_ap_cost(
-		action_id, _query_pos(player), dest, ap_remaining(player.id)
+		action_id,
+		_query_pos(player),
+		dest,
+		ap_remaining(player.id),
+		_query_facing(player)
 	)
 
 
@@ -302,7 +306,9 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 	var dest: Vector2i = action.get("dest", _query_pos(player))
 	var origin := _query_pos(player)
 	var remaining := ap_remaining(player_id)
-	var cost := MatchRules.action_ap_cost(action_id, origin, dest, remaining)
+	var cost := MatchRules.action_ap_cost(
+		action_id, origin, dest, remaining, _query_facing(player)
+	)
 	if cost > remaining:
 		return {ok = false, reason = "not_enough_ap"}
 	var ap_index := plans_of(player_id).size()
@@ -763,7 +769,12 @@ func shot_preview(player: PlayerState, remaining_ap: int = -1) -> Dictionary:
 	var save := 0.0
 	if keeper_in_net:
 		save = 1.0 - MatchRules.contest_win_chance(acc, keeper.live_defense(), true)
-	var goal_p := hit * (1.0 - save)
+	var threats := interceptors_for_pass(player, goal)
+	var through := 1.0
+	for threat in threats:
+		through *= float(threat.through)
+	var through_pct := int(round(through * 100.0))
+	var goal_p := through * hit * (1.0 - save)
 	var lines: PackedStringArray = []
 	lines.append("SHOOT at %s net" % MatchRules.team_name(MatchRules.opposite_team(player.team)))
 	lines.append(
@@ -786,7 +797,36 @@ func shot_preview(player: PlayerState, remaining_ap: int = -1) -> Dictionary:
 		lines.append("save = P(keeper 1dDEF > ACC 1dACC) = %d%%" % int(round(save * 100.0)))
 	else:
 		lines.append("save = 0% (no keeper in the net)")
-	lines.append("goal = hit × (1 − save) = %d%%" % int(round(goal_p * 100.0)))
+	if threats.is_empty():
+		lines.append("through = 100% (no interceptors)")
+	else:
+		for threat in threats:
+			lines.append(
+				"%s: %d ACC vs %d DEF, %.1f tiles off = %d%% intercept (%d%% through)" % [
+					threat.player.label(),
+					acc,
+					threat.player.live_defense(),
+					float(threat.dist),
+					threat.intercept_percent,
+					threat.through_percent,
+				]
+			)
+		lines.append("through = %d%%" % through_pct)
+	lines.append("goal = through × hit × (1 − save) = %d%%" % int(round(goal_p * 100.0)))
+	var header := "shoot  +%d%% AP  goal %d%%  (hit %d%%, save %d%%)" % [
+		leftover_pct,
+		int(round(goal_p * 100.0)),
+		int(round(hit * 100.0)),
+		int(round(save * 100.0)),
+	]
+	if not threats.is_empty():
+		header = "shoot  +%d%% AP  goal %d%%  (hit %d%%, save %d%%, through %d%%)" % [
+			leftover_pct,
+			int(round(goal_p * 100.0)),
+			int(round(hit * 100.0)),
+			int(round(save * 100.0)),
+			through_pct,
+		]
 	return {
 		goal = goal,
 		distance = geo.distance,
@@ -798,16 +838,14 @@ func shot_preview(player: PlayerState, remaining_ap: int = -1) -> Dictionary:
 		hit_chance = hit,
 		save_chance = save,
 		goal_chance = goal_p,
+		through = through,
+		through_percent = through_pct,
+		threats = threats,
 		keeper_in_net = keeper_in_net,
 		remaining_ap = remaining_ap,
 		leftover_bonus = leftover_bonus,
 		text = "\n".join(lines),
-		header = "shoot  +%d%% AP  goal %d%%  (hit %d%%, save %d%%)" % [
-			leftover_pct,
-			int(round(goal_p * 100.0)),
-			int(round(hit * 100.0)),
-			int(round(save * 100.0)),
-		],
+		header = header,
 	}
 
 
@@ -876,6 +914,8 @@ func apply_turn(player_id: int, dest: Vector2i) -> Dictionary:
 	})
 
 
+## Opponents whose intercept circle touches passer→dest. Shots reuse this with dest = opponent net.
+## The occupant of dest never intercepts (pass receiver, or the keeper standing in the net).
 func interceptors_for_pass(passer: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 	var found: Array[Dictionary] = []
 	if passer == null:
@@ -1134,8 +1174,45 @@ func apply_shoot(player_id: int, remaining_ap: int = -1) -> Dictionary:
 	remaining_ap = _shot_remaining_ap(player, remaining_ap)
 	if not can_shoot(player, remaining_ap):
 		return {ok = false, reason = "illegal_shot"}
-	var preview := shot_preview(player, remaining_ap)
 	var goal := MatchRules.opponent_goal(player.team)
+	var intercept := _resolve_pass_intercepts(player, goal)
+	if intercept.get("intercepted", false):
+		var thief: PlayerState = intercept.player
+		var landing: Vector2i = intercept.landing
+		var from_tile := thief.pos
+		thief.relocate(landing)
+		_give_ball(thief)
+		return _finish_action(player, {
+			ok = true,
+			action = "shoot",
+			intercepted = true,
+			player_id = player_id,
+			receiver_id = thief.id,
+			interceptor_id = thief.id,
+			dest = landing,
+			interceptor_from = from_tile,
+			origin = player.pos,
+			hit = false,
+			saved = false,
+			goal = false,
+			reset = false,
+			gained_possession = false,
+			lost_possession = true,
+			home_score = home_score,
+			away_score = away_score,
+			attacker_label = player.label(),
+			defender_label = thief.label(),
+			attacker_stat_name = "ACC",
+			defender_stat_name = "DEF",
+			attacker_stat = player.live_accuracy(),
+			defender_stat = thief.live_defense(),
+			attacker_dice = intercept.attacker_dice,
+			defender_dice = intercept.defender_dice,
+			attacker_total = intercept.attacker_total,
+			defender_total = intercept.defender_total,
+			remaining_ap = remaining_ap,
+		})
+	var preview := shot_preview(player, remaining_ap)
 	var hit: bool = rng.randf() < float(preview.hit_chance)
 	var saved: bool = false
 	if scripted_shot_outcome == "miss":

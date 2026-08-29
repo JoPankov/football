@@ -23,8 +23,8 @@ Every player has four stats plus an **energy** pool. Hover or select a player to
 
 | Stat | Used for |
 |---|---|
-| **ACC** | Completing a pass against interceptors; hitting a shot |
-| **DEF** | Stopping a dribble; tackling the carrier; intercepting a pass |
+| **ACC** | Completing a pass or shot against interceptors; hitting a shot |
+| **DEF** | Stopping a dribble; tackling the carrier; intercepting a pass or shot |
 | **CTR** | Dribbling; holding the ball when tackled; fighting for an empty square |
 | **STA** | Size of the energy pool |
 
@@ -53,7 +53,7 @@ Kickoff values by role:
 4. Repeat for up to **3 different players**, **6 AP** each. Gold pips around a piece show leftover AP after that player has spent at least one point. A gold ring marks a planned player; arrows show their queued steps.
 5. Filling **all 6 AP on 3 players**, or marking those players **Done**, ends the turn automatically. **Done** parks leftover AP and a mint check shows they are finished. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
 6. After Helix’s turn ends, all queued actions resolve in **six AP waves**. A 2-AP first step plays in wave 2; a later 2-AP step on the same player plays in wave 4. The match log lists every public event and roll.
-7. Click a planned player twice to clear their actions and pick someone else. Right-click or Escape cancels the current action, then the selection; Escape with nothing selected opens the menu.
+7. Click a planned player twice to clear their actions and pick someone else. **Right-click an adjacent tile** to turn toward it (1 AP up to 90°, 2 AP for 135°/180°) without picking Turn first. Right-click anywhere else, or Escape, cancels the current action, then the selection; Escape with nothing selected opens the menu.
 
 You cannot pick a fourth player.
 
@@ -84,10 +84,11 @@ Highlights (after you pick an action):
 
 ### Turn
 
-- Costs **1 AP**. Face a new direction without leaving the square.
-- Four options: **45° and 90°** either side of current facing (not straight ahead, not 135°/180°).
-- A **180°** reverse takes **two** turns (two AP).
-- Click the adjacent tile in the direction you want to face. You do not move there.
+- Face a new direction without leaving the square.
+- Click (or **right-click**) any adjacent tile. You do not move there. Straight ahead is not a turn.
+- **1 AP** turns you up to **90°** (45° or 90° either side).
+- **2 AP** turns you **135° or 180°**.
+- You cannot queue a turn you cannot afford. With 1 AP left you can still face 45°/90°, but not 135°/180°.
 
 ### Done
 
@@ -161,7 +162,7 @@ Highlights (after you pick an action):
 
 ## Simultaneous resolution
 
-Actions are planned against the current board, then resolve in **six waves**, one per action point. Each action plays in the wave equal to the cumulative AP that player has spent when that action finishes. A first action that costs 2 AP plays in wave 2; a first action that costs 3 AP plays in wave 3; a second 2-AP action on the same player plays in wave 4. Wave 1 is empty unless someone queued a 1-AP action (turn or pass). Empty waves are skipped.
+Actions are planned against the current board, then resolve in **six waves**, one per action point. Each action plays in the wave equal to the cumulative AP that player has spent when that action finishes. A first action that costs 2 AP plays in wave 2; a first action that costs 3 AP plays in wave 3; a second 2-AP action on the same player plays in wave 4. Wave 1 is empty unless someone queued a 1-AP action (a 45°/90° turn or a pass). A 2-AP 135°/180° turn plays in wave 2. Empty waves are skipped.
 
 Example: Aether queues a 2-AP step then another 2-AP step. Helix queues a 3-AP step.
 
@@ -211,20 +212,20 @@ Hover an offside teammate to see the restart. Those tiles highlight **red**. The
 
 ## Intercepts
 
-When the carrier is selected and you hover a legal pass tile:
+When the carrier is selected and you hover a legal **pass** tile, or hover the opponent net with **Shoot** selected:
 
-- A line is drawn from passer centre to target centre.
+- A line is drawn from passer / shooter centre to target centre.
 - Opponents whose **1-tile radius** circle the line **crosses or touches** can intercept.
 - Standing only next to the passer (not along the lane) does not count.
-- Teammates and the intended receiver never intercept.
+- Teammates and the intended receiver never intercept. On a shot, a keeper standing **in the net** is that occupant — they do not intercept; they save if the ball arrives.
 
-Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass. Ties go to the **passer**. Standing off the pass line then cuts intercept chance: `reach = 1 / (1 + dist)`, so a player 1 tile off the lane keeps **half** their intercept chance. They must win the dice **and** make the reach.
+Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass or shot. Ties go to the **passer / shooter**. Standing off the line then cuts intercept chance: `reach = 1 / (1 + dist)`, so a player 1 tile off the lane keeps **half** their intercept chance. They must win the dice **and** make the reach.
 
 - Preview lists each interceptor’s intercept / through chance and how far they sit off the lane.
-- **Pass success** is the chance of beating every interceptor (independent rolls, multiplied).
-- First interceptor who wins the dice and makes the reach: they **move to the cut-off tile** (nearest square to the point where their circle meets the pass line) and take the ball there. Their old tile is left empty.
+- **Pass success** (or shot **through**) is the chance of beating every interceptor (independent rolls, multiplied).
+- First interceptor who wins the dice and makes the reach: they **move to the cut-off tile** (nearest square to the point where their circle meets the line) and take the ball there. Their old tile is left empty.
 - If that landing square is occupied, they take the closest free square to the intercept point.
-- If every interceptor fails, the pass arrives as planned — unless the receiver is offside, in which case the offside restart happens instead.
+- If every interceptor fails, the pass arrives as planned — unless the receiver is offside, in which case the offside restart happens instead. A shot that beats every interceptor then rolls hit and save as usual.
 
 ## Contests (dice)
 
@@ -243,7 +244,7 @@ Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 - Walking onto a loose ball takes it.
 - A completed pass to an empty tile leaves it loose.
 - A completed pass to a teammate gives it to them.
-- A failed dribble or a successful tackle / intercept changes the carrier.
+- A failed dribble or a successful tackle / intercept (pass or shot) changes the carrier.
 - A tied dribble or tackle can leave the ball loose, or give it to whoever stands on the bounce cell.
 
 ### Shoot
@@ -252,7 +253,7 @@ Shooting **spends every leftover AP** and **ends that player’s turn**. Each le
 
 You may shoot if you have the ball, you are **not on a goal tile**, and the shot’s **hit chance is at least 5%**. Distance no longer gates the action, but it is scaled to a **105 × 68 m** pitch, so a midfield striker needs leftover AP to clear 5%. Leftover AP is added after the geometry/skill hit.
 
-The goal tile highlights gold. Click it to shoot. If the tile also allows move or dribble, a chooser appears.
+The goal tile highlights gold. Choose **Shoot**, then hover the net to see chances — the same pass line and intercept circles are drawn. Click the net to shoot. If the tile also allows move or dribble, a chooser appears.
 
 Hover the goal to see:
 
@@ -263,19 +264,21 @@ theta_h = 2.44 / max(d, 1)
 sigma   = lerp(12°, 1°, (ACC/100)^1.2)     ACC clamped 1–100
 hit     = erf(theta_w / (2 sigma √2)) x erf(theta_h / (2 sigma √2)) + leftover
 leftover = 0.03 x remaining AP
+through = chance of beating every interceptor on the shot line (same as a pass)
 save = P(keeper 1dDEF > shooter 1dACC)   if a keeper is on the goal tile, else 0
-goal = hit x (1 - save)
+goal = through x hit x (1 - save)
 ```
 
 `d` is metres, not tiles. One length-tile is about 4 m; the goal mouth is 7.32 × 2.44 m. `theta` is the angle between the shot and the goal axis (0 degrees = straight in), not the randomized miss. Hit is then clamped to 5–98%.
 
 Resolution:
 
-1. Roll hit against `hit`.
-2. If it hits and a keeper is in the net, they try a save (shooter **1dACC** vs keeper **1dDEF**; ties to the shooter).
-3. Goal: score +1, kickoff reset, the team that conceded starts with the ball and plans first. Helix’s restart uses the mirrored 4-4-2.
-4. Save: the keeper has the ball.
-5. Miss: the ball is loose on the goal tile.
+1. Intercepts, same as a pass. First interceptor who wins the dice and makes the reach takes the ball on the cut-off tile. The shot never reaches the net.
+2. If it is not intercepted, roll hit against `hit`.
+3. If it hits and a keeper is in the net, they try a save (shooter **1dACC** vs keeper **1dDEF**; ties to the shooter).
+4. Goal: score +1, kickoff reset, the team that conceded starts with the ball and plans first. Helix’s restart uses the mirrored 4-4-2.
+5. Save: the keeper has the ball.
+6. Miss: the ball is loose on the goal tile.
 
 Walking or dribbling the ball onto the opponent goal tile also counts as a goal.
 

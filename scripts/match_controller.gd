@@ -70,8 +70,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			handle_cell_clicked(cell)
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			if not _cancel_command():
-				_deselect()
+			handle_cell_right_clicked(cell)
 	elif _is_end_turn_key(event):
 		end_planning()
 		get_viewport().set_input_as_handled()
@@ -208,6 +207,23 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 
 	_deselect()
 	return {ok = false, reason = "no_selection"}
+
+
+func handle_cell_right_clicked(cell: Vector2i) -> Dictionary:
+	if busy:
+		return {ok = false, reason = "busy"}
+	if vs_ai and model != null and model.current_team == MatchRules.Team.AWAY:
+		return {ok = false, reason = "ai_planning"}
+	if not _pending_choice.is_empty():
+		_cancel_choice()
+	var selected := _selected_player()
+	if selected != null and MatchRules.in_bounds(cell):
+		var command := model.action_for_command(selected, "turn", cell)
+		if not command.is_empty():
+			return perform_action(command)
+	if not _cancel_command():
+		_deselect()
+	return {ok = true, action = "cancel"}
 
 
 func _is_selected_cell(selected: PlayerState, cell: Vector2i) -> bool:
@@ -474,13 +490,13 @@ func _present_result(result: Dictionary) -> bool:
 		return true
 	var dest: Vector2i = result.dest
 	var won: bool = result.get("contest_won", true)
-	if action == "shoot":
+	if action == "shoot" and not result.get("intercepted", false):
 		pitch.ball_piece.set_carried(false)
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.tween_property(pitch.ball_piece, "position", pitch.grid_to_world(dest), _anim(0.28))
 		return await _wait_for_tween(tween)
-	if action == "pass":
+	if action == "pass" or result.get("intercepted", false):
 		var receiver := model.player_by_id(int(result.get("receiver_id", -1)))
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
@@ -641,19 +657,27 @@ func _set_hover(cell: Vector2i) -> void:
 
 
 func _update_pass_preview(selected: PlayerState) -> void:
-	if (
-		selected == null
-		or _pending_action != "pass"
-		or not model.planning_has_ball(selected)
-		or not model.can_plan_pass_to_cell(selected, hover_cell)
-	):
+	if selected == null or not model.planning_has_ball(selected):
 		pitch.clear_pass_preview()
 		return
-	var threats := model.interceptors_for_pass(selected, hover_cell)
+	var dest := hover_cell
+	if _pending_action == "pass":
+		if not model.can_plan_pass_to_cell(selected, dest):
+			pitch.clear_pass_preview()
+			return
+	elif _pending_action == "shoot":
+		dest = MatchRules.opponent_goal(selected.team)
+		if hover_cell != dest or not model.can_plan_shoot(selected):
+			pitch.clear_pass_preview()
+			return
+	else:
+		pitch.clear_pass_preview()
+		return
+	var threats := model.interceptors_for_pass(selected, dest)
 	var cells: Array[Vector2i] = []
 	for threat in threats:
 		cells.append(threat.player.pos)
-	pitch.set_pass_preview(model.planning_pos(selected), hover_cell, cells)
+	pitch.set_pass_preview(model.planning_pos(selected), dest, cells)
 
 
 func _hovered_player() -> PlayerState:

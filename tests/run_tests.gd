@@ -202,14 +202,26 @@ func _test_action_points() -> void:
 	_assert(MatchRules.move_facings(east).size() == 3, "move has 3 facings")
 	_assert(Vector2i(1, 0) in MatchRules.move_facings(east), "move includes current facing")
 	var turns := MatchRules.turn_facings(east)
-	_assert(turns.size() == 4, "turn has 4 facings")
+	_assert(turns.size() == 7, "turn has 7 facings")
 	_assert(Vector2i(1, 0) not in turns, "turn excludes current facing")
-	_assert(Vector2i(-1, 0) not in turns, "turn excludes 180°")
+	_assert(Vector2i(-1, 0) in turns, "turn includes 180°")
 	_assert(Vector2i(0, 1) in turns and Vector2i(0, -1) in turns, "turn includes 90°")
+	_assert(Vector2i(-1, 1) in turns, "turn includes 135°")
 	_assert(MatchRules.rotate_facing(east, 4) == Vector2i(-1, 0), "four 45° steps is 180°")
+	_assert(MatchRules.turn_ap_cost(east, Vector2i(1, 1)) == 1, "45° turn costs 1 AP")
+	_assert(MatchRules.turn_ap_cost(east, Vector2i(0, 1)) == 1, "90° turn costs 1 AP")
+	_assert(MatchRules.turn_ap_cost(east, Vector2i(-1, 1)) == 2, "135° turn costs 2 AP")
+	_assert(MatchRules.turn_ap_cost(east, Vector2i(-1, 0)) == 2, "180° turn costs 2 AP")
 	_assert(MatchRules.step_ap_cost(Vector2i(5, 5), Vector2i(6, 5)) == 2, "straight step costs 2 AP")
 	_assert(MatchRules.step_ap_cost(Vector2i(5, 5), Vector2i(6, 6)) == 3, "diagonal step costs 3 AP")
-	_assert(MatchRules.action_ap_cost("turn", Vector2i(5, 5), Vector2i(5, 6), 6) == 1, "turn costs 1 AP")
+	_assert(
+		MatchRules.action_ap_cost("turn", Vector2i(5, 5), Vector2i(5, 6), 6, east) == 1,
+		"90° turn action costs 1 AP"
+	)
+	_assert(
+		MatchRules.action_ap_cost("turn", Vector2i(5, 5), Vector2i(4, 5), 6, east) == 2,
+		"180° turn action costs 2 AP"
+	)
 	_assert(MatchRules.action_ap_cost("pass", Vector2i(5, 5), Vector2i(7, 5), 6) == 1, "pass costs 1 AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 5) == 5, "shot spends leftover AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 1) == 1, "shot with 1 AP spends that point")
@@ -313,7 +325,33 @@ func _test_action_points() -> void:
 	_assert(t1.ok and kicker.facing == Vector2i(0, 1), "one turn is 90°")
 	var t2 := about.apply_turn(kicker.id, _spot(-1, 0))
 	_assert(t2.ok and kicker.facing == Vector2i(-1, 0), "second 90° turn completes a 180")
-	_assert(not about.apply_turn(kicker.id, _spot(1, 0)).ok, "cannot turn 180 in one action")
+	var about_back := MatchModel.new()
+	about_back.setup_kickoff()
+	var reverse := about_back.player_at(MatchRules.CENTER_SPOT)
+	var t180 := about_back.apply_turn(reverse.id, _spot(-1, 0))
+	_assert(t180.ok and reverse.facing == Vector2i(-1, 0), "one action can turn 180°")
+	var queued_back := MatchModel.new()
+	queued_back.setup_kickoff()
+	var backer := queued_back.player_at(MatchRules.CENTER_SPOT)
+	var back_plan := queued_back.queue_plan(backer.id, {id = "turn", dest = _spot(-1, 0), label = "Turn"})
+	_assert(back_plan.ok, "180° turn queues")
+	_assert(int(back_plan.plan.get("ap_cost", 0)) == 2, "180° turn costs 2 AP")
+	_assert(queued_back.ap_spent(backer.id) == 2, "180° turn spends 2 AP")
+	var side_plan := queued_back.queue_plan(backer.id, {id = "turn", dest = _spot(0, 1), label = "Turn"})
+	_assert(side_plan.ok, "90° turn after a 180 still queues")
+	_assert(int(side_plan.plan.get("ap_cost", 0)) == 1, "90° turn after a 180 costs 1 AP")
+	var tight := MatchModel.new()
+	tight.setup_kickoff()
+	var tight_st := tight.player_at(MatchRules.CENTER_SPOT)
+	_assert(tight.queue_plan(tight_st.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "straight step toward a 1-AP leftover")
+	_assert(tight.queue_plan(tight_st.id, {id = "move", dest = _spot(2, 1), label = "Move"}).ok, "diagonal spends the next 3 AP")
+	_assert(tight.ap_remaining(tight_st.id) == 1, "5 AP spent leaves 1 AP")
+	_assert(_spot(2, 2) in tight.command_dests(tight_st, "turn"), "1 leftover AP can still turn 45°")
+	_assert(_spot(1, 0) not in tight.command_dests(tight_st, "turn"), "1 leftover AP cannot afford a 180° turn")
+	_assert(
+		not tight.queue_plan(tight_st.id, {id = "turn", dest = _spot(1, 0), label = "Turn"}).ok,
+		"queue rejects a 2-AP turn the player cannot afford"
+	)
 
 	var parked := MatchModel.new()
 	parked.setup_kickoff()
@@ -1918,7 +1956,7 @@ func _test_shooting() -> void:
 	var preview := model.shot_preview(st)
 	_assert(preview.text.contains("hit = erf("), "preview shows the hit formula")
 	_assert(preview.text.contains("leftover AP"), "preview shows leftover AP bonus")
-	_assert(preview.text.contains("goal = hit"), "preview shows the goal product")
+	_assert(preview.text.contains("goal = through"), "preview shows the goal product")
 	_assert(int(preview.get("remaining_ap", -1)) == 6, "unspent shooter previews a 6 AP shot")
 	_assert(is_equal_approx(float(preview.get("leftover_bonus", 0.0)), 0.18), "unspent shooter gets +18% hit")
 	_assert(preview.keeper_in_net, "helix keeper starts in the net")
@@ -1968,6 +2006,76 @@ func _test_shooting() -> void:
 		"leftover AP bonus still applies on top of the Gaussian base hit"
 	)
 
+	var cut_model := MatchModel.new()
+	cut_model.setup_kickoff()
+	var cutter_st := cut_model.player_at(MatchRules.CENTER_SPOT)
+	var helix_field: Array[PlayerState] = []
+	var park := 0
+	for player in cut_model.players:
+		if player.team != MatchRules.Team.AWAY or player.role == "GK":
+			continue
+		helix_field.append(player)
+		player.pos = Vector2i(15 + (park % 5), 0 if park < 5 else MatchRules.GRID_HEIGHT - 1)
+		park += 1
+	_assert(helix_field.size() >= 1, "helix field players exist to intercept a shot")
+	var cutter: PlayerState = helix_field[0]
+	cutter.pos = Vector2i(cutter_st.pos.x + 4, cutter_st.pos.y + 1)
+	var shot_threats := cut_model.interceptors_for_pass(cutter_st, MatchRules.AWAY_NET)
+	_assert(shot_threats.size() == 1, "only the placed defender threatens the shot")
+	_assert(shot_threats[0].player.id == cutter.id, "off-lane defender is the shot interceptor")
+	var net_gk := cut_model.player_at(MatchRules.AWAY_NET)
+	_assert(net_gk != null and net_gk.role == "GK", "keeper is in the net")
+	for threat in shot_threats:
+		_assert(threat.player.id != net_gk.id, "keeper in the net does not intercept the shot")
+	var cut_preview := cut_model.shot_preview(cutter_st)
+	_assert(cut_preview.threats.size() == 1, "shot preview lists the interceptor")
+	_assert(cut_preview.text.contains("intercept"), "shot preview names intercept chance")
+	_assert(float(cut_preview.through) < 1.0, "interceptors reduce shot through chance")
+	_assert(
+		is_equal_approx(
+			float(cut_preview.goal_chance),
+			float(cut_preview.through)
+			* float(cut_preview.hit_chance)
+			* (1.0 - float(cut_preview.save_chance))
+		),
+		"goal chance is through × hit × (1 − save)"
+	)
+	cut_model.scripted_first_intercept_wins = true
+	var cutter_from := cutter.pos
+	var stolen_shot := cut_model.apply_shoot(cutter_st.id)
+	_assert(stolen_shot.get("intercepted", false), "scripted interceptor takes the shot")
+	_assert(stolen_shot.action == "shoot", "intercepted shot is still a shot")
+	_assert(not stolen_shot.get("goal", false), "an intercepted shot does not score")
+	_assert(not stolen_shot.get("hit", false), "an intercepted shot never reaches the net")
+	_assert(cutter.has_ball, "interceptor has the ball")
+	_assert(not cutter_st.has_ball, "shooter lost the ball")
+	_assert(cutter.pos != cutter_from, "shot interceptor left their starting tile")
+	_assert(cut_model.ball.pos == cutter.pos, "ball is on the shot intercept tile")
+	_assert(cut_model.player_at(cutter_from) == null, "the interceptor's old tile is empty")
+	_assert(
+		CombatLog.format_result(stolen_shot).begins_with("INTERCEPT"),
+		"intercepted shot logs as INTERCEPT"
+	)
+
+	var clean_shot := MatchModel.new()
+	clean_shot.setup_kickoff()
+	var clean_st := clean_shot.player_at(MatchRules.CENTER_SPOT)
+	var clean_park := 0
+	for player in clean_shot.players:
+		if player.team != MatchRules.Team.AWAY or player.role == "GK":
+			continue
+		player.pos = Vector2i(15 + (clean_park % 5), 0 if clean_park < 5 else MatchRules.GRID_HEIGHT - 1)
+		clean_park += 1
+	_assert(
+		clean_shot.interceptors_for_pass(clean_st, MatchRules.AWAY_NET).is_empty(),
+		"parking defenders off the lane leaves the shot clear"
+	)
+	clean_shot.scripted_first_intercept_wins = false
+	clean_shot.scripted_shot_outcome = "goal"
+	var clean_goal := clean_shot.apply_shoot(clean_st.id)
+	_assert(clean_goal.goal, "beating every interceptor still allows a scripted goal")
+	_assert(not clean_goal.get("intercepted", false), "a clear shot is not intercepted")
+
 
 func _test_controller_click_flow() -> void:
 	print("-- controller")
@@ -1996,6 +2104,26 @@ func _test_controller_click_flow() -> void:
 	await process_frame
 	_assert(controller.hud._forecast.visible, "pass hover shows the success forecast")
 	_assert(controller.hud._forecast_label.text.contains("Pass success"), "forecast shows the pass success chance")
+	var shoot_cmd: Dictionary = controller.select_command("shoot")
+	_assert(shoot_cmd.get("ok", false), "shoot is available for the kickoff carrier")
+	controller._set_hover(MatchRules.AWAY_NET)
+	await process_frame
+	_assert(controller.hud._forecast.visible, "shoot hover shows the success forecast")
+	_assert(controller.hud._forecast_label.text.contains("hit"), "forecast shows the shot hit chance")
+	_assert(
+		controller.pitch.pass_lane_from == MatchRules.CENTER_SPOT,
+		"shot hover draws the pass line from the shooter"
+	)
+	_assert(
+		controller.pitch.pass_lane_to == MatchRules.AWAY_NET,
+		"shot hover draws the pass line to the net"
+	)
+	_assert(not controller.pitch.intercept_cells.is_empty(), "shot hover draws intercept circles")
+	_assert(
+		controller.hud._forecast_label.text.contains("intercept")
+		or controller.hud._forecast_label.text.contains("Through"),
+		"shot forecast lists intercept chance"
+	)
 	var forecast_box: Rect2 = controller.hud._forecast.get_global_rect()
 	_assert(forecast_box.position.y >= play.end.y - 4.0, "forecast sits below the playable pitch")
 	_assert(forecast_box.end.x <= play.end.x + 8.0, "forecast does not overlap the match log")
@@ -2141,6 +2269,55 @@ func _test_controller_click_flow() -> void:
 		"queued second-action turn previews the new facing"
 	)
 	move_then_turn.queue_free()
+
+	var right_turn: Node = packed.instantiate()
+	root.add_child(right_turn)
+	right_turn.animate_moves = false
+	right_turn.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	_assert(right_turn._pending_action == "move", "right-click turn is tested with move armed")
+	var right_90: Dictionary = right_turn.handle_cell_right_clicked(_spot(0, 1))
+	_assert(right_90.get("action") == "queue", "right-click an adjacent cell queues a turn")
+	_assert(str(right_90.plan.get("action", "")) == "turn", "right-click queues turn, not move")
+	_assert(int(right_90.plan.get("ap_cost", 0)) == 1, "right-click 90° turn costs 1 AP")
+	var right_turner: PlayerState = right_turn.model.player_at(MatchRules.CENTER_SPOT)
+	_assert(right_turner.pos == MatchRules.CENTER_SPOT, "right-click turn does not leave the square")
+	_assert(
+		right_turn.pieces[right_turner.id].facing == Vector2i(0, 1),
+		"right-click turn previews the new facing"
+	)
+	right_turn.queue_free()
+
+	var right_back: Node = packed.instantiate()
+	root.add_child(right_back)
+	right_back.animate_moves = false
+	right_back.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	var right_180: Dictionary = right_back.handle_cell_right_clicked(_spot(-1, 0))
+	_assert(right_180.get("action") == "queue", "right-click behind the player queues a 180° turn")
+	_assert(int(right_180.plan.get("ap_cost", 0)) == 2, "right-click 180° turn costs 2 AP")
+	right_back.queue_free()
+
+	var right_diag: Node = packed.instantiate()
+	root.add_child(right_diag)
+	right_diag.animate_moves = false
+	right_diag.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	var diag_st: PlayerState = right_diag.model.player_at(MatchRules.CENTER_SPOT)
+	_assert(_spot(1, -1) in right_diag.model.command_dests(diag_st, "move"), "45° cell is a move dest")
+	var right_face: Dictionary = right_diag.handle_cell_right_clicked(_spot(1, -1))
+	_assert(str(right_face.plan.get("action", "")) == "turn", "right-click a walkable 45° cell turns instead of moving")
+	_assert(int(right_face.plan.get("ap_cost", 0)) == 1, "right-click 45° turn costs 1 AP")
+	_assert(diag_st.pos == MatchRules.CENTER_SPOT, "right-click on a move cell still does not step")
+	right_diag.queue_free()
+
+	var right_cancel: Node = packed.instantiate()
+	root.add_child(right_cancel)
+	right_cancel.animate_moves = false
+	right_cancel.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	_assert(right_cancel._pending_action == "move", "move is armed before a non-turn right-click")
+	var cancel_far: Dictionary = right_cancel.handle_cell_right_clicked(_spot(3, 0))
+	_assert(cancel_far.get("action") == "cancel", "right-click a non-adjacent cell cancels the command")
+	_assert(right_cancel._pending_action == "", "non-adjacent right-click clears the pending action")
+	_assert(right_cancel.selected_id >= 0, "non-adjacent right-click keeps the player selected")
+	right_cancel.queue_free()
 
 	var pass_main: Node = packed.instantiate()
 	root.add_child(pass_main)
