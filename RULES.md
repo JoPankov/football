@@ -43,14 +43,14 @@ Kickoff values by role:
 ### Energy
 
 - Max energy is **STA × 10**. Players start each kickoff full.
-- Each resolved action (move, turn, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. **Sprint** costs **3 energy**. Cancelled actions do not.
+- Each resolved action (move, turn, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. **Sprint** costs **3 energy** straight or **5 energy** diagonally. Cancelled actions do not.
 - Live ACC / DEF / CTR scale with remaining energy: full energy is 100% of the printed stat; **empty energy halves them**. In between, the drop is linear. The inspector shows `ACC 10 (13)` when fatigue has reduced the live value.
 
 ## How to take a turn
 
 1. Click any player on the team that is planning.
 2. Choose an action from the bottom bar (or press **1–9**): Move, Sprint, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot, Done. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after a walk so you can chain more steps.
-3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps. With Move selected, every empty tile that player can still reach by walking (leftover AP, no turns) is highlighted; click a far tile to queue the whole walk at once.
+3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps. With Move selected, every empty tile that player can still reach with leftover AP is highlighted — including tiles that need a 1-AP or 2-AP turn first, then a walk. Click a far tile to queue the turn (if needed) and the whole walk at once.
 4. Repeat for up to **3 different players**, **6 AP** each. Gold pips around a piece show leftover AP after that player has spent at least one point. A gold ring marks a planned player; arrows show their queued steps.
 5. Filling **all 6 AP on 3 players**, or marking those players **Done**, ends the turn automatically. **Done** parks leftover AP and a mint check shows they are finished. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
 6. After Helix’s turn ends, all queued actions resolve in **six AP waves**. A 2-AP first step plays in wave 2; a later 2-AP step on the same player plays in wave 4. The match log lists every public event and roll.
@@ -75,7 +75,7 @@ Highlights (after you pick an action):
 ### Move
 
 - Costs **2 AP** straight (orthogonal) or **3 AP** diagonally. Each step is 1 tile into the **3-cell cone**: the square you face, plus 45° either side.
-- Green highlights every empty tile you can still reach by chaining those steps with leftover AP. Clicking a far tile queues each step on the cheapest walk (Backspace still undoes one step). Turns are not inserted — face a new way first if you need to leave the cone.
+- Green highlights every empty tile you can still reach by chaining those steps with leftover AP, including after a single turn at the start (1 AP up to 90°, 2 AP for 135°/180°). Clicking a far tile queues that turn if needed, then each step on the cheapest walk (Backspace still undoes one step). Turns are not inserted mid-walk — only before the first step.
 - You cannot queue a step you cannot afford. With 2 AP left you can still walk straight, but not diagonally.
 - Empty tiles only (or an opponent tile, which is a contest instead).
 - Cannot walk onto a teammate. Use **swap** for that. Occupied tiles also block a longer walk through them.
@@ -86,10 +86,10 @@ Highlights (after you pick an action):
 
 ### Sprint
 
-- Costs **2 AP** and **3 energy**.
+- Costs **2 AP** and **3 energy** straight (orthogonal), or **3 AP** and **5 energy** diagonally.
 - Two tiles **straight ahead** only — the exact direction the player is facing, not the 3-cell move cone.
 - Both the through tile and the landing must be empty and in bounds. You cannot sprint onto or through a player.
-- You cannot queue a sprint you cannot afford. With 1 AP left you cannot sprint.
+- You cannot queue a sprint you cannot afford. With 2 AP left you can still sprint straight, but not diagonally. With 1 AP left you cannot sprint.
 - If you have the ball, it comes with you. A loose ball on the landing **or** the through tile is collected and carried to the landing.
 - After you queue a sprint onto a loose ball, you can plan as if you already have it. If you do not actually collect it, those ball actions are ignored.
 - Walking the ball onto the opponent net by sprinting is a goal.

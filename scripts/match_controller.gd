@@ -226,12 +226,20 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 			return {ok = true, action = "choose_cancel"}
 
 	var selected := _selected_player()
+	var occupant := _occupant_for_click(cell)
+	if (
+		selected != null
+		and _pending_action == "move"
+		and occupant != null
+		and model.can_select(occupant)
+		and occupant.id != selected.id
+	):
+		_select(occupant)
+		return {ok = true, action = "select", player_id = occupant.id}
 	if selected != null and _pending_action != "":
 		var command := model.action_for_command(selected, _pending_action, cell)
 		if not command.is_empty():
 			return perform_action(command)
-
-	var occupant := _occupant_for_click(cell)
 	if selected != null and _is_selected_cell(selected, cell):
 		if _pending_action != "":
 			_cancel_command()

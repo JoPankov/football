@@ -161,11 +161,11 @@ func valid_moves(player: PlayerState) -> Array[Vector2i]:
 
 
 ## Cells the player can still walk to by spending leftover AP on move steps.
-## Facing only changes by stepping — turns are not inserted.
+## A single prefix turn (1 AP up to 90°, 2 AP for 135°/180°) may be inserted first.
 func move_reach(player: PlayerState) -> Dictionary:
 	if player == null or not can_queue(player):
 		return {}
-	return MatchRules.move_reach(
+	return MatchRules.move_reach_with_prefix_turns(
 		_query_pos(player),
 		_query_facing(player),
 		occupied_cells(player.id),
@@ -421,15 +421,26 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 		return {ok = false, reason = "no_action"}
 	var dest: Vector2i = action.get("dest", _query_pos(player))
 	var origin := _query_pos(player)
-	if action_id == "move":
-		var steps := move_path(player, dest)
+	if action_id == "move" and origin != dest:
+		var info = move_reach(player).get(dest, null)
+		if typeof(info) != TYPE_DICTIONARY:
+			return {ok = false, reason = "illegal_dest"}
+		var turn_cell: Vector2i = info.get("turn_dest", Vector2i.ZERO)
+		if turn_cell != Vector2i.ZERO:
+			var turned := queue_plan(player_id, {
+				id = "turn",
+				dest = turn_cell,
+				label = "Turn",
+			})
+			if not turned.get("ok", false):
+				return turned
+			return queue_plan(player_id, action)
+		var steps: Array[Vector2i] = []
+		for cell in info.get("path", []):
+			steps.append(cell)
 		if steps.size() > 1:
 			return _queue_move_steps(player_id, action, steps)
-		if (
-			steps.is_empty()
-			and origin != dest
-			and not MatchRules.is_adjacent(origin, dest)
-		):
+		if steps.is_empty():
 			return {ok = false, reason = "illegal_dest"}
 	var remaining := ap_remaining(player_id)
 	var cost := MatchRules.action_ap_cost(
@@ -1655,7 +1666,7 @@ func apply_sprint(player_id: int, dest: Vector2i) -> Dictionary:
 
 	var origin := player.pos
 	var through := MatchRules.sprint_through(origin, dest)
-	var energy := MatchRules.action_energy_cost("sprint")
+	var energy := MatchRules.action_energy_cost("sprint", origin, dest)
 	player.relocate(dest)
 	var gained := false
 	if player.has_ball:

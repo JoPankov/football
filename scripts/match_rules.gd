@@ -15,12 +15,16 @@ const PLAYER_ACTION_POINTS := 6
 const DEFAULT_ACTION_COST := 1
 const MOVE_ORTHO_COST := 2
 const MOVE_DIAG_COST := 3
-## Sprint is two tiles straight ahead, 2 AP, 3 energy. Facing cone does not apply.
+## Sprint is two tiles straight ahead. Orthogonal 2 AP / 3 energy; diagonal 3 AP / 5 energy.
 const SPRINT_DISTANCE := 2
 const SPRINT_AP_COST := 2
+const SPRINT_DIAG_AP_COST := 3
 const SPRINT_ENERGY_COST := 3
+const SPRINT_DIAG_ENERGY_COST := 5
 ## One AP turns up to this many 45° ring steps (90°). 135° and 180° cost 2 AP.
 const TURN_STEPS_PER_AP := 2
+## Move highlights may start with one turn of at most this many AP.
+const MOVE_PREFIX_TURN_AP := 2
 const ACTION_ENERGY_COST := 1
 const ENERGY_PER_STAMINA := 10
 const ENERGY_EMPTY_FACTOR := 0.5
@@ -267,7 +271,7 @@ static func turn_ap_cost(from_facing: Vector2i, to_facing: Vector2i) -> int:
 
 
 ## Shoot spends every leftover AP. Done costs 0. Steps cost 2 orthogonal / 3 diagonal.
-## Sprint costs 2 AP. Turn costs 1 AP up to 90°, 2 AP for 135°/180°. Else 1.
+## Sprint costs 2 AP straight, 3 AP diagonally. Turn costs 1 AP up to 90°, 2 AP for 135°/180°. Else 1.
 static func action_ap_cost(
 	action_id: String,
 	from: Vector2i,
@@ -280,7 +284,7 @@ static func action_ap_cost(
 	if action_id == "shoot":
 		return maxi(1, remaining_ap)
 	if action_id == "sprint":
-		return SPRINT_AP_COST
+		return sprint_ap_cost(from, to)
 	if action_id == "turn":
 		return turn_ap_cost(facing, step_direction(from, to))
 	if action_id in STEP_ACTIONS:
@@ -288,12 +292,28 @@ static func action_ap_cost(
 	return DEFAULT_ACTION_COST
 
 
-static func action_energy_cost(action_id: String) -> int:
+static func sprint_ap_cost(from: Vector2i, to: Vector2i) -> int:
+	if is_diagonal_step(from, to):
+		return SPRINT_DIAG_AP_COST
+	return SPRINT_AP_COST
+
+
+static func action_energy_cost(
+	action_id: String,
+	from: Vector2i = Vector2i.ZERO,
+	to: Vector2i = Vector2i.ZERO
+) -> int:
 	if action_id == "done":
 		return 0
 	if action_id == "sprint":
-		return SPRINT_ENERGY_COST
+		return sprint_energy_cost(from, to)
 	return ACTION_ENERGY_COST
+
+
+static func sprint_energy_cost(from: Vector2i, to: Vector2i) -> int:
+	if is_diagonal_step(from, to):
+		return SPRINT_DIAG_ENERGY_COST
+	return SPRINT_ENERGY_COST
 
 
 static func in_bounds(pos: Vector2i) -> bool:
@@ -598,6 +618,47 @@ static func move_reach(
 	return reach
 
 
+## Like move_reach, but the walk may start with one turn of at most `max_turn_ap`.
+## Values are `{cost, path, turn_dest}` where `turn_dest` is ZERO when no prefix turn.
+static func move_reach_with_prefix_turns(
+	from: Vector2i,
+	facing: Vector2i,
+	blocked: Dictionary,
+	remaining_ap: int,
+	max_turn_ap: int = MOVE_PREFIX_TURN_AP
+) -> Dictionary:
+	var best := {}
+	var cone := move_reach(from, facing, blocked, remaining_ap)
+	for dest in cone:
+		var info: Dictionary = cone[dest]
+		best[dest] = {
+			cost = int(info.cost),
+			path = info.path,
+			turn_dest = Vector2i.ZERO,
+		}
+	if remaining_ap < MOVE_ORTHO_COST + 1:
+		return best
+	for turn_cell in turn_destinations(from, facing):
+		var new_face := step_direction(from, turn_cell)
+		var tcost := turn_ap_cost(facing, new_face)
+		if tcost > max_turn_ap or tcost > remaining_ap:
+			continue
+		var leftover := remaining_ap - tcost
+		if leftover < MOVE_ORTHO_COST:
+			continue
+		var walk := move_reach(from, new_face, blocked, leftover)
+		for dest in walk:
+			var info: Dictionary = walk[dest]
+			var entry := {
+				cost = tcost + int(info.cost),
+				path = info.path,
+				turn_dest = turn_cell,
+			}
+			if not best.has(dest) or _reach_entry_better(from, entry, best[dest]):
+				best[dest] = entry
+	return best
+
+
 static func _move_state_key(pos: Vector2i, facing: Vector2i) -> String:
 	return "%d,%d,%d,%d" % [pos.x, pos.y, facing.x, facing.y]
 
@@ -608,6 +669,47 @@ static func _move_pending_better(a: Dictionary, b: Dictionary) -> bool:
 	if ca != cb:
 		return ca < cb
 	return int(a.get("steps", 0)) < int(b.get("steps", 0))
+
+
+static func _reach_action_count(entry: Dictionary) -> int:
+	var path = entry.get("path", [])
+	var n := 0
+	if typeof(path) == TYPE_ARRAY:
+		n = path.size()
+	var turn_cell: Vector2i = entry.get("turn_dest", Vector2i.ZERO)
+	if turn_cell != Vector2i.ZERO:
+		n += 1
+	return n
+
+
+static func _prefix_turn_aligned(from: Vector2i, entry: Dictionary) -> bool:
+	var turn_cell: Vector2i = entry.get("turn_dest", Vector2i.ZERO)
+	if turn_cell == Vector2i.ZERO:
+		return true
+	var path = entry.get("path", [])
+	if typeof(path) != TYPE_ARRAY or path.is_empty():
+		return true
+	return step_direction(from, turn_cell) == step_direction(from, path[0])
+
+
+static func _reach_entry_better(from: Vector2i, a: Dictionary, b: Dictionary) -> bool:
+	var ca := int(a.get("cost", 0))
+	var cb := int(b.get("cost", 0))
+	if ca != cb:
+		return ca < cb
+	var sa := _reach_action_count(a)
+	var sb := _reach_action_count(b)
+	if sa != sb:
+		return sa < sb
+	var ta: Vector2i = a.get("turn_dest", Vector2i.ZERO)
+	var tb: Vector2i = b.get("turn_dest", Vector2i.ZERO)
+	if (ta == Vector2i.ZERO) != (tb == Vector2i.ZERO):
+		return ta == Vector2i.ZERO
+	var a_align := _prefix_turn_aligned(from, a)
+	var b_align := _prefix_turn_aligned(from, b)
+	if a_align != b_align:
+		return a_align
+	return false
 
 
 static func roll_d_stat(stat: int, rng: RandomNumberGenerator) -> int:

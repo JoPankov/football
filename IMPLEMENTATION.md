@@ -101,8 +101,9 @@ Constants live on `MatchRules`.
 - Pass range is **Euclidean**: `MatchRules.in_pass_range` is cell-centre distance `<= PASS_RANGE` (5 tile lengths). The highlight is a circle, not a Chebyshev square.
 - `PlayerState.facing` is one of those 8 dirs. Kickoff: Aether `(1, 0)`, Helix `(-1, 0)`. `PlayerState.relocate` writes facing from the step. `turn_facings` is the other 7 dirs. `turn_ap_cost` is 1 AP for 1–2 ring steps (45°/90°) and 2 AP for 3–4 (135°/180°). `action_ap_cost(..., facing)` needs the current facing for turns.
 - `move_destinations(from, blocked, facing)` drops the one square **directly behind** `facing`. `facing == ZERO` skips that filter (geometry-only callers).
-- `move_reach(from, facing, blocked, remaining_ap)` is every empty cell a cone-walk can hit by spending at most that many AP (no turns). Values are `{cost, path}`. `MatchModel.command_dests(..., "move")` uses this. A non-adjacent `queue_plan` move expands into those path steps.
-- `sprint_destinations(from, facing, occupied)` is the empty cell two tiles **straight ahead** of `facing`, or empty if the through tile or landing is occupied / out of bounds. Sprint is not a cone. AP cost is `SPRINT_AP_COST` (2); energy is `SPRINT_ENERGY_COST` (3). `MatchModel.valid_sprints` / `command_dests(..., "sprint")` use this. A sprint is one plan, not two walk steps.
+- `move_reach(from, facing, blocked, remaining_ap)` is every empty cell a cone-walk can hit by spending at most that many AP (no turns). Values are `{cost, path}`.
+- `move_reach_with_prefix_turns(...)` wraps that search with one leading turn of at most `MOVE_PREFIX_TURN_AP` (2): 1 AP for 45°/90°, 2 AP for 135°/180°. Values also carry `turn_dest` (`ZERO` if the cheapest path has no prefix turn). `MatchModel.move_reach` / `command_dests(..., "move")` use this. A `queue_plan` move expands into that prefix turn (if any) plus the cheapest walk steps.
+- `sprint_destinations(from, facing, occupied)` is the empty cell two tiles **straight ahead** of `facing`, or empty if the through tile or landing is occupied / out of bounds. Sprint is not a cone. AP cost is `SPRINT_AP_COST` (2) orthogonal or `SPRINT_DIAG_AP_COST` (3) diagonal; energy is `SPRINT_ENERGY_COST` (3) or `SPRINT_DIAG_ENERGY_COST` (5). `MatchModel.valid_sprints` / `command_dests(..., "sprint")` use this. A sprint is one plan, not two walk steps.
 - Back pass: `is_back_pass` is the rear cone, directly back ± `BACK_PASS_HALF_ANGLE_DEG` (43). Adjacent cells are never back passes.
 - Keepers start **in the net**. From a net, `move_destinations` yields the **3** adjacent pitch tiles (diagonals + forward). The old goal-line square in front of the net is empty at kickoff.
 
@@ -154,7 +155,7 @@ factor = 0.5 + 0.5 * (energy / max_energy)
 live   = max(1, round(printed * factor))
 ```
 
-Empty energy **halves** the printed number (rounded), it does not zero it. Each **resolved** action costs 1 energy (`_finish_action` / a few goal paths), except **sprint** which costs 3 (`SPRINT_ENERGY_COST`). Cancelled actions do not spend. A kickoff rebuild refills everyone.
+Empty energy **halves** the printed number (rounded), it does not zero it. Each **resolved** action costs 1 energy (`_finish_action` / a few goal paths), except **sprint** which costs 3 orthogonal or 5 diagonally (`sprint_energy_cost`). Cancelled actions do not spend. A kickoff rebuild refills everyone.
 
 ---
 
@@ -188,7 +189,7 @@ Action ids: `move`, `sprint`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (
 
 Rules of a queue:
 
-- Many plans per player, capped by leftover AP. `queue_plan` appends. A `move` whose dest is more than one step away expands into the cheapest cone-walk (`move_path`) and appends one plan per step; unreachable far dests return `{ok = false, reason = "illegal_dest"}`. `pop_last_plan(player_id)` removes that player’s last plan (or the last plan of `current_team` if `player_id < 0`) and drops that PLAN log line. Remaining plans for that player keep their `ap_index` / `ap_end`.
+- Many plans per player, capped by leftover AP. `queue_plan` appends. A `move` whose dest is more than one step away — or that needs a prefix turn to leave the cone — expands into that turn (if `turn_dest` is set) plus the cheapest cone-walk (`move_path`) and appends one plan per action; unreachable far dests return `{ok = false, reason = "illegal_dest"}`. `pop_last_plan(player_id)` removes that player’s last plan (or the last plan of `current_team` if `player_id < 0`) and drops that PLAN log line. Remaining plans for that player keep their `ap_index` / `ap_end`.
 - At most `ACTIONS_PER_SIDE` (3) distinct players per team. A player who already has a plan can queue more until they spend 6 AP or queue `done`.
 - `done` costs 0 AP, is planning-only (resolver skips it), and `can_queue` becomes false for that player. They still occupy an acting slot. Backspace pops Done (or their last action). Clicking them twice clears the plan, including Done.
 - `can_select` / `can_queue` require `player.team == current_team` unless `ignore_team_gate`.
@@ -234,7 +235,7 @@ Tackle success is the 1dDEF vs 1dCTR chance minus an **approach-angle penalty** 
 
 Pass: `apply_pass_to`. Intercepts first (see below), then snapshot teammates in an offside position into `offside_marked_ids`, then offside if the occupant is marked, else give or drop. Passer does not move. A later collect by a marked player (`apply_move` / `apply_sprint` onto the loose ball) is also offside. Anyone else receiving the ball (`_give_ball`) clears the marks.
 
-Sprint: `apply_sprint`. Two tiles straight ahead of facing. Through tile and dest must be empty. Carries or collects the ball (dest or through). Costs 3 energy. Opponent net with the ball is a goal, same as a walk-in.
+Sprint: `apply_sprint`. Two tiles straight ahead of facing. Through tile and dest must be empty. Carries or collects the ball (dest or through). Costs 3 energy straight or 5 diagonally. Opponent net with the ball is a goal, same as a walk-in.
 
 Swap: adjacent teammate only. Carrier keeps the ball and it follows them.
 
@@ -352,7 +353,7 @@ HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plan
 - Enter / Space: `end_planning`. Space is taken in `_input` so a focused action button cannot steal it.
 - 1–9 / keypad: Nth button currently shown in `commands_for` (not a fixed action map).
 
-**Command-first UX.** Select a player → `_pending_action` defaults to `"move"` if they have a walk. After a queued action with AP remaining, Move is re-armed so consecutive tiles chain. Bottom bar lists only commands with at least one dest. Then click a highlighted tile → `action_for_command` → `queue_plan`. Move dests are the remaining-AP cone-walk (`move_reach`), not only the next adjacent step; clicking a far tile queues each step on the cheapest path.
+**Command-first UX.** Select a player → `_pending_action` defaults to `"move"` if they have a walk. After a queued action with AP remaining, Move is re-armed so consecutive tiles chain. Bottom bar lists only commands with at least one dest. Then click a highlighted tile → `action_for_command` → `queue_plan`. Move dests are the remaining-AP cone-walk plus tiles that a single prefix turn can open (`move_reach_with_prefix_turns`); clicking a far tile queues that turn if needed, then each step on the cheapest path. Clicking another teammate (or their planning preview) while Move is armed selects them — a walk cannot land on a teammate.
 
 Why not “click the tile then pick Move/Pass”? One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). The old chooser is still in the HUD (`show_choices`) and `_open_choice` still exists on the controller, but **nothing calls `_open_choice`**. Do not revive it without wiring; current tests assume command-then-tile.
 

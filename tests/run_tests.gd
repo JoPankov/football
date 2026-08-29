@@ -228,8 +228,13 @@ func _test_action_points() -> void:
 		MatchRules.action_ap_cost("turn", Vector2i(5, 5), Vector2i(4, 5), 6, east) == 2,
 		"180° turn action costs 2 AP"
 	)
-	_assert(MatchRules.action_ap_cost("sprint", Vector2i(5, 5), Vector2i(7, 5), 6) == 2, "sprint costs 2 AP")
-	_assert(MatchRules.action_energy_cost("sprint") == 3, "sprint costs 3 energy")
+	_assert(MatchRules.action_ap_cost("sprint", Vector2i(5, 5), Vector2i(7, 5), 6) == 2, "straight sprint costs 2 AP")
+	_assert(MatchRules.action_ap_cost("sprint", Vector2i(5, 5), Vector2i(7, 7), 6) == 3, "diagonal sprint costs 3 AP")
+	_assert(MatchRules.action_energy_cost("sprint") == 3, "straight sprint costs 3 energy")
+	_assert(
+		MatchRules.action_energy_cost("sprint", Vector2i(5, 5), Vector2i(7, 7)) == 5,
+		"diagonal sprint costs 5 energy"
+	)
 	_assert(MatchRules.action_energy_cost("move") == 1, "a walk still costs 1 energy")
 	_assert(MatchRules.action_ap_cost("pass", Vector2i(5, 5), Vector2i(7, 5), 6) == 1, "pass costs 1 AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 5) == 5, "shot spends leftover AP")
@@ -249,8 +254,10 @@ func _test_action_points() -> void:
 	_assert(_spot(1, 1) in model.command_dests(st, "move"), "diagonal is legal with a full AP pool")
 	_assert(_spot(3, 0) in model.command_dests(st, "move"), "6 AP highlight three straight steps ahead")
 	_assert(_spot(4, 0) not in model.command_dests(st, "move"), "four straight steps need 8 AP")
-	_assert(_spot(-1, 0) not in model.command_dests(st, "move"), "the rear square is not a walk dest")
-	_assert(_spot(0, 1) not in model.command_dests(st, "move"), "a side square is not a walk dest without turning")
+	_assert(_spot(0, 1) in model.command_dests(st, "move"), "a side square is a walk dest after a 1-AP turn")
+	_assert(_spot(-1, 0) in model.command_dests(st, "move"), "the rear square is a walk dest after a 2-AP turn")
+	_assert(_spot(-2, 0) in model.command_dests(st, "move"), "4 leftover AP after a 180° turn walk two tiles behind")
+	_assert(_spot(-3, 0) not in model.command_dests(st, "move"), "three tiles behind need 8 AP")
 	_assert(_spot(2, 1) in model.command_dests(st, "move"), "a 2+3 AP dog-leg is in range")
 	var first := model.queue_plan(st.id, {id = "move", dest = _spot(1, 0), label = "Move"})
 	_assert(first.ok, "first AP queues")
@@ -283,6 +290,7 @@ func _test_action_points() -> void:
 	_assert(spend.ap_spent(runner.id) == 4, "two straight steps spend 4 AP")
 	_assert(_spot(3, 0) in spend.command_dests(runner, "move"), "2 leftover AP still allow a straight step")
 	_assert(_spot(3, 1) not in spend.command_dests(runner, "move"), "2 leftover AP cannot afford a diagonal")
+	_assert(_spot(2, 1) not in spend.command_dests(runner, "move"), "2 leftover AP cannot turn then step")
 	var refused := spend.queue_plan(runner.id, {id = "move", dest = _spot(3, 1), label = "Move"})
 	_assert(not refused.ok, "queue rejects a diagonal the player cannot afford")
 	_assert(spend.queue_plan(runner.id, {id = "move", dest = _spot(3, 0), label = "Move"}).ok, "third straight step spends the last 2 AP")
@@ -311,6 +319,35 @@ func _test_action_points() -> void:
 	var over := overshoot.player_at(MatchRules.CENTER_SPOT)
 	var refused_far := overshoot.queue_plan(over.id, {id = "move", dest = _spot(4, 0), label = "Move"})
 	_assert(not refused_far.ok, "queue rejects a dest the cone-walk cannot afford")
+	var side_walk := MatchModel.new()
+	side_walk.setup_kickoff()
+	var sider := side_walk.player_at(MatchRules.CENTER_SPOT)
+	var side_q := side_walk.queue_plan(sider.id, {id = "move", dest = _spot(0, 1), label = "Move"})
+	_assert(side_q.ok, "queueing a side square inserts a turn then a step")
+	var side_plans := side_walk.plans_of(sider.id)
+	_assert(side_plans.size() == 2, "side-square click is turn then move")
+	_assert(str(side_plans[0].get("action", "")) == "turn", "the first plan faces the side square")
+	_assert(int(side_plans[0].get("ap_cost", 0)) == 1, "the prefix 90° turn costs 1 AP")
+	_assert(side_plans[0].get("dest") == _spot(0, 1), "the prefix turn aims at the side square")
+	_assert(str(side_plans[1].get("action", "")) == "move", "the second plan steps onto the side square")
+	_assert(int(side_plans[1].get("ap_cost", 0)) == 2, "the side step is orthogonal")
+	_assert(side_walk.ap_spent(sider.id) == 3, "turn then side step spends 3 AP")
+	_assert(side_walk.planning_pos(sider) == _spot(0, 1), "planning position is the clicked side tile")
+	_assert(side_walk.planning_facing(sider) == Vector2i(0, 1), "the walk ends facing the side step")
+	var rear_walk := MatchModel.new()
+	rear_walk.setup_kickoff()
+	var rearer := rear_walk.player_at(MatchRules.CENTER_SPOT)
+	var rear_q := rear_walk.queue_plan(rearer.id, {id = "move", dest = _spot(-2, 0), label = "Move"})
+	_assert(rear_q.ok, "queueing two tiles behind inserts a 180° turn then the walk")
+	var rear_plans := rear_walk.plans_of(rearer.id)
+	_assert(rear_plans.size() == 3, "rear walk is one turn plus two steps")
+	_assert(str(rear_plans[0].get("action", "")) == "turn", "the rear walk starts with a turn")
+	_assert(int(rear_plans[0].get("ap_cost", 0)) == 2, "the prefix 180° turn costs 2 AP")
+	_assert(str(rear_plans[1].get("action", "")) == "move", "the first rear step is a move")
+	_assert(str(rear_plans[2].get("action", "")) == "move", "the second rear step is a move")
+	_assert(rear_walk.ap_spent(rearer.id) == 6, "180° turn then two straight steps spend 6 AP")
+	_assert(rear_walk.planning_pos(rearer) == _spot(-2, 0), "planning position is two tiles behind")
+	_assert(rear_walk.planning_facing(rearer) == Vector2i(-1, 0), "the rear walk ends facing west")
 	var wall := MatchModel.new()
 	wall.setup_kickoff()
 	var wall_runner := wall.player_at(MatchRules.CENTER_SPOT)
@@ -526,6 +563,29 @@ func _test_move_destinations() -> void:
 	_assert(Vector2i(6, 4) not in blocked_reach, "an occupied forward tile is not a dest")
 	_assert(Vector2i(7, 4) not in blocked_reach, "a blocked first step cuts the straight path")
 	_assert(MatchRules.move_reach(Vector2i(5, 4), Vector2i(1, 0), {}, 1).is_empty(), "1 AP cannot walk")
+	var turned := MatchRules.move_reach_with_prefix_turns(Vector2i(5, 4), Vector2i(1, 0), {}, 6)
+	_assert(Vector2i(5, 5) in turned, "a 1-AP 90° turn then a step reaches the side square")
+	_assert(int(turned[Vector2i(5, 5)].cost) == 3, "side square is 1 AP turn + 2 AP step")
+	_assert(
+		turned[Vector2i(5, 5)].turn_dest == Vector2i(5, 5),
+		"side square prefixes a 90° turn toward that cell"
+	)
+	_assert(Vector2i(4, 4) in turned, "a 2-AP 180° turn then a step reaches the rear square")
+	_assert(int(turned[Vector2i(4, 4)].cost) == 4, "rear square is 2 AP turn + 2 AP step")
+	_assert(
+		turned[Vector2i(4, 4)].turn_dest == Vector2i(4, 4),
+		"rear square prefixes a 180° turn toward that cell"
+	)
+	_assert(Vector2i(3, 4) in turned, "4 leftover AP after a 180° turn walk two tiles behind")
+	_assert(Vector2i(2, 4) not in turned, "three tiles behind need 8 AP")
+	_assert(turned[Vector2i(8, 4)].turn_dest == Vector2i.ZERO, "straight ahead does not insert a turn")
+	_assert(int(turned[Vector2i(8, 4)].cost) == 6, "three straight steps still spend 6 AP")
+	var short_turn := MatchRules.move_reach_with_prefix_turns(Vector2i(5, 4), Vector2i(1, 0), {}, 2)
+	_assert(Vector2i(6, 4) in short_turn, "2 AP still allow a straight step with prefix turns on")
+	_assert(Vector2i(5, 5) not in short_turn, "2 AP cannot afford a turn then a step")
+	var three_turn := MatchRules.move_reach_with_prefix_turns(Vector2i(5, 4), Vector2i(1, 0), {}, 3)
+	_assert(Vector2i(5, 5) in three_turn, "3 AP can turn 90° then step")
+	_assert(Vector2i(4, 4) not in three_turn, "3 AP cannot afford a 180° turn then a step")
 
 
 func _test_sprinting() -> void:
@@ -567,9 +627,9 @@ func _test_sprinting() -> void:
 	_assert("sprint" in cmds, "action bar offers sprint")
 	var queued := model.queue_plan(st.id, {id = "sprint", dest = _spot(2, 0), label = "Sprint"})
 	_assert(queued.ok, "sprint queues")
-	_assert(int(queued.plan.get("ap_cost", 0)) == 2, "queued sprint costs 2 AP")
-	_assert(int(queued.plan.get("ap_end", 0)) == 2, "a first-action sprint completes in wave 2")
-	_assert(model.ap_spent(st.id) == 2, "sprint spends 2 AP")
+	_assert(int(queued.plan.get("ap_cost", 0)) == 2, "queued straight sprint costs 2 AP")
+	_assert(int(queued.plan.get("ap_end", 0)) == 2, "a first-action straight sprint completes in wave 2")
+	_assert(model.ap_spent(st.id) == 2, "straight sprint spends 2 AP")
 	_assert(model.planning_pos(st) == _spot(2, 0), "planning pos jumps two tiles")
 	_assert(model.planning_facing(st) == east, "sprint keeps the current facing")
 	_assert(st.pos == MatchRules.CENTER_SPOT, "queued sprint does not move the piece")
@@ -583,7 +643,39 @@ func _test_sprinting() -> void:
 	_assert(leftover.queue_plan(leftover_st.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "straight step toward a 2-AP leftover")
 	_assert(leftover.queue_plan(leftover_st.id, {id = "move", dest = _spot(2, 0), label = "Move"}).ok, "second straight step leaves 2 AP")
 	_assert(leftover.ap_remaining(leftover_st.id) == 2, "two walks leave 2 AP")
-	_assert(_spot(4, 0) in leftover.command_dests(leftover_st, "sprint"), "2 leftover AP can afford a sprint")
+	_assert(_spot(4, 0) in leftover.command_dests(leftover_st, "sprint"), "2 leftover AP can afford a straight sprint")
+
+	var leftover_diag := MatchModel.new()
+	leftover_diag.setup_kickoff()
+	var leftover_diag_st := leftover_diag.player_at(MatchRules.CENTER_SPOT)
+	_assert(
+		leftover_diag.queue_plan(leftover_diag_st.id, {id = "turn", dest = _spot(1, 1), label = "Turn"}).ok,
+		"45° turn to face the diagonal"
+	)
+	_assert(
+		leftover_diag.queue_plan(leftover_diag_st.id, {id = "move", dest = _spot(1, 1), label = "Move"}).ok,
+		"diagonal walk after the turn leaves 2 AP"
+	)
+	_assert(leftover_diag.ap_remaining(leftover_diag_st.id) == 2, "turn then diagonal walk leave 2 AP")
+	_assert(leftover_diag.planning_facing(leftover_diag_st) == Vector2i(1, 1), "walk faces the diagonal")
+	_assert(
+		leftover_diag.command_dests(leftover_diag_st, "sprint").is_empty(),
+		"2 leftover AP cannot afford a diagonal sprint"
+	)
+	_assert(
+		not leftover_diag.queue_plan(leftover_diag_st.id, {id = "sprint", dest = _spot(3, 3), label = "Sprint"}).ok,
+		"queue rejects a diagonal sprint the player cannot afford"
+	)
+
+	var three_left := MatchModel.new()
+	three_left.setup_kickoff()
+	var three_st := three_left.player_at(MatchRules.CENTER_SPOT)
+	_assert(
+		three_left.queue_plan(three_st.id, {id = "move", dest = _spot(1, 1), label = "Move"}).ok,
+		"diagonal walk leaves 3 AP"
+	)
+	_assert(three_left.ap_remaining(three_st.id) == 3, "one diagonal walk leaves 3 AP")
+	_assert(_spot(3, 3) in three_left.command_dests(three_st, "sprint"), "3 leftover AP can afford a diagonal sprint")
 
 	var tight := MatchModel.new()
 	tight.setup_kickoff()
@@ -617,7 +709,29 @@ func _test_sprinting() -> void:
 	_assert(runner.facing == east, "sprinter still faces the sprint direction")
 	_assert(runner.has_ball, "carrier keeps the ball")
 	_assert(applied.ball.pos == runner.pos, "ball follows the sprint")
-	_assert(runner.energy == energy_before - 3, "a resolved sprint costs 3 energy")
+	_assert(runner.energy == energy_before - 3, "a resolved straight sprint costs 3 energy")
+
+	var diag_applied := MatchModel.new()
+	diag_applied.setup_kickoff()
+	var diag_runner := diag_applied.player_at(MatchRules.CENTER_SPOT)
+	diag_runner.facing = Vector2i(1, 1)
+	var diag_energy_before := diag_runner.energy
+	var diag_burst := diag_applied.apply_sprint(diag_runner.id, _spot(2, 2))
+	_assert(diag_burst.ok and diag_burst.action == "sprint", "apply diagonal sprint succeeds")
+	_assert(diag_runner.pos == _spot(2, 2), "diagonal sprinter lands two tiles on that diagonal")
+	_assert(diag_runner.facing == Vector2i(1, 1), "diagonal sprinter still faces the sprint direction")
+	_assert(diag_runner.energy == diag_energy_before - 5, "a resolved diagonal sprint costs 5 energy")
+
+	var diag_queued := MatchModel.new()
+	diag_queued.setup_kickoff()
+	var diag_st := diag_queued.player_at(MatchRules.CENTER_SPOT)
+	diag_st.facing = Vector2i(1, 1)
+	var diag_plan := diag_queued.queue_plan(diag_st.id, {id = "sprint", dest = _spot(2, 2), label = "Sprint"})
+	_assert(diag_plan.ok, "diagonal sprint queues")
+	_assert(int(diag_plan.plan.get("ap_cost", 0)) == 3, "queued diagonal sprint costs 3 AP")
+	_assert(int(diag_plan.plan.get("ap_end", 0)) == 3, "a first-action diagonal sprint completes in wave 3")
+	_assert(diag_queued.ap_spent(diag_st.id) == 3, "diagonal sprint spends 3 AP")
+	_assert(CombatLog.plan_summary(diag_plan.plan).contains("3 AP"), "plan text shows 3 AP")
 	_assert(CombatLog.format_result(burst).begins_with("SPRINT"), "log names a sprint")
 
 	var pickup := MatchModel.new()
@@ -2649,6 +2763,23 @@ func _test_controller_click_flow() -> void:
 	_assert(sprint.model.planning_pos(sprinter) == _spot(3, 0), "the piece previews on the clicked tile")
 	_assert(sprint.selected_id < 0, "spending every AP deselects the player")
 	sprint.queue_free()
+
+	var side_click: Node = packed.instantiate()
+	root.add_child(side_click)
+	side_click.animate_moves = false
+	side_click.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	_assert(side_click._pending_action == "move", "move is armed before a side-square click")
+	var side_st: PlayerState = side_click.model.player_at(MatchRules.CENTER_SPOT)
+	_assert(_spot(0, 1) in side_click.model.command_dests(side_st, "move"), "move highlights the side square after a prefix turn")
+	var side_step: Dictionary = side_click.handle_cell_clicked(_spot(0, 1))
+	_assert(side_step.get("action") == "queue", "clicking a side highlight queues turn then move")
+	var side_queued: Array = side_click.model.plans_of(side_st.id)
+	_assert(side_queued.size() == 2, "the side click queued two plans")
+	_assert(str(side_queued[0].get("action", "")) == "turn", "the side click starts with a turn")
+	_assert(str(side_queued[1].get("action", "")) == "move", "the side click then steps")
+	_assert(side_click.model.planning_pos(side_st) == _spot(0, 1), "the piece previews on the side tile")
+	_assert(side_click.model.ap_spent(side_st.id) == 3, "turn then side step spends 3 AP")
+	side_click.queue_free()
 
 	var pickup_ui: Node = packed.instantiate()
 	root.add_child(pickup_ui)
