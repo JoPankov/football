@@ -236,7 +236,7 @@ static func plan_summary(plan: Dictionary) -> String:
 		"shoot":
 			var leftover := int(plan.get("ap_left", cost))
 			var bonus := int(round(MatchRules.shot_ap_bonus(leftover) * 100.0))
-			core = "shoot at %s (+%d%%)" % [cell_text(dest), bonus]
+			core = "shoot at %s (+%d%% ACC)" % [cell_text(dest), bonus]
 		"swap":
 			core = "swap → %s" % cell_text(dest)
 		"dribble", "tackle", "challenge":

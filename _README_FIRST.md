@@ -81,21 +81,21 @@ A **turn-based, simultaneous-cycle, 11v11 grid football** match with a sci-fi sk
 
 Two sides:
 
-- **Aether** — home, cyan, attacks **+x** (left → right). Human always plays Aether.
-- **Helix** — away, magenta, attacks **−x**. Either a second hotseat player or a local greedy AI (`AiCoach`).
+- **Aether** — home, cyan, attacks **+x** (left → right). Human plays Aether in hotseat and vs-AI.
+- **Helix** — away, magenta, attacks **−x**. A second hotseat player, or a local greedy `AiCoach`.
 
 Pitch: **26×17** tiles plus **two extra goal tiles** outside the rectangle: Aether net `(-1, 8)`, Helix net `(26, 8)`. Keepers start in the net. Distance is **Chebyshev** (`max(|dx|, |dy|)`). Facing is one of the 8 directions.
 
 Each cycle:
 
 1. Aether **queues** up to **3 players**, **6 action points** each. Nothing on the board moves.
-2. Helix does the same (in vs-AI, Helix is pre-planned *before* Aether queues, still without seeing Aether’s plans).
-3. `TurnResolver` applies both queues in **six AP waves**. An action plays in the wave equal to the cumulative AP spent when it finishes: a 2-AP first step is wave 2, a later 2-AP step on the same player is wave 4, a 3-AP first step is wave 3. Empty waves do nothing. Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination clashes, then moves/sprints/swaps. Straight steps cost 2 AP, diagonal 3 AP, sprint 2 AP (2 tiles, facing only). A turn costs 1 AP up to 90° and 2 AP for 135°/180°. A shot spends leftover AP for +3% hit each and ends that player’s turn. A tackle or dribble that rolls a **numeric tie** bounces the ball to a random cell of the 3×3 around it (including staying put). Tackle success is DEF vs CTR minus an approach-angle penalty vs the carrier’s facing (front 0, 45° −15pp, side −30pp, 135° −50pp, back −85pp). A player who steals with a tackle keeps their tile, takes the ball, and then faces away from the old carrier.
+2. Helix does the same (in vs-AI, Helix is pre-planned *before* Aether queues, still without seeing Aether’s plans). Watch mode (`NEW AI vs AI`) fills both sides from clones of the same board; the human never queues.
+3. `TurnResolver` applies both queues in **six AP waves**. An action plays in the wave equal to the cumulative AP spent when it finishes: a 2-AP first step is wave 2, a later 2-AP step on the same player is wave 4, a 3-AP first step is wave 3. Empty waves do nothing. Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination clashes, then moves/sprints/swaps. Straight steps cost 2 AP, diagonal 3 AP, sprint 2 AP (2 tiles, facing only). A turn costs 1 AP up to 90° and 2 AP for 135°/180°. A shot spends leftover AP for +5% ACC each and ends that player’s turn. A tackle or dribble that rolls a **numeric tie** bounces the ball to a random cell of the 3×3 around it (including staying put). Tackle success is DEF vs CTR minus an approach-angle penalty vs the carrier’s facing (front 0, 45° −15pp, side −30pp, 135° −50pp, back −85pp). A player who steals with a tackle keeps their tile, takes the ball, and then faces away from the old carrier.
 4. Repeat. A goal rebuilds kickoff; the conceding side has the ball and plans first. Helix’s restart is the 180° of Aether’s 4-4-2. Vs-AI still preplans Helix invisibly and always leaves Aether in the chair — including after a Helix kickoff.
 
 The UI only **queues**. Resolution is the only place pieces, the ball, energy, and score change in a real match. Tests often call `MatchModel.apply_*` directly and skip the queue — that is intentional.
 
-There is no clock, no fouls, no substitutions, no pass inaccuracy other than intercepts, and no Aether AI.
+There is no clock, no fouls, no substitutions, no pass inaccuracy other than intercepts. Aether AI exists only for watch and self-play (the same greedy `AiCoach` as Helix). Vs-AI still puts a human on Aether.
 
 ---
 
@@ -103,7 +103,7 @@ There is no clock, no fouls, no substitutions, no pass inaccuracy other than int
 
 ```
 scenes/main.tscn
-  MatchController (Node2D, no class_name)   input, animation, vs-AI / hotseat
+  MatchController (Node2D, no class_name)   input, animation, hotseat / vs-AI / watch
     Pitch / PlayerPiece / BallPiece         drawing only
     MatchHUD / GameMenu                     CanvasLayer UI (built in code)
     MatchModel                              authoritative state
@@ -112,7 +112,8 @@ scenes/main.tscn
       PlayerState / BallState               data
       CombatLog                             text + fog-of-war
       TurnResolver                          cycle phases
-      AiCoach                               greedy Helix planner
+      AiCoach                               greedy one-side planner
+      AiSelfPlay                            clone both-sides fill + play_match
 ```
 
 | Layer | May do | Must not do |
@@ -164,13 +165,14 @@ When in doubt, read `MatchRules` and the tests.
 | `project.godot` | Name, 1280×720 maximized, main scene, Forward Plus |
 | `scenes/main.tscn` | `Main` + pitch + camera + HUD + menu |
 | `scripts/match_rules.gd` | Grid, nets, facing, offside, intercepts, 1dSTAT, shot formula |
-| `scripts/match_model.gd` | Kickoff, queries, queue, `apply_*` |
+| `scripts/match_model.gd` | Kickoff, queries, queue, `apply_*`, `clone()` |
 | `scripts/turn_resolver.gd` | Waves + phase order + destination clashes |
 | `scripts/formation.gd` | 4-4-2 slots and role stat table |
-| `scripts/player_state.gd` / `ball_state.gd` | Data. Ball: `carrier_id == -1` means loose |
+| `scripts/player_state.gd` / `ball_state.gd` | Data. Both have `clone()`. Ball: `carrier_id == -1` means loose |
 | `scripts/combat_log.gd` | Sequential log; plan lines hidden from the other team |
-| `scripts/ai_coach.gd` | Greedy Helix |
-| `scripts/match_controller.gd` | Scene root. Human is always Aether |
+| `scripts/ai_coach.gd` | Greedy one-side planner (Helix in vs-AI; both sides in watch/self-play) |
+| `scripts/ai_self_play.gd` | Independent both-sides fill from clones; headless `play_match` |
+| `scripts/match_controller.gd` | Scene root. Hotseat / vs-AI / AI vs AI watch |
 | `scripts/pitch.gd` / `player_piece.gd` / `ball_piece.gd` | Drawing |
 | `scripts/hud.gd` / `game_menu.gd` / `game_settings.gd` | UI chrome; settings in `user://settings.cfg` |
 | `tests/run_tests.gd` | The regression net. Extend this file; do not start a second suite |
@@ -191,6 +193,8 @@ HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markin
 7. **Dice use live stats** (`live_accuracy()` etc.).
 8. **Fog is a view filter**, not deleted data. `CombatLog.as_text()` with no args still contains PLAN lines.
 9. **Almost every public function returns `{ok, action, ...}`.** The log formatter and the tween code switch on `action`. Keep those keys stable. If you add an action, update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, `AiCoach._score`, and tests. `done` is planning-only: skip it in the resolver. `sprint` is one 2-tile plan, not two `move` steps.
+10. **`MatchModel.clone()` is a deep copy.** Players, ball, plans, RNG seed+state, and scripted flags are independent. Combat log starts empty on the clone. Mutating the clone must not change the original.
+11. **Headless watch must not auto-chain.** `animate_moves == false` runs at most one fill+resolve when tests call `step_ai_vs_ai_cycle()`. Graphical watch chains the next cycle only after `_play_resolve` finishes.
 
 ---
 
@@ -203,13 +207,14 @@ HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markin
 | When an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` / `can_queue` |
 | What an action **does** | `MatchModel.apply_*` |
 | Simultaneous order / clash rules | `TurnResolver` |
-| Helix personality | `AiCoach._score` |
+| Helix / watch-coach personality | `AiCoach._score` |
+| Run self-play / watch mode | `ai_self_play.gd` / `match_controller.gd` (`start_ai_vs_ai`, `step_ai_vs_ai_cycle`) |
 | Click / hotkey / animation | `match_controller.gd` |
 | Board or piece look | `pitch.gd` / `player_piece.gd` |
 | HUD chrome | `hud.gd` `_build*` |
 | Persist a new option | `GameSettings` + `GameMenu` options panel |
 
-Do not pretend fouls, a clock, named set pieces beyond kickoff, substitutions, injuries, stamina recovery, network play, or Aether AI exist.
+Do not pretend fouls, a clock, named set pieces beyond kickoff, substitutions, injuries, stamina recovery, or network play exist. Do not make `AiCoach` smarter in a plumbing change. Vs-AI is still human Aether + greedy Helix; watch/self-play is two greedy coaches.
 
 ---
 

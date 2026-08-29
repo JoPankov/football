@@ -61,6 +61,7 @@ var _command_ids: PackedStringArray = []
 var _shown_command_key: String = ""
 var _resolving: bool = false
 var require_end_turn: bool = false
+var watching: bool = false
 
 
 func _ready() -> void:
@@ -122,6 +123,8 @@ func _hint_for(
 	model: MatchModel,
 	pending_action: String = ""
 ) -> String:
+	if watching and not _resolving:
+		return "Watching AI vs AI — Esc for menu."
 	if pending_action == "shoot" and selected != null and hover_cell == MatchRules.opponent_goal(selected.team):
 		return model.shot_preview(selected).header
 	if pending_action == "pass" and selected != null and model.can_plan_pass_to_cell(selected, hover_cell):
@@ -309,10 +312,18 @@ func refresh_log(model: MatchModel) -> void:
 	if _log_label == null:
 		return
 	_model = model
-	var viewer := _CombatLog.VIEWER_PUBLIC if _resolving else model.current_team
+	var viewer := _log_viewer(model)
 	_log_label.text = model.combat_log.as_bbcode(viewer)
 	if _resolving:
 		_event.text = _event_line(last_event)
+
+
+func _log_viewer(model: MatchModel) -> int:
+	if watching:
+		return _CombatLog.VIEWER_ALL
+	if _resolving:
+		return _CombatLog.VIEWER_PUBLIC
+	return model.current_team
 
 
 func _apply_phase(model: MatchModel) -> void:
@@ -321,17 +332,23 @@ func _apply_phase(model: MatchModel) -> void:
 	var queued := model.acting_player_count(model.current_team)
 	var left := MatchRules.ACTIONS_PER_SIDE - queued
 	var phase_color := Color("f0c14b") if _resolving else (
-		Color("3ecbff") if home_turn else Color("ff4d8d")
+		Color("f0c14b") if watching else (
+			Color("3ecbff") if home_turn else Color("ff4d8d")
+		)
 	)
 	if _phase != null:
 		if _resolving:
 			_phase.text = "RESOLVING"
+		elif watching:
+			_phase.text = "WATCHING AI vs AI"
 		else:
 			_phase.text = "%s PLANNING" % acting
 		_phase.add_theme_color_override("font_color", phase_color)
 	if _turn != null:
 		if _resolving:
 			_turn.text = "PLAYING OUT BOTH TEAMS"
+		elif watching:
+			_turn.text = "BOTH TEAMS  ·  CYCLE %d" % (model.turn_index + 1)
 		else:
 			var left_word := "PLAYER" if left == 1 else "PLAYERS"
 			_turn.text = "%s   %d %s LEFT  ·  %d/%d AP  ·  CYCLE %d" % [
@@ -344,7 +361,7 @@ func _apply_phase(model: MatchModel) -> void:
 			]
 		_turn.add_theme_color_override("font_color", phase_color.lightened(0.2))
 	if _home_name != null:
-		if _resolving:
+		if _resolving or watching:
 			_home_name.modulate = Color(1, 1, 1, 0.8)
 			_away_name.modulate = Color(1, 1, 1, 0.8)
 		else:
@@ -355,7 +372,12 @@ func _apply_phase(model: MatchModel) -> void:
 	if _phase_bar != null:
 		_phase_bar.color = phase_color
 	if _log_title != null:
-		_log_title.text = "RESOLUTION LOG" if _resolving else "%s LOG" % acting
+		if _resolving:
+			_log_title.text = "RESOLUTION LOG"
+		elif watching:
+			_log_title.text = "MATCH LOG"
+		else:
+			_log_title.text = "%s LOG" % acting
 		_log_title.add_theme_color_override("font_color", phase_color)
 	if _log_style != null:
 		_log_style.border_color = phase_color.darkened(0.25)
@@ -371,6 +393,11 @@ func _pip_text(queued: int) -> String:
 func _refresh_end_turn(model: MatchModel) -> void:
 	if _end_turn == null:
 		return
+	if watching:
+		_end_turn.visible = false
+		_end_turn.disabled = true
+		return
+	_end_turn.visible = true
 	var ready := model.can_end_planning()
 	_end_turn.disabled = _resolving or not ready
 	if _resolving:
@@ -390,6 +417,18 @@ func _refresh_plan_list(model: MatchModel) -> void:
 		return
 	if _resolving:
 		_plan_list.text = "Playing out queued actions."
+		return
+	if watching:
+		var lines: PackedStringArray = ["Watching both teams queue."]
+		for plan in model.home_plans:
+			var home_player := model.player_by_id(int(plan.get("player_id", -1)))
+			var home_name := home_player.label() if home_player != null else "player"
+			lines.append("• %s  %s" % [home_name, _CombatLog.plan_summary(plan)])
+		for plan in model.away_plans:
+			var away_player := model.player_by_id(int(plan.get("player_id", -1)))
+			var away_name := away_player.label() if away_player != null else "player"
+			lines.append("• %s  %s" % [away_name, _CombatLog.plan_summary(plan)])
+		_plan_list.text = "\n".join(lines)
 		return
 	var lines: PackedStringArray = []
 	var queued := model.acting_player_count(model.current_team)
@@ -420,9 +459,9 @@ func _refresh_commands(model: MatchModel, selected: PlayerState, pending_action:
 	var key := "%s|%s|%s" % [
 		str(selected.id) if selected != null else "-",
 		pending_action,
-		"busy" if _resolving else "ready",
+		"watch" if watching else ("busy" if _resolving else "ready"),
 	]
-	if selected != null and not _resolving:
+	if selected != null and not _resolving and not watching:
 		for command in model.commands_for(selected):
 			key += "," + str(command.get("id", ""))
 	if key == _shown_command_key:
@@ -432,7 +471,7 @@ func _refresh_commands(model: MatchModel, selected: PlayerState, pending_action:
 		_action_box.remove_child(child)
 		child.queue_free()
 	_command_ids = PackedStringArray()
-	if selected == null or _resolving:
+	if selected == null or _resolving or watching:
 		return
 	var commands := model.commands_for(selected)
 	var index := 1
@@ -673,7 +712,7 @@ func _show_forecast(
 
 func _shot_forecast_text(shooter: PlayerState, preview: Dictionary) -> String:
 	var bits: PackedStringArray = [
-		"%s   d = %.2f tiles (%.1f m)   θ = %.0f°   leftover AP %d (+%d%%)   hit %d%%   save %d%%" % [
+		"%s   d = %.2f tiles (%.1f m)   θ = %.0f°   leftover AP %d (+%d%% ACC)   hit %d%%   save %d%%" % [
 			str(preview.get("header", "shoot")),
 			float(preview.get("distance", 0.0)),
 			float(preview.get("distance_m", 0.0)),
@@ -691,7 +730,7 @@ func _shot_forecast_text(shooter: PlayerState, preview: Dictionary) -> String:
 		bits.append(
 			"%s: %d ACC vs %d DEF, %.1f tiles off = %d%% intercept (%d%% through)" % [
 				name,
-				shooter.live_accuracy() if shooter != null else 0,
+				int(preview.get("accuracy", shooter.live_accuracy() if shooter != null else 0)),
 				player.live_defense() if player != null else 0,
 				float(threat.get("dist", 0.0)),
 				int(threat.get("intercept_percent", 0)),

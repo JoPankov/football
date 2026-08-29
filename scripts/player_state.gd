@@ -77,3 +77,16 @@ func stats_line() -> String:
 	return "ACC %d   DEF %d   CTR %d   STA %d   NRG %d/%d" % [
 		live_accuracy(), live_defense(), live_control(), stamina, energy, max_energy
 	]
+
+
+func clone() -> PlayerState:
+	var copy := PlayerState.new(id, team, number, role, pos)
+	copy.has_ball = has_ball
+	copy.accuracy = accuracy
+	copy.defense = defense
+	copy.control = control
+	copy.stamina = stamina
+	copy.energy = energy
+	copy.max_energy = max_energy
+	copy.facing = facing
+	return copy

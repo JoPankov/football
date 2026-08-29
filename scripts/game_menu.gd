@@ -5,6 +5,7 @@ extends CanvasLayer
 
 signal hotseat_pressed
 signal vs_ai_pressed
+signal ai_vs_ai_pressed
 signal new_game_pressed
 signal exit_pressed
 signal closed
@@ -24,6 +25,7 @@ var _main_panel: PanelContainer
 var _options_panel: PanelContainer
 var _hotseat_btn: Button
 var _vs_ai_btn: Button
+var _ai_vs_ai_btn: Button
 var _title_exit_btn: Button
 var _resume_btn: Button
 var _new_game_btn: Button
@@ -148,6 +150,10 @@ func _on_vs_ai() -> void:
 	vs_ai_pressed.emit()
 
 
+func _on_ai_vs_ai() -> void:
+	ai_vs_ai_pressed.emit()
+
+
 func _on_new_game() -> void:
 	new_game_pressed.emit()
 
@@ -232,6 +238,10 @@ func _build_title(panel: PanelContainer) -> void:
 	_vs_ai_btn = _menu_button("NEW VS AI")
 	_vs_ai_btn.pressed.connect(_on_vs_ai)
 	box.add_child(_vs_ai_btn)
+
+	_ai_vs_ai_btn = _menu_button("NEW AI vs AI")
+	_ai_vs_ai_btn.pressed.connect(_on_ai_vs_ai)
+	box.add_child(_ai_vs_ai_btn)
 
 	_title_exit_btn = _menu_button("EXIT")
 	_title_exit_btn.pressed.connect(_on_exit)

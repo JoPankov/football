@@ -1,5 +1,7 @@
 extends SceneTree
 
+const _AiSelfPlay := preload("res://scripts/ai_self_play.gd")
+
 ## Headless suite for the first slice: grid, movement, possession, turns.
 
 var _failed := 0
@@ -45,6 +47,9 @@ func _run() -> void:
 	await _test_controller_click_flow()
 	await _test_game_menu()
 	await _test_vs_ai()
+	_test_clone()
+	_test_ai_self_play()
+	await _test_ai_vs_ai()
 	if _failed == 0:
 		print("ALL TESTS PASSED")
 		quit(0)
@@ -230,8 +235,11 @@ func _test_action_points() -> void:
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 5) == 5, "shot spends leftover AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 1) == 1, "shot with 1 AP spends that point")
 	_assert(MatchRules.action_ap_cost("done", Vector2i(5, 5), Vector2i(5, 5), 4) == 0, "done costs 0 AP")
-	_assert(is_equal_approx(MatchRules.shot_ap_bonus(1), 0.03), "+3% hit per leftover AP")
-	_assert(is_equal_approx(MatchRules.shot_ap_bonus(5), 0.15), "5 leftover AP is +15% hit")
+	_assert(is_equal_approx(MatchRules.shot_ap_bonus(1), 0.05), "+5% ACC per leftover AP")
+	_assert(is_equal_approx(MatchRules.shot_ap_bonus(5), 0.25), "5 leftover AP is +25% ACC")
+	_assert(MatchRules.shot_accuracy(20, 0) == 20, "no leftover AP keeps printed ACC")
+	_assert(MatchRules.shot_accuracy(20, 1) == 21, "1 leftover AP is +5% ACC")
+	_assert(MatchRules.shot_accuracy(20, 6) == 26, "6 leftover AP is +30% ACC (20 → 26)")
 
 	var model := MatchModel.new()
 	model.setup_kickoff()
@@ -327,12 +335,20 @@ func _test_action_points() -> void:
 	var preview1 := shot_model.shot_preview(shooter, 1)
 	_assert(preview6.remaining_ap == 6, "preview accepts leftover AP")
 	_assert(
-		is_equal_approx(float(preview6.leftover_bonus), 0.18),
-		"6 leftover AP is +18% hit"
+		is_equal_approx(float(preview6.leftover_bonus), 0.30),
+		"6 leftover AP is +30% ACC"
 	)
 	_assert(
-		is_equal_approx(float(preview1.leftover_bonus), 0.03),
-		"1 leftover AP is +3% hit"
+		int(preview6.get("accuracy", 0)) == MatchRules.shot_accuracy(shooter.live_accuracy(), 6),
+		"6 leftover AP aims with ACC × 1.30"
+	)
+	_assert(
+		is_equal_approx(float(preview1.leftover_bonus), 0.05),
+		"1 leftover AP is +5% ACC"
+	)
+	_assert(
+		int(preview1.get("accuracy", 0)) == MatchRules.shot_accuracy(shooter.live_accuracy(), 1),
+		"1 leftover AP aims with ACC × 1.05"
 	)
 	_assert(float(preview6.hit_chance) >= float(preview1.hit_chance), "more leftover AP hits more often")
 
@@ -2267,8 +2283,8 @@ func _test_shooting() -> void:
 		"midfield striker is under 5% hit with no leftover AP"
 	)
 	_assert(
-		MatchRules.can_attempt_shot(MatchRules.CENTER_SPOT, MatchRules.AWAY_NET, 20, 6),
-		"leftover AP can lift a midfield shot over 5%"
+		not MatchRules.can_attempt_shot(MatchRules.CENTER_SPOT, MatchRules.AWAY_NET, 20, 6),
+		"leftover AP boosting ACC 20 to 26 still cannot hit 5% from midfield"
 	)
 	_assert(
 		not MatchRules.can_attempt_shot(MatchRules.AWAY_NET, MatchRules.AWAY_NET, 20, 6),
@@ -2333,27 +2349,29 @@ func _test_shooting() -> void:
 	_assert(
 		is_equal_approx(
 			pen_hit_5,
-			clampf(pen_hit + 0.15, MatchRules.SHOT_MIN_HIT, MatchRules.SHOT_MAX_HIT)
+			MatchRules.shot_hit_chance(MatchRules.shot_accuracy(50, 5), 11.0, 0.0)
 		),
-		"5 leftover AP add 15 percentage points of hit"
+		"5 leftover AP add 25% ACC to the hit roll"
 	)
+	_assert(pen_hit_5 > pen_hit, "higher leftover ACC hits more often than the raw stat")
 	var pen_hit_1 := MatchRules.shot_hit_chance(50, 11.0, 0.0, 1)
 	_assert(
 		is_equal_approx(
 			pen_hit_1,
-			clampf(pen_hit + 0.03, MatchRules.SHOT_MIN_HIT, MatchRules.SHOT_MAX_HIT)
+			MatchRules.shot_hit_chance(MatchRules.shot_accuracy(50, 1), 11.0, 0.0)
 		),
-		"1 leftover AP adds 3 percentage points of hit"
+		"1 leftover AP adds 5% ACC to the hit roll"
 	)
 
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var st := model.player_at(MatchRules.CENTER_SPOT)
-	_assert(model.can_shoot(st), "can shoot from kickoff when hit chance is at least 5%")
+	_assert(not model.can_shoot(st, 0), "kickoff shot is under 5% hit with no leftover AP")
+	_assert(not model.can_shoot(st), "leftover AP boosting ACC 20 to 26 still cannot hit 5% from kickoff")
 	var kickoff_cmds: Array = []
 	for cmd in model.commands_for(st):
 		kickoff_cmds.append(cmd.id)
-	_assert("shoot" in kickoff_cmds, "kickoff carrier is offered shoot")
+	_assert("shoot" not in kickoff_cmds, "kickoff carrier is not offered a sub-5% shot")
 	st.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
 	model.ball.pos = st.pos
 	_assert(model.can_shoot(st), "can shoot from the penalty box")
@@ -2367,7 +2385,11 @@ func _test_shooting() -> void:
 	_assert(preview.text.contains("leftover AP"), "preview shows leftover AP bonus")
 	_assert(preview.text.contains("goal = through"), "preview shows the goal product")
 	_assert(int(preview.get("remaining_ap", -1)) == 6, "unspent shooter previews a 6 AP shot")
-	_assert(is_equal_approx(float(preview.get("leftover_bonus", 0.0)), 0.18), "unspent shooter gets +18% hit")
+	_assert(is_equal_approx(float(preview.get("leftover_bonus", 0.0)), 0.30), "unspent shooter gets +30% ACC")
+	_assert(
+		int(preview.get("accuracy", 0)) == MatchRules.shot_accuracy(st.live_accuracy(), 6),
+		"unspent shooter aims with ACC × 1.30"
+	)
 	_assert(preview.keeper_in_net, "helix keeper starts in the net")
 
 	model.scripted_shot_outcome = "goal"
@@ -2396,23 +2418,21 @@ func _test_shooting() -> void:
 	weak.pos = far_post
 	gate.ball.pos = weak.pos
 	_assert(not gate.can_shoot(weak, 0), "model withholds a sub-5% far-post shot")
-	_assert(gate.can_shoot(weak), "unspent AP is the leftover used for the 5% gate")
+	_assert(not gate.can_shoot(weak), "leftover AP boosting ACC 1 still cannot hit 5% from the far post")
 	var gate_cmds: Array = []
 	for cmd in gate.commands_for(weak):
 		gate_cmds.append(cmd.id)
-	_assert("shoot" in gate_cmds, "action bar lists shoot when hit is 5%+")
+	_assert("shoot" not in gate_cmds, "action bar hides a sub-5% far-post shot")
 	var far_preview := gate.shot_preview(weak, 0)
 	var far_preview_1 := gate.shot_preview(weak, 1)
+	_assert(int(far_preview.get("accuracy", 0)) == weak.live_accuracy(), "no leftover AP keeps live ACC")
 	_assert(
-		is_equal_approx(
-			float(far_preview_1.hit_chance),
-			clampf(
-				float(far_preview.hit_chance) + 0.03,
-				MatchRules.SHOT_MIN_HIT,
-				MatchRules.SHOT_MAX_HIT
-			)
-		),
-		"leftover AP bonus still applies on top of the Gaussian base hit"
+		int(far_preview_1.get("accuracy", 0)) == MatchRules.shot_accuracy(weak.live_accuracy(), 1),
+		"1 leftover AP aims with ACC × 1.05"
+	)
+	_assert(
+		float(far_preview_1.hit_chance) >= float(far_preview.hit_chance),
+		"leftover AP raises ACC for the Gaussian hit, not a flat success addend"
 	)
 
 	var cut_model := MatchModel.new()
@@ -2430,9 +2450,9 @@ func _test_shooting() -> void:
 	var cutter: PlayerState = helix_field[0]
 	var aether_partner := cut_model.player_at(_spot(0, -1))
 	aether_partner.pos = Vector2i(0, 0)
-	cutter_st.pos = Vector2i(cutter_st.pos.x, cutter_st.pos.y - 1)
+	cutter_st.pos = Vector2i(MatchRules.GRID_WIDTH - 6, MatchRules.CENTER_Y - 1)
 	cut_model.ball.pos = cutter_st.pos
-	cutter.pos = Vector2i(18, 8)
+	cutter.pos = Vector2i(MatchRules.GRID_WIDTH - 4, MatchRules.CENTER_Y)
 	var shot_threats := cut_model.interceptors_for_pass(cutter_st, MatchRules.AWAY_NET)
 	_assert(shot_threats.size() == 1, "only the placed defender threatens the shot")
 	_assert(shot_threats[0].player.id == cutter.id, "placed defender is the shot interceptor")
@@ -2473,6 +2493,8 @@ func _test_shooting() -> void:
 	var clean_shot := MatchModel.new()
 	clean_shot.setup_kickoff()
 	var clean_st := clean_shot.player_at(MatchRules.CENTER_SPOT)
+	clean_st.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
+	clean_shot.ball.pos = clean_st.pos
 	var clean_park := 0
 	for player in clean_shot.players:
 		if player.team != MatchRules.Team.AWAY or player.role == "GK":
@@ -2517,17 +2539,21 @@ func _test_controller_click_flow() -> void:
 	await process_frame
 	_assert(controller.hud._forecast.visible, "pass hover shows the success forecast")
 	_assert(controller.hud._forecast_label.text.contains("Pass success"), "forecast shows the pass success chance")
+	var shoot_st: PlayerState = controller.model.player_at(MatchRules.CENTER_SPOT)
+	shoot_st.pos = Vector2i(MatchRules.GRID_WIDTH - 6, MatchRules.CENTER_Y)
+	controller.model.ball.pos = shoot_st.pos
+	controller._refresh()
 	var shoot_cmd: Dictionary = controller.select_command("shoot")
-	_assert(shoot_cmd.get("ok", false), "shoot is available for the kickoff carrier")
+	_assert(shoot_cmd.get("ok", false), "shoot is available from the attacking third")
 	var helix_marker: PlayerState = controller.model.player_at(MatchRules.AWAY_KICKOFF)
 	var helix_home: Vector2i = helix_marker.pos
-	helix_marker.pos = Vector2i(MatchRules.CENTER_SPOT.x + 4, MatchRules.CENTER_Y)
+	helix_marker.pos = Vector2i(shoot_st.pos.x + 2, MatchRules.CENTER_Y)
 	controller._set_hover(MatchRules.AWAY_NET)
 	await process_frame
 	_assert(controller.hud._forecast.visible, "shoot hover shows the success forecast")
 	_assert(controller.hud._forecast_label.text.contains("hit"), "forecast shows the shot hit chance")
 	_assert(
-		controller.pitch.pass_lane_from == MatchRules.CENTER_SPOT,
+		controller.pitch.pass_lane_from == shoot_st.pos,
 		"shot hover draws the pass line from the shooter"
 	)
 	_assert(
@@ -2544,6 +2570,8 @@ func _test_controller_click_flow() -> void:
 	var forecast_box: Rect2 = controller.hud._forecast.get_global_rect()
 	_assert(forecast_box.position.y >= play.end.y - 4.0, "forecast sits below the playable pitch")
 	_assert(forecast_box.end.x <= play.end.x + 8.0, "forecast does not overlap the match log")
+	shoot_st.pos = MatchRules.CENTER_SPOT
+	controller.model.ball.pos = MatchRules.CENTER_SPOT
 	controller._deselect()
 	var select_result: Dictionary = controller.handle_cell_clicked(MatchRules.CENTER_SPOT)
 	_assert(select_result.get("action") == "select", "clicking own player selects")
@@ -3140,6 +3168,7 @@ func _test_game_menu() -> void:
 	_assert(main.menu.is_title_open(), "title screen can open")
 	_assert(main.menu._hotseat_btn != null, "title lists new hotseat")
 	_assert(main.menu._vs_ai_btn != null, "title lists new vs ai")
+	_assert(main.menu._ai_vs_ai_btn != null, "title lists new ai vs ai")
 	_assert(main.menu._title_exit_btn != null, "title lists exit")
 	main.menu._on_escape()
 	_assert(main.menu.is_title_open(), "escape does not leave the title screen")
@@ -3149,6 +3178,7 @@ func _test_game_menu() -> void:
 	_assert(main.model.player_at(MatchRules.CENTER_SPOT).has_ball, "hotseat starts at kickoff")
 	_assert(not paused, "hotseat unpauses")
 	_assert(not main.vs_ai, "hotseat is not vs-ai")
+	_assert(not main.ai_vs_ai, "hotseat is not ai-vs-ai")
 	main.queue_free()
 	paused = false
 	await process_frame
@@ -3163,6 +3193,7 @@ func _test_vs_ai() -> void:
 	main.animate_moves = false
 	main.start_vs_ai()
 	_assert(main.vs_ai, "new vs ai sets the mode")
+	_assert(not main.ai_vs_ai, "vs ai is not watch mode")
 	_assert(main.model.current_team == MatchRules.Team.HOME, "human still plans aether")
 	_assert(main.model.plan_count(MatchRules.Team.HOME) == 0, "aether has not queued yet")
 	var helix_n: int = main.model.plan_count(MatchRules.Team.AWAY)
@@ -3246,5 +3277,286 @@ func _test_vs_ai() -> void:
 	_assert(aether_lock.get("action") == "resolve", "aether lock after helix kickoff vs-ai resolves immediately")
 	_assert(kick.model.current_team == MatchRules.Team.HOME, "aether plans the next cycle after helix kickoff vs-ai")
 	kick.queue_free()
+	paused = false
+	await process_frame
+
+
+func _plan_sig(plans: Array) -> PackedStringArray:
+	var sig := PackedStringArray()
+	for plan in plans:
+		sig.append("%s:%s:%s:%s" % [
+			int(plan.get("player_id", -1)),
+			str(plan.get("action", "")),
+			str(plan.get("dest", Vector2i.ZERO)),
+			int(plan.get("ap_cost", 0)),
+		])
+	return sig
+
+
+func _assert_side_caps(model: MatchModel, team: int, label: String) -> void:
+	var spent := {}
+	for plan in model.plans_for(team):
+		var pid := int(plan.get("player_id", -1))
+		var player := model.player_by_id(pid)
+		_assert(player != null and player.team == team, "%s plans only use that team's player ids" % label)
+		spent[pid] = int(spent.get(pid, 0)) + int(plan.get("ap_cost", 0))
+	_assert(
+		spent.size() <= MatchRules.ACTIONS_PER_SIDE,
+		"%s acting_player_count stays within 3" % label
+	)
+	for pid in spent:
+		_assert(
+			int(spent[pid]) <= MatchRules.PLAYER_ACTION_POINTS,
+			"%s AP per player stays within 6" % label
+		)
+
+
+func _test_clone() -> void:
+	print("-- clone")
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var original_log := model.combat_log.as_text()
+	_assert(not original_log.is_empty(), "kickoff writes a combat log header")
+	var holder := model.carrier()
+	_assert(holder != null, "kickoff has a carrier")
+	model.rng.randi_range(1, 100)
+	model.rng.randi_range(1, 100)
+
+	var copy := model.clone()
+	_assert(copy != model, "clone is a different RefCounted")
+	_assert(copy.players[0] != model.players[0], "cloned players are different RefCounteds")
+	_assert(copy.ball != model.ball, "cloned ball is a different RefCounted")
+	_assert(copy.players.size() == 22, "kickoff clone has 22 players")
+	_assert(copy.home_score == model.home_score and copy.away_score == model.away_score, "clone copies scores")
+	_assert(copy.current_team == model.current_team, "clone copies current team")
+	_assert(copy.awaiting_other_side == model.awaiting_other_side, "clone copies awaiting_other_side")
+	_assert(copy.turn_index == model.turn_index, "clone copies turn index")
+	_assert(copy.ignore_team_gate == model.ignore_team_gate, "clone copies ignore_team_gate")
+	_assert(copy.ball.carrier_id == model.ball.carrier_id, "clone copies carrier id")
+	_assert(copy.ball.pos == model.ball.pos, "clone copies ball pos")
+	_assert(copy.combat_log.entries.is_empty(), "clone omits combat log")
+	var seen := {}
+	for i in copy.players.size():
+		var src: PlayerState = model.players[i]
+		var dst: PlayerState = copy.players[i]
+		_assert(dst.id == src.id, "clone keeps player ids")
+		_assert(dst.team == src.team and dst.number == src.number and dst.role == src.role, "clone keeps identity")
+		_assert(dst.pos == src.pos, "clone keeps positions")
+		_assert(dst.facing == src.facing, "clone keeps facings")
+		_assert(dst.energy == src.energy and dst.max_energy == src.max_energy, "clone keeps energy")
+		_assert(dst.has_ball == src.has_ball, "clone keeps has_ball")
+		_assert(dst.accuracy == src.accuracy and dst.defense == src.defense, "clone keeps printed stats")
+		_assert(not seen.has(dst.pos), "clone positions stay unique")
+		seen[dst.pos] = true
+		if dst.has_ball:
+			_assert(copy.ball.carrier_id == dst.id, "clone has_ball pairs with carrier_id")
+			_assert(copy.ball.pos == dst.pos, "clone ball sits on the carrier")
+
+	var orig_pos: Vector2i = model.players[0].pos
+	copy.players[0].pos = orig_pos + Vector2i(1, 0)
+	_assert(model.players[0].pos == orig_pos, "mutating clone position does not move the original")
+	copy.home_score = 4
+	_assert(model.home_score == 0, "mutating clone score does not change the original")
+	var dummy := _dummy_empty_move(copy, MatchRules.Team.HOME, {})
+	_assert(not dummy.is_empty(), "clone can still queue from kickoff")
+	var queued: Dictionary = copy.queue_plan(dummy.player.id, {id = "move", dest = dummy.dest, label = "Move"})
+	_assert(queued.get("ok", false), "clone can queue a plan")
+	_assert(model.home_plans.is_empty(), "queueing on the clone does not touch original plans")
+	var orig_dummy := _dummy_empty_move(model, MatchRules.Team.HOME, {})
+	_assert(not orig_dummy.is_empty(), "original still has a legal dummy move after clone")
+	var orig_queued: Dictionary = model.queue_plan(
+		orig_dummy.player.id, {id = "move", dest = orig_dummy.dest, label = "Move"}
+	)
+	_assert(orig_queued.get("ok", false), "original queue_plan still works after a clone was taken")
+	_assert(copy.home_plans.size() == 1, "original queue does not grow the clone's plans")
+
+	var roll_a := model.rng.randi_range(1, 20)
+	var roll_b := copy.rng.randi_range(1, 20)
+	_assert(roll_a == roll_b, "clone rng continues from the same seed and state")
+	copy.rng.randi_range(1, 1000)
+	var roll_c := model.rng.randi_range(1, 20)
+	_assert(roll_c != 0, "rolling the clone rng does not break the original stream")
+
+	var shot_model := MatchModel.new()
+	shot_model.setup_kickoff()
+	var shot_copy := shot_model.clone()
+	var shooter: PlayerState = shot_copy.player_at(MatchRules.CENTER_SPOT)
+	shooter.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
+	shot_copy.ball.pos = shooter.pos
+	shot_copy.scripted_shot_outcome = "goal"
+	var scored: Dictionary = shot_copy.apply_shoot(shooter.id)
+	_assert(scored.get("goal", false), "scripted_shot_outcome on a clone still forces a goal")
+	_assert(shot_copy.home_score == 1, "clone records the goal")
+	_assert(shot_model.home_score == 0, "forced clone goal does not score on the original")
+	_assert(shot_model.scripted_shot_outcome == null, "original scripted shot stays unset")
+	var orig_st: PlayerState = shot_model.player_at(MatchRules.CENTER_SPOT)
+	_assert(orig_st != null and orig_st.pos == MatchRules.CENTER_SPOT, "original kickoff striker stays put")
+
+
+func _test_ai_self_play() -> void:
+	print("-- ai self play")
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var aether_only := model.clone()
+	aether_only.away_plans.clear()
+	aether_only.home_plans.clear()
+	aether_only.current_team = MatchRules.Team.HOME
+	aether_only.awaiting_other_side = false
+	_AiSelfPlay.fill_side(aether_only)
+	_assert(aether_only.away_plans.is_empty(), "filling aether does not require helix plans")
+	_assert_side_caps(aether_only, MatchRules.Team.HOME, "aether-only fill")
+
+	var snap := model.clone()
+	var home_board := snap.clone()
+	home_board.home_plans.clear()
+	home_board.away_plans.clear()
+	home_board.current_team = MatchRules.Team.HOME
+	home_board.awaiting_other_side = false
+	_AiSelfPlay.fill_side(home_board)
+	var away_board := snap.clone()
+	away_board.home_plans.clear()
+	away_board.away_plans.clear()
+	away_board.current_team = MatchRules.Team.AWAY
+	away_board.awaiting_other_side = false
+	_AiSelfPlay.fill_side(away_board)
+
+	var helix_first := snap.clone()
+	helix_first.home_plans.clear()
+	helix_first.away_plans.clear()
+	helix_first.current_team = MatchRules.Team.AWAY
+	helix_first.awaiting_other_side = false
+	_AiSelfPlay.fill_side(helix_first)
+	var helix_first_away := _plan_sig(helix_first.away_plans)
+	helix_first.current_team = MatchRules.Team.HOME
+	_AiSelfPlay.fill_side(helix_first)
+
+	var both := snap.clone()
+	_AiSelfPlay.fill_both_independently(both)
+	_assert_side_caps(both, MatchRules.Team.HOME, "independent aether")
+	_assert_side_caps(both, MatchRules.Team.AWAY, "independent helix")
+	_assert(
+		_plan_sig(both.home_plans) == _plan_sig(home_board.home_plans),
+		"helper aether plans match filling aether on a clean clone"
+	)
+	_assert(
+		_plan_sig(both.away_plans) == _plan_sig(away_board.away_plans),
+		"helper helix plans match filling helix on a clean clone"
+	)
+	_assert(
+		helix_first_away == _plan_sig(away_board.away_plans),
+		"filling helix first on a clone does not need aether dests"
+	)
+	_assert(
+		_plan_sig(helix_first.home_plans) == _plan_sig(home_board.home_plans),
+		"filling aether after helix on a sibling clone still matches a clean aether fill"
+	)
+
+	var poisoned := snap.clone()
+	poisoned.home_plans.append({
+		player_id = 0,
+		team = MatchRules.Team.HOME,
+		action = "move",
+		dest = Vector2i(0, 0),
+		ap_cost = 2,
+	})
+	_AiSelfPlay.fill_both_independently(poisoned)
+	_assert(
+		_plan_sig(poisoned.away_plans) == _plan_sig(away_board.away_plans),
+		"helper fills away from a clone, not live.home_plans"
+	)
+
+	var short := _AiSelfPlay.play_match(2)
+	_assert(short.get("cycles") == 2, "play_match(max_cycles=2) always runs 2 resolves, including any goal reset")
+	_assert(short.get("terminated") == "cycles", "play_match stops on the cycle cap")
+	_assert(typeof(short.get("home_score")) == TYPE_INT, "play_match returns home_score")
+	_assert(typeof(short.get("away_score")) == TYPE_INT, "play_match returns away_score")
+
+	var seeded_a := _AiSelfPlay.play_match(3, 4242)
+	var seeded_b := _AiSelfPlay.play_match(3, 4242)
+	_assert(seeded_a.get("cycles") == 3 and seeded_b.get("cycles") == 3, "seeded play_match runs 3 cycles")
+	_assert(seeded_a.get("home_score") == seeded_b.get("home_score"), "seeded play_match repeats home score")
+	_assert(seeded_a.get("away_score") == seeded_b.get("away_score"), "seeded play_match repeats away score")
+	_assert(seeded_a.get("carrier_id") == seeded_b.get("carrier_id"), "seeded play_match repeats carrier")
+	_assert(seeded_a.get("ball_pos") == seeded_b.get("ball_pos"), "seeded play_match repeats ball pos")
+	_assert(seeded_a.get("turn_index") == seeded_b.get("turn_index"), "seeded play_match repeats turn index")
+
+
+func _test_ai_vs_ai() -> void:
+	print("-- ai vs ai")
+	var packed: PackedScene = load("res://scenes/main.tscn")
+	var main: Node = packed.instantiate()
+	root.add_child(main)
+	await process_frame
+	main.animate_moves = false
+	main.menu.open_title()
+	_assert(main.menu._ai_vs_ai_btn != null, "title lists new ai vs ai")
+	main.menu._ai_vs_ai_btn.pressed.emit()
+	_assert(main.ai_vs_ai, "new ai vs ai sets watch mode")
+	_assert(not main.vs_ai, "watch mode is not vs-ai")
+	_assert(not main.menu.is_open(), "new ai vs ai closes the title")
+	_assert(not paused, "new ai vs ai unpauses")
+	_assert(main.model.player_at(MatchRules.CENTER_SPOT).has_ball, "watch starts at kickoff")
+	_assert(main.model.home_score == 0 and main.model.away_score == 0, "watch kickoff is 0-0")
+	_assert(main.hud.watching, "hud knows this is a watch match")
+	_assert(not main.hud._end_turn.visible, "end turn is hidden while watching")
+	_assert(main.hud._hint.text.contains("Watching AI vs AI"), "hint says this is a watch match")
+
+	var click: Dictionary = main.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	_assert(not click.get("ok", false), "clicks are rejected in watch mode")
+	_assert(click.get("reason") == "watching", "watch clicks report watching")
+	_assert(not main.end_planning().get("ok", false), "end turn no-ops in watch mode")
+	_assert(not main.undo_last_action().get("ok", false), "undo no-ops in watch mode")
+
+	main.fill_ai_vs_ai_plans()
+	_assert_side_caps(main.model, MatchRules.Team.HOME, "watch aether fill")
+	_assert_side_caps(main.model, MatchRules.Team.AWAY, "watch helix fill")
+	var teams := {}
+	for marker in main._plan_markers():
+		teams[int(marker.get("team", -1))] = true
+	_assert(teams.has(MatchRules.Team.HOME) and teams.has(MatchRules.Team.AWAY), "watch markers include both teams")
+
+	var stepped: Dictionary = main.step_ai_vs_ai_cycle()
+	_assert(stepped.get("action") == "resolve", "step_ai_vs_ai_cycle fills both sides and resolves once")
+	_assert(not main.busy, "headless watch does not stay busy after one step")
+
+	main.start_vs_ai()
+	_assert(main.vs_ai, "start_vs_ai still sets vs-ai")
+	_assert(not main.ai_vs_ai, "start_vs_ai clears watch mode")
+	_assert(main.model.current_team == MatchRules.Team.HOME, "vs-ai still leaves aether in the chair")
+	_assert(main.model.plan_count(MatchRules.Team.AWAY) >= 1, "vs-ai still preplans helix")
+	_assert(main.model.plan_count(MatchRules.Team.HOME) == 0, "vs-ai does not preplan aether")
+	_assert(main._plan_markers().is_empty(), "helix markers stay hidden in vs-ai")
+	_assert(not main.hud.watching, "hud leaves watch mode for vs-ai")
+	_assert(main.hud._end_turn.visible, "end turn returns for vs-ai")
+
+	main.start_hotseat()
+	_assert(not main.vs_ai and not main.ai_vs_ai, "start_hotseat clears both ai flags")
+	_assert(main.model.current_team == MatchRules.Team.HOME, "hotseat starts with aether")
+	_assert(main.model.plan_count(MatchRules.Team.AWAY) == 0, "hotseat does not preplan helix")
+
+	main.start_ai_vs_ai()
+	var shooter: PlayerState = main.model.player_at(MatchRules.CENTER_SPOT)
+	_assert(shooter != null, "watch kickoff striker exists")
+	shooter.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
+	main.model.ball.pos = shooter.pos
+	main.model.scripted_shot_outcome = "goal"
+	var scored: Dictionary = main.model.apply_shoot(shooter.id)
+	_assert(scored.get("goal", false), "scripted watch shot is a goal")
+	_assert(main.model.current_team == MatchRules.Team.AWAY, "helix would kick off after conceding")
+	main.fill_ai_vs_ai_plans()
+	_assert(main.model.current_team == MatchRules.Team.AWAY, "watch does not put aether in the chair after a helix kickoff")
+	_assert(main.model.acting_player_count(MatchRules.Team.HOME) >= 1, "watch fills aether on the helix kickoff")
+	_assert(main.model.acting_player_count(MatchRules.Team.AWAY) >= 1, "watch fills helix on its kickoff")
+	var after_goal: Dictionary = main.step_ai_vs_ai_cycle()
+	_assert(after_goal.get("action") == "resolve", "watch step after a goal still resolves")
+	_assert(not main.model.awaiting_other_side, "watch is not waiting for a human lock")
+	_assert(not main.handle_cell_clicked(MatchRules.AWAY_SPOT).get("ok", false), "watch still ignores clicks after a goal")
+
+	main.model.home_score = 3
+	main.start_new_game()
+	_assert(main.ai_vs_ai, "new game in watch mode stays a watch match")
+	_assert(main.model.home_score == 0 and main.model.away_score == 0, "new game restarts watch at 0-0")
+	_assert(main.model.player_at(MatchRules.CENTER_SPOT).has_ball, "new watch game is aether kickoff")
+	main.queue_free()
 	paused = false
 	await process_frame

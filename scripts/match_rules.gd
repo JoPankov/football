@@ -53,8 +53,8 @@ const SHOT_COS_FLOOR := 0.15
 const SHOT_SIGMA_MAX_DEG := 12.0
 const SHOT_SIGMA_MIN_DEG := 1.0
 const SHOT_SIGMA_POWER := 1.2
-## +3 percentage points of hit chance per leftover AP spent on the shot.
-const SHOT_AP_HIT_BONUS := 0.03
+## +5% of the accuracy stat per leftover AP spent on the shot.
+const SHOT_AP_ACC_BONUS := 0.05
 ## Minimum unclamped hit chance to offer a shot. The roll is also clamped here.
 const SHOT_MIN_HIT := 0.05
 const SHOT_MAX_HIT := 0.98
@@ -188,7 +188,13 @@ static func shot_sigma_rad(accuracy: int) -> float:
 
 
 static func shot_ap_bonus(remaining_ap: int) -> float:
-	return SHOT_AP_HIT_BONUS * float(maxi(0, remaining_ap))
+	return SHOT_AP_ACC_BONUS * float(maxi(0, remaining_ap))
+
+
+## Live ACC times leftover-AP aiming bonus. Used for hit spray, intercepts, and saves.
+static func shot_accuracy(accuracy: int, remaining_ap: int = 0) -> int:
+	var factor := 1.0 + shot_ap_bonus(remaining_ap)
+	return maxi(1, int(floor(float(maxi(0, accuracy)) * factor + 0.5)))
 
 
 ## Unclamped P(Gaussian miss lands in the goal rectangle). `distance` is metres. No leftover AP.
@@ -203,14 +209,14 @@ static func shot_base_hit_chance(distance: float, angle_rad: float, accuracy: in
 	return erf_approx(half_w / s) * erf_approx(half_h / s)
 
 
-## `distance` is metres, same as `shot_base_hit_chance`.
+## `distance` is metres, same as `shot_base_hit_chance`. Leftover AP raises ACC, not hit.
 static func shot_raw_hit_chance(
 	accuracy: int,
 	distance: float,
 	angle_rad: float,
 	remaining_ap: int = 0
 ) -> float:
-	return shot_base_hit_chance(distance, angle_rad, accuracy) + shot_ap_bonus(remaining_ap)
+	return shot_base_hit_chance(distance, angle_rad, shot_accuracy(accuracy, remaining_ap))
 
 
 ## `distance` is metres, same as `shot_base_hit_chance`.
@@ -220,10 +226,11 @@ static func shot_hit_chance(
 	angle_rad: float,
 	remaining_ap: int = 0
 ) -> float:
-	var base := clampf(
-		shot_base_hit_chance(distance, angle_rad, accuracy), SHOT_MIN_HIT, SHOT_MAX_HIT
+	return clampf(
+		shot_raw_hit_chance(accuracy, distance, angle_rad, remaining_ap),
+		SHOT_MIN_HIT,
+		SHOT_MAX_HIT
 	)
-	return clampf(base + shot_ap_bonus(remaining_ap), SHOT_MIN_HIT, SHOT_MAX_HIT)
 
 
 static func is_diagonal_step(from: Vector2i, to: Vector2i) -> bool:

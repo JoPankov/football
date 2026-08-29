@@ -8,6 +8,7 @@ This is what the game actually does today.
 - Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 8)`, Helix net `(26, 8)`. Each net is **one cell**. Keepers start in the net so they do not occupy a pitch tile.
 - From a net tile the keeper can step to the three adjacent pitch squares in front of goal.
 - Teams: **Aether** (home, cyan, attacks +x) vs **Helix** (away, magenta, attacks −x).
+- Title screen: **NEW HOTSEAT**, **NEW VS AI**, **NEW AI vs AI**, and Exit.
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
 - Aether **#9 ST** starts on the centre spot `(12, 8)` **with the ball**. Helix does not start in possession. Helix’s strikers stand in their own half, just outside the centre circle.
 - After **Helix** scores, that same Aether kickoff is used again. After **Aether** scores, the whole 4-4-2 is rotated 180° through the pitch centre: Helix **#9 ST** takes `(13, 8)` with the ball. The receiving team starts in its own half and **outside the centre circle**, so those strikers cannot contest the first pass.
@@ -57,7 +58,7 @@ Kickoff values by role:
 
 You cannot pick a fourth player.
 
-Hotseat: plan arrows, gold rings, and plan log lines are visible only to the team that queued them — including past cycles. Resolution events (who tackled whom, rolls, and results) are public.
+Hotseat: plan arrows, gold rings, and plan log lines are visible only to the team that queued them — including past cycles. Resolution events (who tackled whom, rolls, and results) are public. Vs AI: you play Aether; Helix is a local greedy coach that commits before you queue, without seeing your plans. Helix arrows stay hidden. **AI vs AI** is watch-only: two copies of that same greedy coach play both sides under the same simultaneous rules. You do not queue. Both teams’ arrows, gold rings, and plan lines are visible. Pieces still animate when the cycle resolves. Esc opens the menu. New Game restarts a watch match at 0–0.
 
 Highlights (after you pick an action):
 
@@ -267,9 +268,9 @@ Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 
 ### Shoot
 
-Shooting **spends every leftover AP** and **ends that player’s turn**. Each leftover point adds **+3 percentage points** to hit chance: 1 AP left → +3%, 5 AP left → +15%, a first-action shot with all 6 AP → +18%.
+Shooting **spends every leftover AP** and **ends that player’s turn**. Each leftover point multiplies the accuracy stat by **+5%**: 1 AP left → ACC × 1.05, 5 AP left → ACC × 1.25, a first-action shot with all 6 AP → ACC × 1.30. A striker with ACC 20 who shoots first action aims as ACC 26. That boosted ACC feeds the shot’s spray, intercepts, and the keeper save — leftover AP is not a direct hit bonus.
 
-You may shoot if you have the ball, you are **not on a goal tile**, and the shot’s **hit chance is at least 5%**. Distance no longer gates the action, but it is scaled to a **105 × 68 m** pitch, so a midfield striker needs leftover AP to clear 5%. Leftover AP is added after the geometry/skill hit.
+You may shoot if you have the ball, you are **not on a goal tile**, and the shot’s **hit chance is at least 5%**. Distance no longer gates the action, but it is scaled to a **105 × 68 m** pitch, so a midfield striker stays under 5% even with leftover AP. Leftover AP is applied to ACC before the geometry/skill hit.
 
 The goal tile highlights gold. Choose **Shoot**, then hover the net to see chances — the same pass line and intercept circles are drawn. Click the net to shoot. If the tile also allows move or dribble, a chooser appears.
 
@@ -279,9 +280,9 @@ Hover the goal to see:
 d       = cell distance converted to metres (105 m / 26 tiles along the pitch, 68 m / 13 across)
 theta_w = (7.32 x max(0.15, cos theta)) / max(d, 1)
 theta_h = 2.44 / max(d, 1)
+ACC     = live ACC x (1 + 0.05 x remaining AP)
 sigma   = lerp(12°, 1°, (ACC/100)^1.2)     ACC clamped 1–100
-hit     = erf(theta_w / (2 sigma √2)) x erf(theta_h / (2 sigma √2)) + leftover
-leftover = 0.03 x remaining AP
+hit     = erf(theta_w / (2 sigma √2)) x erf(theta_h / (2 sigma √2))
 through = chance of beating every interceptor on the shot line (same as a pass)
 save = P(keeper 1dDEF > shooter 1dACC)   if a keeper is on the goal tile, else 0
 goal = through x hit x (1 - save)

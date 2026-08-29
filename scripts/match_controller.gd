@@ -1,5 +1,7 @@
 extends Node2D
 
+const _AiSelfPlay := preload("res://scripts/ai_self_play.gd")
+
 ## Grid, 11v11. Each side plans up to 3 players (6 AP each); filling their AP locks the turn.
 
 @onready var pitch: Pitch = $Pitch
@@ -10,6 +12,7 @@ extends Node2D
 var model: MatchModel
 var settings := GameSettings.new()
 var vs_ai: bool = false
+var ai_vs_ai: bool = false
 var pieces: Dictionary = {}
 var selected_id: int = -1
 var hover_cell: Vector2i = Vector2i(-1, -1)
@@ -39,6 +42,7 @@ func _ready() -> void:
 	menu.bind_settings(settings)
 	menu.hotseat_pressed.connect(start_hotseat)
 	menu.vs_ai_pressed.connect(start_vs_ai)
+	menu.ai_vs_ai_pressed.connect(start_ai_vs_ai)
 	menu.new_game_pressed.connect(start_new_game)
 	menu.exit_pressed.connect(_quit_game)
 	menu.closed.connect(_on_menu_closed)
@@ -101,11 +105,19 @@ func close_menu() -> void:
 
 func start_hotseat() -> void:
 	vs_ai = false
+	ai_vs_ai = false
 	start_new_game()
 
 
 func start_vs_ai() -> void:
 	vs_ai = true
+	ai_vs_ai = false
+	start_new_game()
+
+
+func start_ai_vs_ai() -> void:
+	vs_ai = false
+	ai_vs_ai = true
 	start_new_game()
 
 
@@ -127,8 +139,14 @@ func start_new_game() -> void:
 	model.setup_kickoff()
 	_spawn_visuals()
 	close_menu()
-	_begin_vs_ai_cycle()
+	if hud != null:
+		hud.watching = ai_vs_ai
+	if not ai_vs_ai:
+		_begin_vs_ai_cycle()
 	_refresh()
+	# Graphical watch starts the first cycle. Headless / tests must not auto-chain.
+	if ai_vs_ai and animate_moves:
+		step_ai_vs_ai_cycle()
 
 
 func _begin_vs_ai_cycle() -> void:
@@ -146,8 +164,31 @@ func _preplan_ai() -> void:
 	var previous := model.current_team
 	model.away_plans.clear()
 	model.current_team = MatchRules.Team.AWAY
-	AiCoach.fill_plans(model)
+	_AiSelfPlay.fill_side(model)
 	model.current_team = previous
+
+
+func fill_ai_vs_ai_plans() -> void:
+	if not ai_vs_ai or model == null:
+		return
+	_AiSelfPlay.fill_both_independently(model)
+	_refresh()
+
+
+func step_ai_vs_ai_cycle() -> Dictionary:
+	if not ai_vs_ai or model == null:
+		return {ok = false, reason = "not_watch"}
+	if busy:
+		return {ok = false, reason = "busy"}
+	var snapshot := _snapshot_visual_board()
+	_AiSelfPlay.fill_both_independently(model)
+	_refresh()
+	var result := _AiSelfPlay.resolve_cycle(model)
+	if str(result.get("action", "")) == "resolve":
+		_cycle_snapshot = snapshot
+		return _finish_resolve(result)
+	_deselect()
+	return result
 
 
 func _quit_game() -> void:
@@ -170,6 +211,8 @@ func _on_settings_changed() -> void:
 func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 	if busy:
 		return {ok = false, reason = "busy"}
+	if ai_vs_ai:
+		return {ok = false, reason = "watching"}
 	if vs_ai and model != null and model.current_team == MatchRules.Team.AWAY:
 		return {ok = false, reason = "ai_planning"}
 	if not MatchRules.in_bounds(cell):
@@ -216,6 +259,8 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 func handle_cell_right_clicked(cell: Vector2i) -> Dictionary:
 	if busy:
 		return {ok = false, reason = "busy"}
+	if ai_vs_ai:
+		return {ok = false, reason = "watching"}
 	if vs_ai and model != null and model.current_team == MatchRules.Team.AWAY:
 		return {ok = false, reason = "ai_planning"}
 	if not _pending_choice.is_empty():
@@ -262,6 +307,8 @@ func _open_choice(cell: Vector2i, actions: Array[Dictionary]) -> Dictionary:
 
 
 func choose_action(action_id: String) -> Dictionary:
+	if ai_vs_ai:
+		return {ok = false, reason = "watching"}
 	if not _pending_choice.is_empty():
 		var actions: Array = _pending_choice.get("actions", [])
 		var chosen := {}
@@ -278,6 +325,8 @@ func choose_action(action_id: String) -> Dictionary:
 
 
 func select_command(action_id: String) -> Dictionary:
+	if ai_vs_ai:
+		return {ok = false, reason = "watching"}
 	var selected := _selected_player()
 	if selected == null:
 		return {ok = false, reason = "no_selection"}
@@ -325,6 +374,8 @@ func _is_undo_key(event: InputEvent) -> bool:
 func undo_last_action() -> Dictionary:
 	if busy:
 		return {ok = false, reason = "busy"}
+	if ai_vs_ai:
+		return {ok = false, reason = "watching"}
 	if vs_ai and model != null and model.current_team == MatchRules.Team.AWAY:
 		return {ok = false, reason = "ai_planning"}
 	_cancel_choice()
@@ -378,6 +429,8 @@ func _cell_to_screen(cell: Vector2i) -> Vector2:
 
 
 func perform_action(action: Dictionary) -> Dictionary:
+	if ai_vs_ai:
+		return {ok = false, reason = "watching"}
 	var selected := _selected_player()
 	if selected == null:
 		return {ok = false, reason = "no_selection"}
@@ -400,6 +453,8 @@ func perform_action(action: Dictionary) -> Dictionary:
 func end_planning() -> Dictionary:
 	if busy:
 		return {ok = false, reason = "busy"}
+	if ai_vs_ai:
+		return {ok = false, reason = "watching"}
 	_cancel_choice()
 	var snapshot := _snapshot_visual_board()
 	var result := model.end_planning()
@@ -465,6 +520,7 @@ func _finish_resolve(result: Dictionary) -> Dictionary:
 		if result.get("reset", false):
 			_spawn_visuals()
 		_begin_vs_ai_cycle()
+		# Headless watch must not chain the next fill+resolve on this stack.
 		_deselect()
 	return result
 
@@ -489,6 +545,8 @@ func _play_resolve(result: Dictionary) -> void:
 	hud.set_resolving(false)
 	busy = false
 	_begin_vs_ai_cycle()
+	if ai_vs_ai:
+		step_ai_vs_ai_cycle()
 	_deselect()
 
 
@@ -730,6 +788,8 @@ func _hovered_player() -> PlayerState:
 
 
 func _refresh() -> void:
+	if hud != null:
+		hud.watching = ai_vs_ai
 	var selected := _selected_player()
 	var moves: Array[Vector2i] = []
 	var contests: Array[Vector2i] = []
@@ -781,20 +841,22 @@ func _refresh() -> void:
 		var piece: PlayerPiece = pieces.get(state.id)
 		if piece == null:
 			continue
-		var preview := not busy and state.team == model.current_team
+		var preview := not busy and (ai_vs_ai or state.team == model.current_team)
 		var cell := model.planning_pos(state) if preview else state.pos
 		var face := model.planning_facing(state) if preview else state.facing
 		piece.position = pitch.grid_to_world(cell)
 		piece.set_selected(selected != null and state.id == selected.id)
 		piece.set_has_ball(model.planning_has_ball(state) if preview else state.has_ball)
-		var planned := (
-			state.team == model.current_team
-			and not model.plan_of(state.id).is_empty()
-		)
+		var planned := not model.plan_of(state.id).is_empty()
+		if not ai_vs_ai:
+			planned = planned and state.team == model.current_team
 		piece.set_planned(planned)
 		piece.set_energy_ratio(state.energy_ratio())
 		piece.set_facing(face)
-		piece.set_on_turn(state.team == model.current_team and (planned or model.can_select(state)))
+		piece.set_on_turn(
+			ai_vs_ai
+			or (state.team == model.current_team and (planned or model.can_select(state)))
+		)
 		if preview:
 			var remaining := model.ap_remaining(state.id)
 			if remaining < MatchRules.PLAYER_ACTION_POINTS:
@@ -813,6 +875,12 @@ func _refresh() -> void:
 
 func _plan_markers() -> Array[Dictionary]:
 	var markers: Array[Dictionary] = []
+	if ai_vs_ai:
+		for plan in model.home_plans:
+			markers.append(plan)
+		for plan in model.away_plans:
+			markers.append(plan)
+		return markers
 	for plan in model.plans_for(model.current_team):
 		markers.append(plan)
 	return markers
