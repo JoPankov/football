@@ -61,7 +61,7 @@ scenes/main.tscn
 
 | Path | Role |
 |---|---|
-| `project.godot` | Name, 1280×720, main scene, Forward Plus, dark clear color |
+| `project.godot` | Name, 1280×720 maximized, main scene, Forward Plus, dark clear color |
 | `scenes/main.tscn` | `Main` + `Pitch/Pieces/Ball` + `Camera2D` + `HUD` + `GameMenu` |
 | `scenes/player.tscn` | Hex/shield piece: number + role labels |
 | `scripts/match_rules.gd` | Grid, nets, offside, intercept geometry / reach, 1dSTAT, shot formula, tackle approach angle |
@@ -99,6 +99,7 @@ Constants live on `MatchRules`.
 - Pass range is **Euclidean**: `MatchRules.in_pass_range` is cell-centre distance `<= PASS_RANGE` (5 tile lengths). The highlight is a circle, not a Chebyshev square.
 - `PlayerState.facing` is one of those 8 dirs. Kickoff: Aether `(1, 0)`, Helix `(-1, 0)`. `PlayerState.relocate` writes facing from the step. `turn_facings` is the other 7 dirs. `turn_ap_cost` is 1 AP for 1–2 ring steps (45°/90°) and 2 AP for 3–4 (135°/180°). `action_ap_cost(..., facing)` needs the current facing for turns.
 - `move_destinations(from, blocked, facing)` drops the one square **directly behind** `facing`. `facing == ZERO` skips that filter (geometry-only callers).
+- `move_reach(from, facing, blocked, remaining_ap)` is every empty cell a cone-walk can hit by spending at most that many AP (no turns). Values are `{cost, path}`. `MatchModel.command_dests(..., "move")` uses this. A non-adjacent `queue_plan` move expands into those path steps.
 - Back pass: `is_back_pass` is the rear cone, directly back ± `BACK_PASS_HALF_ANGLE_DEG` (43). Adjacent cells are never back passes.
 - Keepers start **in the net**. From a net, `move_destinations` yields the **3** adjacent pitch tiles (diagonals + forward). The old goal-line square in front of the net is empty at kickoff.
 
@@ -184,7 +185,7 @@ Action ids: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight)
 
 Rules of a queue:
 
-- Many plans per player, capped by leftover AP. `queue_plan` appends. `pop_last_plan(player_id)` removes that player’s last plan (or the last plan of `current_team` if `player_id < 0`) and drops that PLAN log line. Remaining plans for that player keep their `ap_index` / `ap_end`.
+- Many plans per player, capped by leftover AP. `queue_plan` appends. A `move` whose dest is more than one step away expands into the cheapest cone-walk (`move_path`) and appends one plan per step; unreachable far dests return `{ok = false, reason = "illegal_dest"}`. `pop_last_plan(player_id)` removes that player’s last plan (or the last plan of `current_team` if `player_id < 0`) and drops that PLAN log line. Remaining plans for that player keep their `ap_index` / `ap_end`.
 - At most `ACTIONS_PER_SIDE` (3) distinct players per team. A player who already has a plan can queue more until they spend 6 AP or queue `done`.
 - `done` costs 0 AP, is planning-only (resolver skips it), and `can_queue` becomes false for that player. They still occupy an acting slot. Backspace pops Done (or their last action). Clicking them twice clears the plan, including Done.
 - `can_select` / `can_queue` require `player.team == current_team` unless `ignore_team_gate`.
@@ -344,7 +345,7 @@ HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plan
 - Enter / Space: `end_planning`. Space is taken in `_input` so a focused action button cannot steal it.
 - 1–9 / keypad: Nth button currently shown in `commands_for` (not a fixed action map).
 
-**Command-first UX.** Select a player → `_pending_action` defaults to `"move"` if they have a walk. After a queued action with AP remaining, Move is re-armed so consecutive tiles chain. Bottom bar lists only commands with at least one dest. Then click a highlighted tile → `action_for_command` → `queue_plan`.
+**Command-first UX.** Select a player → `_pending_action` defaults to `"move"` if they have a walk. After a queued action with AP remaining, Move is re-armed so consecutive tiles chain. Bottom bar lists only commands with at least one dest. Then click a highlighted tile → `action_for_command` → `queue_plan`. Move dests are the remaining-AP cone-walk (`move_reach`), not only the next adjacent step; clicking a far tile queues each step on the cheapest path.
 
 Why not “click the tile then pick Move/Pass”? One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). The old chooser is still in the HUD (`show_choices`) and `_open_choice` still exists on the controller, but **nothing calls `_open_choice`**. Do not revive it without wiring; current tests assume command-then-tile.
 

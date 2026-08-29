@@ -25,6 +25,7 @@ var _cycle_snapshot: Dictionary = {}
 func _ready() -> void:
 	animate_moves = DisplayServer.get_name() != "headless"
 	if animate_moves:
+		get_window().mode = Window.MODE_MAXIMIZED
 		settings.load_from_disk()
 	model = MatchModel.new()
 	model.setup_kickoff()

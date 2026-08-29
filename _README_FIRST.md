@@ -126,7 +126,7 @@ If a click moves a piece immediately, you bypassed `queue_plan`. If you “just 
 
 ## Planning, not moving
 
-- Command-first UX: select a player, pick an action (Move is armed by default and stays armed after the first step), click a highlighted tile. Right-click an adjacent cell to turn toward it without picking Turn. Backspace pops the last queued action of the selected player, or this side’s last action if they have none / nobody is selected. One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). Do not revive the old tile-then-chooser without wiring; tests assume command-then-tile.
+- Command-first UX: select a player, pick an action (Move is armed by default and stays armed after a walk), click a highlighted tile. Move highlights the remaining-AP cone-walk, not just the next step — clicking a far green tile queues every step on the cheapest path. Right-click an adjacent cell to turn toward it without picking Turn. Backspace pops the last queued action of the selected player, or this side’s last action if they have none / nobody is selected. One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). Do not revive the old tile-then-chooser without wiring; tests assume command-then-tile.
 - A player’s queued actions are an array, not a single slot. `ap_spent` = sum of each plan’s `ap_cost`. Cap is `PLAYER_ACTION_POINTS` (6). Orthogonal steps cost 2, diagonal 3, pass 1, turn 1 AP up to 90° or 2 AP for 135°/180°. A shot costs every leftover AP. Cap on distinct acting players is `ACTIONS_PER_SIDE` (3).
 - `planning_pos` / `planning_facing` / `planning_has_ball` walk the acting team’s queue so the second AP, a pass-fed teammate, and a player who steps onto a loose ball can be planned against the *intended* board. The real `PlayerState.pos` / `has_ball` do not change until resolve. If they never actually get the ball, those follow-up actions are cancelled.
 - Filling all 6 AP on 3 players, or marking those players **Done**, auto-ends the side unless `GameSettings.require_end_turn`. Done costs 0 AP, occupies an acting slot, and blocks further queues for that player. End Turn / Enter / Space is always legal, including 0 actions.
@@ -144,7 +144,7 @@ Constants live on `MatchRules`. Pitch is **26×17**; do not hardcode 13-row / 9-
 - Nets are playable (`in_bounds`). Cells like `(-1, 0)` are dead. From a net the keeper has **3** steps onto the pitch (forward + both diagonals).
 - Halfway is `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. Helix’s is `x < 13`.
 - Penalty box = the three **pitch** tiles adjacent to that net: Aether `(0, 7) (0, 8) (0, 9)`, Helix `(25, 7) (25, 8) (25, 9)`. Shooting is allowed from any pitch tile whose unclamped hit chance is **≥ 5%** (`MatchRules.can_attempt_shot`). Hit is a 2-D Gaussian in the FIFA goal mouth (7.32 × 2.44 **m**). Convert tile deltas with `TILE_M_X` / `TILE_M_Y` (105×68 m pitch on the 26×17 grid) before that math — do not treat 1 tile as 1 m. Leftover AP adds after. You cannot shoot from a net tile.
-- Move = 1 tile into the **3-cell cone** (facing ± 45°). Turn faces any of the other 7 directions: 45°/90° cost 1 AP, 135°/180° cost 2 AP. Pass range = Euclidean radius 5 tile lengths (cell centre to cell centre), not into the rear cone except adjacent cells.
+- Move = 1 tile into the **3-cell cone** (facing ± 45°). The Move highlight is every empty cell a cone-walk can still reach with leftover AP (no auto-turns). Turn faces any of the other 7 directions: 45°/90° cost 1 AP, 135°/180° cost 2 AP. Pass range = Euclidean radius 5 tile lengths (cell centre to cell centre), not into the rear cone except adjacent cells.
 - Kickoff: Aether #9 ST on `CENTER_SPOT` `(12, 8)` with the ball. Helix #9 on `AWAY_KICKOFF` `(14, 11)` when receiving, outside the centre circle. When Helix kicks, that 4-4-2 is rotated 180° (`AWAY_SPOT` `(13, 8)` with the ball). The receiving team starts in its own half and outside the centre circle. Two players never share a cell.
 - Intercept and shot math use **tile units**, not pixels. `MatchRules.tile_center(cell)` is `Vector2(cell)`. `TILE_SIZE = 72` is drawing only. Shots use the same intercept lane as passes (`interceptors_for_pass` with dest = opponent net). The keeper in the net does not intercept; they save if the ball arrives.
 - Live stats, not printed stats, go to dice and HUD percents. Empty energy **halves** ACC/DEF/CTR; it does not zero them.
@@ -157,7 +157,7 @@ When in doubt, read `MatchRules` and the tests.
 
 | Path | Role |
 |---|---|
-| `project.godot` | Name, 1280×720, main scene, Forward Plus |
+| `project.godot` | Name, 1280×720 maximized, main scene, Forward Plus |
 | `scenes/main.tscn` | `Main` + pitch + camera + HUD + menu |
 | `scripts/match_rules.gd` | Grid, nets, facing, offside, intercepts, 1dSTAT, shot formula |
 | `scripts/match_model.gd` | Kickoff, queries, queue, `apply_*` |

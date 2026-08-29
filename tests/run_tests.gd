@@ -235,6 +235,11 @@ func _test_action_points() -> void:
 	_assert(model.ap_spent(st.id) == 0, "fresh player has spent 0 AP")
 	_assert(model.ap_remaining(st.id) == 6, "fresh player has 6 AP")
 	_assert(_spot(1, 1) in model.command_dests(st, "move"), "diagonal is legal with a full AP pool")
+	_assert(_spot(3, 0) in model.command_dests(st, "move"), "6 AP highlight three straight steps ahead")
+	_assert(_spot(4, 0) not in model.command_dests(st, "move"), "four straight steps need 8 AP")
+	_assert(_spot(-1, 0) not in model.command_dests(st, "move"), "the rear square is not a walk dest")
+	_assert(_spot(0, 1) not in model.command_dests(st, "move"), "a side square is not a walk dest without turning")
+	_assert(_spot(2, 1) in model.command_dests(st, "move"), "a 2+3 AP dog-leg is in range")
 	var first := model.queue_plan(st.id, {id = "move", dest = _spot(1, 0), label = "Move"})
 	_assert(first.ok, "first AP queues")
 	_assert(int(first.plan.get("ap_cost", 0)) == 2, "orthogonal move costs 2 AP")
@@ -279,6 +284,28 @@ func _test_action_points() -> void:
 	_assert(cut.ok, "diagonal step queues")
 	_assert(int(cut.plan.get("ap_cost", 0)) == 3, "diagonal move costs 3 AP")
 	_assert(diag.ap_remaining(cutter.id) == 3, "3 AP remain after a diagonal")
+
+	var dash := MatchModel.new()
+	dash.setup_kickoff()
+	var dasher := dash.player_at(MatchRules.CENTER_SPOT)
+	var dashed := dash.queue_plan(dasher.id, {id = "move", dest = _spot(3, 0), label = "Move"})
+	_assert(dashed.ok, "queueing a three-step dest expands into legal steps")
+	_assert(dash.plans_of(dasher.id).size() == 3, "the walk is three queued moves")
+	_assert(dash.ap_spent(dasher.id) == 6, "three straight steps spend the full 6 AP")
+	_assert(dash.planning_pos(dasher) == _spot(3, 0), "planning position is the clicked tile")
+	_assert(not dash.can_queue(dasher), "the player is out of AP after the walk")
+	var overshoot := MatchModel.new()
+	overshoot.setup_kickoff()
+	var over := overshoot.player_at(MatchRules.CENTER_SPOT)
+	var refused_far := overshoot.queue_plan(over.id, {id = "move", dest = _spot(4, 0), label = "Move"})
+	_assert(not refused_far.ok, "queue rejects a dest the cone-walk cannot afford")
+	var wall := MatchModel.new()
+	wall.setup_kickoff()
+	var wall_runner := wall.player_at(MatchRules.CENTER_SPOT)
+	wall.player_at(_spot(0, -1)).pos = _spot(1, 0)
+	_assert(_spot(1, 0) not in wall.command_dests(wall_runner, "move"), "an occupied tile is not a walk dest")
+	_assert(_spot(2, 0) not in wall.command_dests(wall_runner, "move"), "a teammate on the first step blocks the straight path")
+	_assert(_spot(1, -1) in wall.command_dests(wall_runner, "move"), "the forward-diagonal around the blocker stays open")
 
 	var shot_model := MatchModel.new()
 	shot_model.setup_kickoff()
@@ -462,6 +489,23 @@ func _test_move_destinations() -> void:
 	_assert(Vector2i(6, 3) in faced, "forward-diagonal is a move")
 	_assert(Vector2i(4, 4) not in faced, "square directly behind is not a move")
 	_assert(Vector2i(4, 3) not in faced, "rear-diagonal is not a move")
+	var reach := MatchRules.move_reach(Vector2i(5, 4), Vector2i(1, 0), {}, 6)
+	_assert(Vector2i(8, 4) in reach, "3 orthogonal steps fit in 6 AP")
+	_assert(Vector2i(9, 4) not in reach, "4 orthogonal steps need 8 AP")
+	_assert(Vector2i(4, 4) not in reach, "a cone-walk cannot go directly behind")
+	_assert(int(reach[Vector2i(8, 4)].cost) == 6, "three straight steps spend 6 AP")
+	_assert(reach[Vector2i(8, 4)].path.size() == 3, "the far cell is three steps")
+	_assert(reach[Vector2i(8, 4)].path[0] == Vector2i(6, 4), "the walk starts with the adjacent forward tile")
+	var short := MatchRules.move_reach(Vector2i(5, 4), Vector2i(1, 0), {}, 2)
+	_assert(Vector2i(6, 4) in short, "2 AP still allow a straight step")
+	_assert(Vector2i(6, 3) not in short, "2 AP cannot afford a diagonal")
+	_assert(Vector2i(7, 4) not in short, "2 AP cannot reach two tiles away")
+	var blocked_reach := MatchRules.move_reach(
+		Vector2i(5, 4), Vector2i(1, 0), {Vector2i(6, 4): true}, 6
+	)
+	_assert(Vector2i(6, 4) not in blocked_reach, "an occupied forward tile is not a dest")
+	_assert(Vector2i(7, 4) not in blocked_reach, "a blocked first step cuts the straight path")
+	_assert(MatchRules.move_reach(Vector2i(5, 4), Vector2i(1, 0), {}, 1).is_empty(), "1 AP cannot walk")
 
 
 func _test_attacking_third() -> void:
@@ -2236,6 +2280,25 @@ func _test_controller_click_flow() -> void:
 	chain._refresh()
 	_assert(chain_piece.finished, "piece shows a done badge after the action")
 	chain.queue_free()
+
+	var sprint: Node = packed.instantiate()
+	root.add_child(sprint)
+	sprint.animate_moves = false
+	sprint.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	_assert(
+		_spot(3, 0) in sprint.model.command_dests(
+			sprint.model.player_at(MatchRules.CENTER_SPOT), "move"
+		),
+		"move highlights the 6-AP walk range"
+	)
+	var far_step: Dictionary = sprint.handle_cell_clicked(_spot(3, 0))
+	_assert(far_step.get("action") == "queue", "clicking a distant highlighted tile queues the walk")
+	var sprinter: PlayerState = sprint.model.player_at(MatchRules.CENTER_SPOT)
+	_assert(sprint.model.plans_of(sprinter.id).size() == 3, "the distant click queued three steps")
+	_assert(sprint.model.ap_spent(sprinter.id) == 6, "the distant click spent the full 6 AP")
+	_assert(sprint.model.planning_pos(sprinter) == _spot(3, 0), "the piece previews on the clicked tile")
+	_assert(sprint.selected_id < 0, "spending every AP deselects the player")
+	sprint.queue_free()
 
 	var pickup_ui: Node = packed.instantiate()
 	root.add_child(pickup_ui)

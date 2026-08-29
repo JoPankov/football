@@ -479,6 +479,84 @@ static func move_destinations(
 	return result
 
 
+## Every empty cell a cone-walk can hit by spending at most `remaining_ap`.
+## No turns: facing only changes by stepping. Values are `{cost, path}` where
+## `path` is the ordered destination cells (not including `from`).
+static func move_reach(
+	from: Vector2i,
+	facing: Vector2i,
+	blocked: Dictionary,
+	remaining_ap: int
+) -> Dictionary:
+	var reach := {}
+	if remaining_ap < MOVE_ORTHO_COST:
+		return reach
+	var face0 := normalize_facing(facing)
+	var start_path: Array[Vector2i] = []
+	var pending: Array[Dictionary] = [{
+		pos = from,
+		facing = face0,
+		cost = 0,
+		steps = 0,
+		path = start_path,
+	}]
+	var best_cost := {_move_state_key(from, face0): 0}
+	var done := {}
+	while not pending.is_empty():
+		var best_i := 0
+		for i in range(1, pending.size()):
+			if _move_pending_better(pending[i], pending[best_i]):
+				best_i = i
+		var cur: Dictionary = pending[best_i]
+		pending.remove_at(best_i)
+		var key := _move_state_key(cur.pos, cur.facing)
+		if done.has(key):
+			continue
+		done[key] = true
+		if cur.pos != from and not reach.has(cur.pos):
+			reach[cur.pos] = {
+				cost = int(cur.cost),
+				path = cur.path,
+			}
+		if int(cur.cost) + MOVE_ORTHO_COST > remaining_ap:
+			continue
+		for dest in move_destinations(cur.pos, blocked, cur.facing):
+			var next_cost: int = int(cur.cost) + step_ap_cost(cur.pos, dest)
+			if next_cost > remaining_ap:
+				continue
+			var next_face := step_direction(cur.pos, dest)
+			var next_key := _move_state_key(dest, next_face)
+			if done.has(next_key):
+				continue
+			if best_cost.has(next_key) and int(best_cost[next_key]) <= next_cost:
+				continue
+			best_cost[next_key] = next_cost
+			var next_path: Array[Vector2i] = []
+			for cell in cur.path:
+				next_path.append(cell)
+			next_path.append(dest)
+			pending.append({
+				pos = dest,
+				facing = next_face,
+				cost = next_cost,
+				steps = int(cur.steps) + 1,
+				path = next_path,
+			})
+	return reach
+
+
+static func _move_state_key(pos: Vector2i, facing: Vector2i) -> String:
+	return "%d,%d,%d,%d" % [pos.x, pos.y, facing.x, facing.y]
+
+
+static func _move_pending_better(a: Dictionary, b: Dictionary) -> bool:
+	var ca := int(a.get("cost", 0))
+	var cb := int(b.get("cost", 0))
+	if ca != cb:
+		return ca < cb
+	return int(a.get("steps", 0)) < int(b.get("steps", 0))
+
+
 static func roll_d_stat(stat: int, rng: RandomNumberGenerator) -> int:
 	return rng.randi_range(1, maxi(1, stat))
 

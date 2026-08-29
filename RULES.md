@@ -48,8 +48,8 @@ Kickoff values by role:
 ## How to take a turn
 
 1. Click any player on the team that is planning.
-2. Choose an action from the bottom bar (or press **1–9**): Move, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot, Done. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after the first step so you can chain-click tiles.
-3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps.
+2. Choose an action from the bottom bar (or press **1–9**): Move, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot, Done. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after a walk so you can chain more steps.
+3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps. With Move selected, every empty tile that player can still reach by walking (leftover AP, no turns) is highlighted; click a far tile to queue the whole walk at once.
 4. Repeat for up to **3 different players**, **6 AP** each. Gold pips around a piece show leftover AP after that player has spent at least one point. A gold ring marks a planned player; arrows show their queued steps.
 5. Filling **all 6 AP on 3 players**, or marking those players **Done**, ends the turn automatically. **Done** parks leftover AP and a mint check shows they are finished. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
 6. After Helix’s turn ends, all queued actions resolve in **six AP waves**. A 2-AP first step plays in wave 2; a later 2-AP step on the same player plays in wave 4. The match log lists every public event and roll.
@@ -73,10 +73,11 @@ Highlights (after you pick an action):
 
 ### Move
 
-- Costs **2 AP** straight (orthogonal) or **3 AP** diagonally. 1 tile into the **3-cell cone**: the square you face, plus 45° either side.
+- Costs **2 AP** straight (orthogonal) or **3 AP** diagonally. Each step is 1 tile into the **3-cell cone**: the square you face, plus 45° either side.
+- Green highlights every empty tile you can still reach by chaining those steps with leftover AP. Clicking a far tile queues each step on the cheapest walk (Backspace still undoes one step). Turns are not inserted — face a new way first if you need to leave the cone.
 - You cannot queue a step you cannot afford. With 2 AP left you can still walk straight, but not diagonally.
 - Empty tiles only (or an opponent tile, which is a contest instead).
-- Cannot walk onto a teammate. Use **swap** for that.
+- Cannot walk onto a teammate. Use **swap** for that. Occupied tiles also block a longer walk through them.
 - If you have the ball, it comes with you.
 - If the ball is loose on the destination, you take it.
 - After you queue a move onto a loose ball, you can plan as if you already have it (pass, shoot, dribble). If you do not actually collect it — for example someone else wins that square — those ball actions are ignored.

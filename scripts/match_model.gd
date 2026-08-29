@@ -118,6 +118,29 @@ func valid_moves(player: PlayerState) -> Array[Vector2i]:
 	)
 
 
+## Cells the player can still walk to by spending leftover AP on move steps.
+## Facing only changes by stepping — turns are not inserted.
+func move_reach(player: PlayerState) -> Dictionary:
+	if player == null or not can_queue(player):
+		return {}
+	return MatchRules.move_reach(
+		_query_pos(player),
+		_query_facing(player),
+		occupied_cells(player.id),
+		ap_remaining(player.id)
+	)
+
+
+func move_path(player: PlayerState, dest: Vector2i) -> Array[Vector2i]:
+	var path: Array[Vector2i] = []
+	var info = move_reach(player).get(dest, null)
+	if typeof(info) != TYPE_DICTIONARY:
+		return path
+	for cell in info.get("path", []):
+		path.append(cell)
+	return path
+
+
 func contest_moves(player: PlayerState) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
 	if player == null:
@@ -345,6 +368,16 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 		return {ok = false, reason = "no_action"}
 	var dest: Vector2i = action.get("dest", _query_pos(player))
 	var origin := _query_pos(player)
+	if action_id == "move":
+		var steps := move_path(player, dest)
+		if steps.size() > 1:
+			return _queue_move_steps(player_id, action, steps)
+		if (
+			steps.is_empty()
+			and origin != dest
+			and not MatchRules.is_adjacent(origin, dest)
+		):
+			return {ok = false, reason = "illegal_dest"}
 	var remaining := ap_remaining(player_id)
 	var cost := MatchRules.action_ap_cost(
 		action_id, origin, dest, remaining, _query_facing(player)
@@ -386,6 +419,20 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 	}
 	combat_log.event(result)
 	return result
+
+
+func _queue_move_steps(
+	player_id: int, action: Dictionary, steps: Array[Vector2i]
+) -> Dictionary:
+	var last := {}
+	for cell in steps:
+		var step: Dictionary = action.duplicate()
+		step.id = "move"
+		step.dest = cell
+		last = queue_plan(player_id, step)
+		if not last.get("ok", false):
+			return last
+	return last
 
 
 func can_end_planning() -> bool:
@@ -686,9 +733,9 @@ func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
 		return dests
 	match command_id:
 		"move":
-			for cell in valid_moves(player):
-				if player_at(cell) == null:
-					dests.append(cell)
+			for cell in move_reach(player):
+				dests.append(cell)
+			return dests
 		"turn":
 			dests = MatchRules.turn_destinations(_query_pos(player), _query_facing(player))
 		"pass":
@@ -736,6 +783,8 @@ func action_for_command(player: PlayerState, command_id: String, dest: Vector2i)
 		return {}
 	if command_id == "turn":
 		return {id = "turn", label = "Turn", dest = dest}
+	if command_id == "move":
+		return {id = "move", label = "Move", dest = dest}
 	for action in actions_for(player, dest):
 		if str(action.get("id", "")) == command_id:
 			return action
