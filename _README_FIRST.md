@@ -52,23 +52,26 @@ Truth order is unchanged: `scripts/` + tests > `IMPLEMENTATION.md` > `RULES.md`.
 
 ## Pushing to GitHub (PAT)
 
-Remote is HTTPS: `https://github.com/JoPankov/football.git` (`origin`). Default branch is `main`.
+Remote is HTTPS: `https://github.com/JoPankov/football.git` (`origin`). Default branch is `main`. Username is `JoPankov`.
 
-When the user pastes a **personal access token** and asks to push, use it for that push and then forget it.
+When the user pastes a **personal access token** and asks to push, do it in **one** shell command. Do not try a token-less `git push origin` first — that fails and wastes a round trip. Do not assume `GH_TOKEN` / `PAT` already exists in the environment.
 
 - Do **not** store the token in the remote URL, `git config`, a file, or the repo.
 - Do **not** echo the token in commit messages, logs, or chat.
 - Do **not** remind the user to revoke it. They issue short-lived tokens and revoke them themselves.
 
-Non-interactive push (token as password; GitHub username is `JoPankov`):
+Working recipe (export, push, unset, then fetch so `origin/main` catches up — a URL push does not update tracking refs):
 
 ```bash
-git push "https://JoPankov:${PAT}@github.com/JoPankov/football.git" HEAD:main
+export GH_TOKEN='<token from the user message>'
+GIT_TERMINAL_PROMPT=0 git -c credential.helper= push "https://JoPankov:${GH_TOKEN}@github.com/JoPankov/football.git" HEAD:main
+unset GH_TOKEN
+git fetch origin
 ```
 
-Prefer passing the token via an env var in that one command, not by rewriting `origin`. Classic or fine-grained PATs both work as the password on HTTPS. Scope needs `repo` (classic) or Contents + Metadata on this repository (fine-grained).
+`GIT_TERMINAL_PROMPT=0` and `-c credential.helper=` stop git from hanging on a credentials prompt. Classic or fine-grained PATs both work as the password on HTTPS. Scope needs `repo` (classic) or Contents + Metadata on this repository (fine-grained).
 
-If `origin` is already ahead/behind, say so before pushing. Do not force-push `main` unless the user asked.
+If `origin` is already ahead/behind, say so before pushing. Do not force-push `main` unless the user asked. Confirm with `git status -sb` that local `main` matches `origin/main`.
 
 ---
 
