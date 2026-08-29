@@ -30,10 +30,15 @@ var scripted_bounce_cell = null
 var scripted_first_intercept_wins = null
 ## null = roll; "goal", "save", or "miss".
 var scripted_shot_outcome = null
+## Teammate ids in an offside position at the last pass. Cleared when anyone
+## else plays the ball, or when a marked player is flagged.
+var offside_marked_ids: Array[int] = []
+var offside_passer_id: int = -1
 
 
 func setup_kickoff(kicking_team: int = MatchRules.Team.HOME) -> void:
 	players.clear()
+	_clear_offside_marks()
 	var next_id := 0
 	for team in [MatchRules.Team.HOME, MatchRules.Team.AWAY]:
 		for slot in Formation.slots(team, kicking_team):
@@ -139,6 +144,17 @@ func move_path(player: PlayerState, dest: Vector2i) -> Array[Vector2i]:
 	for cell in info.get("path", []):
 		path.append(cell)
 	return path
+
+
+## The empty cell two tiles straight ahead of facing. AP is checked by command_dests.
+func valid_sprints(player: PlayerState) -> Array[Vector2i]:
+	if player == null:
+		return []
+	return MatchRules.sprint_destinations(
+		_query_pos(player),
+		_query_facing(player),
+		occupied_cells(player.id)
+	)
 
 
 func contest_moves(player: PlayerState) -> Array[Vector2i]:
@@ -261,7 +277,7 @@ func planning_pos(player: PlayerState) -> Vector2i:
 	var pos := player.pos
 	for plan in plans_of(player.id):
 		var act := str(plan.get("action", ""))
-		if act in ["move", "dribble", "tackle", "challenge", "swap"]:
+		if act in ["move", "sprint", "dribble", "tackle", "challenge", "swap"]:
 			pos = plan.get("dest", pos)
 	return pos
 
@@ -274,7 +290,7 @@ func planning_facing(player: PlayerState) -> Vector2i:
 	for plan in plans_of(player.id):
 		var dest: Vector2i = plan.get("dest", pos)
 		var act := str(plan.get("action", ""))
-		if act == "turn" or act in ["move", "dribble", "tackle", "challenge", "swap"]:
+		if act == "turn" or act in ["move", "sprint", "dribble", "tackle", "challenge", "swap"]:
 			var dir := MatchRules.step_direction(pos, dest)
 			if dir != Vector2i.ZERO:
 				facing = dir
@@ -463,7 +479,7 @@ func planning_carrier() -> PlayerState:
 	if holder != null and holder.team != current_team:
 		return holder
 	if holder == null:
-		holder = _planning_collector_at(ball.pos)
+		holder = _legal_planning_collector(null, ball.pos)
 	var seen := {}
 	while holder != null:
 		if seen.has(holder.id):
@@ -478,10 +494,13 @@ func planning_carrier() -> PlayerState:
 				if target_id >= 0:
 					var nxt := player_by_id(target_id)
 					if nxt != null and nxt.team == holder.team:
+						if is_offside_receiver(holder, nxt):
+							return null
 						next_holder = nxt
 						handed_off = true
 						break
-				var collector := _planning_collector_at(plan.get("dest", Vector2i.ZERO))
+				var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+				var collector := _legal_planning_collector(holder, dest)
 				if collector != null:
 					next_holder = collector
 					handed_off = true
@@ -497,13 +516,33 @@ func planning_carrier() -> PlayerState:
 
 func _planning_collector_at(dest: Vector2i) -> PlayerState:
 	for plan in plans_for(current_team):
-		if str(plan.get("action", "")) != "move":
-			continue
+		var act := str(plan.get("action", ""))
 		var plan_dest: Vector2i = plan.get("dest", Vector2i.ZERO)
-		if plan_dest != dest:
+		if act == "move":
+			if plan_dest != dest:
+				continue
+			return player_by_id(int(plan.get("player_id", -1)))
+		if act != "sprint":
 			continue
-		return player_by_id(int(plan.get("player_id", -1)))
+		if plan_dest == dest:
+			return player_by_id(int(plan.get("player_id", -1)))
+		var origin: Vector2i = plan.get("origin", Vector2i.ZERO)
+		if MatchRules.sprint_through(origin, plan_dest) == dest:
+			return player_by_id(int(plan.get("player_id", -1)))
 	return null
+
+
+## A queued step onto `dest` that would legally collect (not a marked first touch).
+func _legal_planning_collector(passer: PlayerState, dest: Vector2i) -> PlayerState:
+	var collector := _planning_collector_at(dest)
+	if collector == null:
+		return null
+	if passer != null:
+		if is_offside_receiver(passer, collector):
+			return null
+	elif is_offside_marked(collector):
+		return null
+	return collector
 
 
 func _expects_ball_reason(player: PlayerState) -> String:
@@ -592,7 +631,61 @@ func offside_pass_cells(passer: PlayerState) -> Array[Vector2i]:
 		var occupant := player_at(dest)
 		if occupant != null and is_offside_receiver(passer, occupant):
 			cells.append(dest)
+	for mate in offside_teammates(passer):
+		if mate.pos not in cells:
+			cells.append(mate.pos)
 	return cells
+
+
+func offside_teammates(passer: PlayerState) -> Array[PlayerState]:
+	var result: Array[PlayerState] = []
+	if passer == null:
+		return result
+	for player in players:
+		if is_offside_receiver(passer, player):
+			result.append(player)
+	return result
+
+
+func is_offside_marked(player: PlayerState) -> bool:
+	return player != null and offside_marked_ids.has(player.id)
+
+
+func offside_marked_cells() -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for id in offside_marked_ids:
+		var player := player_by_id(id)
+		if player != null:
+			cells.append(player.pos)
+	return cells
+
+
+## True if this player collecting at `dest` (or sprinting through it) would be offside.
+func would_collect_offside(player: PlayerState, dest: Vector2i) -> bool:
+	if player == null:
+		return false
+	if _cell_is_offside_first_touch(player, dest):
+		return true
+	var from := _query_pos(player)
+	if MatchRules.is_sprint_step(from, dest, _query_facing(player)):
+		return _cell_is_offside_first_touch(player, MatchRules.sprint_through(from, dest))
+	return false
+
+
+func _cell_is_offside_first_touch(player: PlayerState, cell: Vector2i) -> bool:
+	if is_offside_marked(player) and ball.is_loose() and ball.pos == cell:
+		return true
+	for plan in plans_for(current_team):
+		if str(plan.get("action", "")) != "pass":
+			continue
+		if int(plan.get("target_id", -1)) >= 0:
+			continue
+		if plan.get("dest", Vector2i.ZERO) != cell:
+			continue
+		var passer := player_by_id(int(plan.get("player_id", -1)))
+		if is_offside_receiver(passer, player):
+			return true
+	return false
 
 
 func team_positions(team: int) -> Array[Vector2i]:
@@ -665,7 +758,21 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 	var occupant := player_at(dest)
 	if occupant == null:
 		if dest in valid_moves(player):
-			actions.append({id = "move", label = "Move", dest = dest})
+			var move_offside := would_collect_offside(player, dest)
+			actions.append({
+				id = "move",
+				label = "Move (offside)" if move_offside else "Move",
+				dest = dest,
+				offside = move_offside,
+			})
+		if dest in valid_sprints(player):
+			var sprint_offside := would_collect_offside(player, dest)
+			actions.append({
+				id = "sprint",
+				label = "Sprint (offside)" if sprint_offside else "Sprint",
+				dest = dest,
+				offside = sprint_offside,
+			})
 		if can_plan_pass_to_cell(player, dest):
 			actions.append({id = "pass", label = "Pass", dest = dest, target_id = -1, offside = false})
 	elif occupant.team != player.team:
@@ -705,6 +812,7 @@ func commands_for(player: PlayerState) -> Array[Dictionary]:
 		return result
 	for spec in [
 		{id = "move", label = "Move"},
+		{id = "sprint", label = "Sprint"},
 		{id = "turn", label = "Turn"},
 		{id = "pass", label = "Pass"},
 		{id = "dribble", label = "Dribble"},
@@ -736,6 +844,8 @@ func command_dests(player: PlayerState, command_id: String) -> Array[Vector2i]:
 			for cell in move_reach(player):
 				dests.append(cell)
 			return dests
+		"sprint":
+			dests = valid_sprints(player)
 		"turn":
 			dests = MatchRules.turn_destinations(_query_pos(player), _query_facing(player))
 		"pass":
@@ -784,7 +894,21 @@ func action_for_command(player: PlayerState, command_id: String, dest: Vector2i)
 	if command_id == "turn":
 		return {id = "turn", label = "Turn", dest = dest}
 	if command_id == "move":
-		return {id = "move", label = "Move", dest = dest}
+		var move_offside := would_collect_offside(player, dest)
+		return {
+			id = "move",
+			label = "Move (offside)" if move_offside else "Move",
+			dest = dest,
+			offside = move_offside,
+		}
+	if command_id == "sprint":
+		var sprint_offside := would_collect_offside(player, dest)
+		return {
+			id = "sprint",
+			label = "Sprint (offside)" if sprint_offside else "Sprint",
+			dest = dest,
+			offside = sprint_offside,
+		}
 	for action in actions_for(player, dest):
 		if str(action.get("id", "")) == command_id:
 			return action
@@ -1063,6 +1187,7 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 	var occupant := player_at(dest)
 	var target_name := occupant.label() if occupant != null else "open square"
 	var dist := MatchRules.tile_distance(passer.pos, dest)
+	var marked := offside_teammates(passer)
 	var offside := occupant != null and is_offside_receiver(passer, occupant)
 	var taker: PlayerState = null
 	if offside:
@@ -1076,6 +1201,10 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 		lines.append(
 			"If it arrives: offside. %s takes the tile and the ball." % taker.label()
 		)
+	var offside_note := ""
+	if not offside and not marked.is_empty():
+		offside_note = "Offside if %s is first to the ball." % _offside_name_list(marked)
+		lines.append(offside_note)
 	var body := "\n".join(lines)
 	var footer := "Pass success: %d%%" % total_pct
 	if threats.is_empty():
@@ -1084,7 +1213,14 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 		footer = "No interceptors. Offside if played."
 	elif offside:
 		footer += "  Offside if it arrives."
+	elif offside_note != "" and threats.is_empty():
+		footer = "No interceptors. %s" % offside_note
+	elif offside_note != "":
+		footer += "  %s" % offside_note
 	var text := header + "\n" + (body + "\n" if body != "" else "") + footer
+	var marked_ids: Array[int] = []
+	for mate in marked:
+		marked_ids.append(mate.id)
 	return {
 		threats = threats,
 		total = total,
@@ -1092,6 +1228,8 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 		header = header,
 		text = text,
 		offside = offside,
+		offside_note = offside_note,
+		marked_ids = marked_ids,
 		taker_id = taker.id if taker != null else -1,
 	}
 
@@ -1139,8 +1277,9 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 			defender_total = intercept.defender_total,
 		})
 
+	_mark_offside_from_pass(passer)
 	var occupant := player_at(dest)
-	if occupant != null and is_offside_receiver(passer, occupant):
+	if occupant != null and is_offside_marked(occupant):
 		return _finish_action(passer, _apply_offside(passer, occupant))
 
 	var receiver_id := -1
@@ -1233,8 +1372,11 @@ func _can_land_intercept(interceptor: PlayerState, cell: Vector2i) -> bool:
 
 
 func _apply_offside(passer: PlayerState, receiver: PlayerState) -> Dictionary:
+	if receiver == null:
+		return {ok = false, reason = "no_taker"}
 	var dest := receiver.pos
-	var taker := closest_player(MatchRules.opposite_team(passer.team), dest)
+	var attacking := passer.team if passer != null else receiver.team
+	var taker := closest_player(MatchRules.opposite_team(attacking), dest)
 	if taker == null:
 		return {ok = false, reason = "no_taker"}
 	var origin := taker.pos
@@ -1252,10 +1394,52 @@ func _apply_offside(passer: PlayerState, receiver: PlayerState) -> Dictionary:
 		gained_possession = true,
 		lost_possession = true,
 		contest_won = true,
-		attacker_label = passer.label(),
+		attacker_label = passer.label() if passer != null else "passer",
 		defender_label = receiver.label(),
 		taker_label = taker.label(),
 	}
+
+
+func _mark_offside_from_pass(passer: PlayerState) -> void:
+	offside_marked_ids.clear()
+	offside_passer_id = -1
+	if passer == null:
+		return
+	for player in offside_teammates(passer):
+		offside_marked_ids.append(player.id)
+	if not offside_marked_ids.is_empty():
+		offside_passer_id = passer.id
+
+
+func _clear_offside_marks() -> void:
+	offside_marked_ids.clear()
+	offside_passer_id = -1
+
+
+func _offside_passer() -> PlayerState:
+	return player_by_id(offside_passer_id)
+
+
+func _take_loose_ball(player: PlayerState) -> Dictionary:
+	if is_offside_marked(player):
+		var flagged := _apply_offside(_offside_passer(), player)
+		if flagged.get("ok", false):
+			return flagged
+	_give_ball(player)
+	return {}
+
+
+func _offside_name_list(group: Array[PlayerState]) -> String:
+	if group.is_empty():
+		return ""
+	if group.size() == 1:
+		return group[0].label()
+	if group.size() == 2:
+		return "%s or %s" % [group[0].label(), group[1].label()]
+	var parts: PackedStringArray = []
+	for i in range(group.size() - 1):
+		parts.append(group[i].label())
+	return "%s, or %s" % [", ".join(parts), group[group.size() - 1].label()]
 
 
 func apply_shoot(player_id: int, remaining_ap: int = -1) -> Dictionary:
@@ -1381,7 +1565,9 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 	if player.has_ball:
 		ball.pos = dest
 	elif ball.is_loose() and ball.pos == dest:
-		_give_ball(player)
+		var flagged := _take_loose_ball(player)
+		if not flagged.is_empty():
+			return _finish_action(player, flagged)
 		gained = true
 
 	var result := {
@@ -1406,6 +1592,53 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 		result.away_score = away_score
 		return result
 	return _finish_action(player, result)
+
+
+func apply_sprint(player_id: int, dest: Vector2i) -> Dictionary:
+	var player := player_by_id(player_id)
+	if player == null:
+		return {ok = false, reason = "no_player"}
+	if not _acting_allowed(player):
+		return {ok = false, reason = "wrong_team"}
+	if dest not in valid_sprints(player):
+		return {ok = false, reason = "illegal_dest"}
+
+	var origin := player.pos
+	var through := MatchRules.sprint_through(origin, dest)
+	var energy := MatchRules.action_energy_cost("sprint")
+	player.relocate(dest)
+	var gained := false
+	if player.has_ball:
+		ball.pos = dest
+	elif ball.is_loose() and (ball.pos == dest or ball.pos == through):
+		var flagged := _take_loose_ball(player)
+		if not flagged.is_empty():
+			return _finish_action(player, flagged, energy)
+		gained = true
+
+	var result := {
+		ok = true,
+		action = "sprint",
+		gained_possession = gained,
+		lost_possession = false,
+		carried = player.has_ball,
+		player_id = player_id,
+		dest = dest,
+		origin = origin,
+		through = through,
+		goal = false,
+		reset = false,
+		attacker_label = player.label(),
+	}
+	if _carrier_in_opponent_net(player):
+		player.spend_energy(energy)
+		_award_goal(player.team)
+		result.goal = true
+		result.reset = true
+		result.home_score = home_score
+		result.away_score = away_score
+		return result
+	return _finish_action(player, result, energy)
 
 
 func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) -> Dictionary:
@@ -1475,16 +1708,17 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		result.angle_label = tackle_dir.label
 
 	if roll.attacker_won:
-		player.relocate(dest)
-		occupant.relocate(origin)
-		result.displaced_id = occupant.id
-		if is_dribble:
-			ball.pos = dest
-		elif is_tackle:
+		if is_tackle:
 			_give_ball(player)
 			result.gained_possession = true
 			_face_away_from(player, occupant)
 			result.facing = player.facing
+		else:
+			player.relocate(dest)
+			occupant.relocate(origin)
+			result.displaced_id = occupant.id
+			if is_dribble:
+				ball.pos = dest
 	elif (is_dribble or is_tackle) and bool(roll.get("tied", false)):
 		var bounce_cell := _bounce_ball()
 		result.contest_tied = true
@@ -1508,9 +1742,13 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 	return _finish_action(player, result)
 
 
-func _finish_action(player: PlayerState, result: Dictionary) -> Dictionary:
+func _finish_action(
+	player: PlayerState,
+	result: Dictionary,
+	energy_cost: int = MatchRules.ACTION_ENERGY_COST
+) -> Dictionary:
 	if player != null and result.get("ok", false):
-		player.spend_energy()
+		player.spend_energy(energy_cost)
 	return result
 
 
@@ -1536,6 +1774,7 @@ func _award_goal(scoring_team: int) -> void:
 
 
 func _give_ball(player: PlayerState) -> void:
+	_clear_offside_marks()
 	var previous := carrier()
 	if previous != null:
 		previous.has_ball = false
@@ -1565,8 +1804,9 @@ func _bounce_ball() -> Vector2i:
 		cell = origin
 	var occupant := player_at(cell)
 	if occupant != null:
-		_give_ball(occupant)
+		_take_loose_ball(occupant)
 	else:
+		_clear_offside_marks()
 		_release_ball(cell)
 	return cell
 

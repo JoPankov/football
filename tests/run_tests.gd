@@ -17,6 +17,7 @@ func _run() -> void:
 	_test_move_destinations()
 	_test_facing()
 	_test_action_points()
+	_test_sprinting()
 	_test_attacking_third()
 	_test_offside_position()
 	_test_kickoff()
@@ -222,6 +223,9 @@ func _test_action_points() -> void:
 		MatchRules.action_ap_cost("turn", Vector2i(5, 5), Vector2i(4, 5), 6, east) == 2,
 		"180° turn action costs 2 AP"
 	)
+	_assert(MatchRules.action_ap_cost("sprint", Vector2i(5, 5), Vector2i(7, 5), 6) == 2, "sprint costs 2 AP")
+	_assert(MatchRules.action_energy_cost("sprint") == 3, "sprint costs 3 energy")
+	_assert(MatchRules.action_energy_cost("move") == 1, "a walk still costs 1 energy")
 	_assert(MatchRules.action_ap_cost("pass", Vector2i(5, 5), Vector2i(7, 5), 6) == 1, "pass costs 1 AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 5) == 5, "shot spends leftover AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 1) == 1, "shot with 1 AP spends that point")
@@ -506,6 +510,157 @@ func _test_move_destinations() -> void:
 	_assert(Vector2i(6, 4) not in blocked_reach, "an occupied forward tile is not a dest")
 	_assert(Vector2i(7, 4) not in blocked_reach, "a blocked first step cuts the straight path")
 	_assert(MatchRules.move_reach(Vector2i(5, 4), Vector2i(1, 0), {}, 1).is_empty(), "1 AP cannot walk")
+
+
+func _test_sprinting() -> void:
+	print("-- sprinting")
+	var east := Vector2i(1, 0)
+	var from := Vector2i(5, 4)
+	var dests := MatchRules.sprint_destinations(from, east, {})
+	_assert(dests.size() == 1, "open cell has one sprint dest")
+	_assert(Vector2i(7, 4) in dests, "sprint is two tiles straight ahead")
+	_assert(Vector2i(6, 4) not in dests, "the adjacent tile is not a sprint dest")
+	_assert(Vector2i(7, 3) not in dests, "the 45° cell is not a sprint dest")
+	_assert(Vector2i(3, 4) not in dests, "the rear cell is not a sprint dest")
+	_assert(
+		MatchRules.sprint_destinations(from, east, {Vector2i(6, 4): true}).is_empty(),
+		"an occupied through tile blocks the sprint"
+	)
+	_assert(
+		MatchRules.sprint_destinations(from, east, {Vector2i(7, 4): true}).is_empty(),
+		"an occupied landing blocks the sprint"
+	)
+	_assert(
+		MatchRules.sprint_destinations(Vector2i(0, 0), Vector2i(-1, 0), {}).is_empty(),
+		"sprint cannot leave the pitch"
+	)
+	var diag := MatchRules.sprint_destinations(from, Vector2i(1, 1), {})
+	_assert(Vector2i(7, 6) in diag, "diagonal facing sprints two tiles on that diagonal")
+	_assert(MatchRules.is_sprint_step(from, Vector2i(7, 4), east), "two tiles ahead is a sprint step")
+	_assert(not MatchRules.is_sprint_step(from, Vector2i(6, 4), east), "one tile ahead is not a sprint")
+
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var st := model.player_at(MatchRules.CENTER_SPOT)
+	_assert(_spot(2, 0) in model.command_dests(st, "sprint"), "kickoff striker can sprint two tiles ahead")
+	_assert(_spot(1, 0) not in model.command_dests(st, "sprint"), "the first tile ahead is a walk, not a sprint")
+	_assert(_spot(2, 1) not in model.command_dests(st, "sprint"), "sprint ignores the move cone")
+	var cmds: Array = []
+	for command in model.commands_for(st):
+		cmds.append(command.get("id", ""))
+	_assert("sprint" in cmds, "action bar offers sprint")
+	var queued := model.queue_plan(st.id, {id = "sprint", dest = _spot(2, 0), label = "Sprint"})
+	_assert(queued.ok, "sprint queues")
+	_assert(int(queued.plan.get("ap_cost", 0)) == 2, "queued sprint costs 2 AP")
+	_assert(int(queued.plan.get("ap_end", 0)) == 2, "a first-action sprint completes in wave 2")
+	_assert(model.ap_spent(st.id) == 2, "sprint spends 2 AP")
+	_assert(model.planning_pos(st) == _spot(2, 0), "planning pos jumps two tiles")
+	_assert(model.planning_facing(st) == east, "sprint keeps the current facing")
+	_assert(st.pos == MatchRules.CENTER_SPOT, "queued sprint does not move the piece")
+	_assert(st.energy == 100, "queued sprint does not spend energy")
+	_assert(CombatLog.plan_summary(queued.plan).contains("sprint →"), "plan text names sprint")
+	_assert(CombatLog.plan_summary(queued.plan).contains("2 AP"), "plan text shows 2 AP")
+
+	var leftover := MatchModel.new()
+	leftover.setup_kickoff()
+	var leftover_st := leftover.player_at(MatchRules.CENTER_SPOT)
+	_assert(leftover.queue_plan(leftover_st.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "straight step toward a 2-AP leftover")
+	_assert(leftover.queue_plan(leftover_st.id, {id = "move", dest = _spot(2, 0), label = "Move"}).ok, "second straight step leaves 2 AP")
+	_assert(leftover.ap_remaining(leftover_st.id) == 2, "two walks leave 2 AP")
+	_assert(_spot(4, 0) in leftover.command_dests(leftover_st, "sprint"), "2 leftover AP can afford a sprint")
+
+	var tight := MatchModel.new()
+	tight.setup_kickoff()
+	var tight_st := tight.player_at(MatchRules.CENTER_SPOT)
+	_assert(tight.queue_plan(tight_st.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "straight step toward a 1-AP leftover")
+	_assert(tight.queue_plan(tight_st.id, {id = "move", dest = _spot(2, 1), label = "Move"}).ok, "diagonal spends the next 3 AP")
+	_assert(tight.ap_remaining(tight_st.id) == 1, "walk then diagonal leave 1 AP")
+	_assert(tight.command_dests(tight_st, "sprint").is_empty(), "1 leftover AP cannot afford a sprint")
+	_assert(
+		not tight.queue_plan(tight_st.id, {id = "sprint", dest = _spot(4, 3), label = "Sprint"}).ok,
+		"queue rejects a sprint the player cannot afford"
+	)
+
+	var blocked := MatchModel.new()
+	blocked.setup_kickoff()
+	var blocked_st := blocked.player_at(MatchRules.CENTER_SPOT)
+	var blocker := blocked.player_at(MatchRules.AWAY_KICKOFF)
+	blocker.pos = _spot(1, 0)
+	_assert(blocked.command_dests(blocked_st, "sprint").is_empty(), "a body on the through tile blocks sprint")
+	blocker.pos = _spot(2, 0)
+	_assert(blocked.command_dests(blocked_st, "sprint").is_empty(), "a body on the landing blocks sprint")
+	_assert(not blocked.apply_sprint(blocked_st.id, _spot(2, 0)).ok, "apply rejects a blocked sprint")
+
+	var applied := MatchModel.new()
+	applied.setup_kickoff()
+	var runner := applied.player_at(MatchRules.CENTER_SPOT)
+	var energy_before := runner.energy
+	var burst := applied.apply_sprint(runner.id, _spot(2, 0))
+	_assert(burst.ok and burst.action == "sprint", "apply sprint succeeds")
+	_assert(runner.pos == _spot(2, 0), "sprinter lands two tiles ahead")
+	_assert(runner.facing == east, "sprinter still faces the sprint direction")
+	_assert(runner.has_ball, "carrier keeps the ball")
+	_assert(applied.ball.pos == runner.pos, "ball follows the sprint")
+	_assert(runner.energy == energy_before - 3, "a resolved sprint costs 3 energy")
+	_assert(CombatLog.format_result(burst).begins_with("SPRINT"), "log names a sprint")
+
+	var pickup := MatchModel.new()
+	pickup.setup_kickoff()
+	pickup.scripted_first_intercept_wins = false
+	var pickup_st := pickup.player_at(MatchRules.CENTER_SPOT)
+	pickup.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 1)
+	pickup.apply_pass_to(pickup_st.id, _spot(2, 0))
+	_assert(pickup.ball.is_loose() and pickup.ball.pos == _spot(2, 0), "setup leaves the ball two tiles ahead")
+	var grabbed := pickup.apply_sprint(pickup_st.id, _spot(2, 0))
+	_assert(grabbed.ok and grabbed.gained_possession, "sprinting onto a loose ball collects it")
+	_assert(pickup_st.has_ball and pickup.ball.pos == _spot(2, 0), "collector has the ball on the landing")
+
+	var through_ball := MatchModel.new()
+	through_ball.setup_kickoff()
+	through_ball.scripted_first_intercept_wins = false
+	var through_st := through_ball.player_at(MatchRules.CENTER_SPOT)
+	through_ball.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 1)
+	through_ball.apply_pass_to(through_st.id, _spot(1, 0))
+	var through_grab := through_ball.apply_sprint(through_st.id, _spot(2, 0))
+	_assert(through_grab.ok and through_grab.gained_possession, "sprinting through a loose ball collects it")
+	_assert(through_st.has_ball and through_ball.ball.pos == _spot(2, 0), "through-ball is carried to the landing")
+
+	var planned_collect := MatchModel.new()
+	planned_collect.setup_kickoff()
+	planned_collect.scripted_first_intercept_wins = false
+	var plan_st := planned_collect.player_at(MatchRules.CENTER_SPOT)
+	planned_collect.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 1)
+	planned_collect.apply_pass_to(plan_st.id, _spot(2, 0))
+	planned_collect.queue_plan(plan_st.id, {id = "sprint", dest = _spot(2, 0), label = "Sprint"})
+	_assert(planned_collect.planning_has_ball(plan_st), "queued sprint onto a loose ball grants planning possession")
+	_assert(not planned_collect.command_dests(plan_st, "pass").is_empty(), "collector can queue a pass after the sprint")
+
+	var goal_model := MatchModel.new()
+	goal_model.setup_kickoff()
+	var scorer := goal_model.player_at(MatchRules.CENTER_SPOT)
+	var helix_gk := goal_model.player_at(MatchRules.AWAY_NET)
+	helix_gk.pos = Vector2i(MatchRules.GRID_WIDTH - 1, 0)
+	scorer.pos = Vector2i(MatchRules.GRID_WIDTH - 2, MatchRules.CENTER_Y)
+	goal_model.ball.pos = scorer.pos
+	var walked := goal_model.apply_sprint(scorer.id, MatchRules.AWAY_NET)
+	_assert(walked.get("goal", false), "sprinting the ball into the net is a goal")
+	_assert(goal_model.home_score == 1, "sprint-in awards aether a goal")
+
+	var wave := MatchModel.new()
+	wave.setup_kickoff()
+	var wave_st := wave.player_at(MatchRules.CENTER_SPOT)
+	wave.queue_plan(wave_st.id, {id = "sprint", dest = _spot(2, 0), label = "Sprint"})
+	wave.end_planning()
+	var resolved := wave.end_planning()
+	_assert(resolved.get("action") == "resolve", "sprint cycle resolved")
+	_assert(wave_st.pos == _spot(2, 0), "resolved sprint moved the striker two tiles")
+	_assert(wave.combat_log.as_text().contains("Wave 2"), "log labels the AP-2 sprint wave")
+	_assert(wave.combat_log.as_text().contains("SPRINT"), "resolve log names the sprint")
+	var sprint_events := 0
+	for event in resolved.get("events", []):
+		if str(event.get("action", "")) == "sprint":
+			sprint_events += 1
+	_assert(sprint_events == 1, "exactly one sprint event played")
 
 
 func _test_attacking_third() -> void:
@@ -887,7 +1042,9 @@ func _test_challenge_takes_ball() -> void:
 	_assert(result.get("defender_label") == st.label(), "log names the carrier")
 	_assert(result.get("gained_possession"), "winner of the tackle took the ball")
 	_assert(away.has_ball and not st.has_ball, "challenger is the new carrier")
-	_assert(away.pos == MatchRules.CENTER_SPOT and st.pos == _spot(1, 1), "players swapped")
+	_assert(away.pos == _spot(1, 1) and st.pos == MatchRules.CENTER_SPOT, "a won tackle leaves both players in place")
+	_assert(int(result.get("displaced_id", -1)) < 0, "a won tackle does not shove the carrier")
+	_assert(model.ball.pos == away.pos, "the ball follows the tackler")
 	_assert(
 		away.facing == MatchRules.step_direction(st.pos, away.pos),
 		"tackle winner turns their back to the player they stole from"
@@ -992,9 +1149,10 @@ func _test_tackle_direction() -> void:
 	var won := steal.apply_move(steal_cb.id, MatchRules.CENTER_SPOT)
 	_assert(won.action == "tackle" and won.get("gained_possession"), "scripted front tackle still steals")
 	_assert(int(won.get("angle_deg", -1)) == 0, "resolved front tackle records 0°")
+	_assert(steal_cb.pos == _spot(1, 0) and steal_st.pos == MatchRules.CENTER_SPOT, "front tackle steal does not swap tiles")
 	_assert(
 		steal_cb.facing == MatchRules.step_direction(steal_st.pos, steal_cb.pos),
-		"swap-tackle winner faces away from the old carrier"
+		"tackle winner faces away from the old carrier"
 	)
 	_assert(CombatLog.format_result(won).contains("(front)"), "log names a front tackle")
 
@@ -1122,7 +1280,11 @@ func _test_pass() -> void:
 	_assert(empty_actions.size() == 2, "adjacent empty square is move or pass")
 	_assert(empty_actions[0].id == "move" and empty_actions[1].id == "pass", "move and pass are both offered")
 	var through := open.actions_for(kicker, _spot(2, 0))
-	_assert(through.size() == 1 and through[0].id == "pass", "empty square 2 tiles away is pass only")
+	var through_ids: Array = []
+	for act in through:
+		through_ids.append(act.id)
+	_assert("sprint" in through_ids and "pass" in through_ids, "empty square 2 tiles ahead is sprint or pass")
+	_assert("move" not in through_ids, "a two-tile landing is not a single walk step")
 	open.scripted_first_intercept_wins = false
 	var laid := open.apply_pass_to(kicker.id, _spot(2, 0))
 	_assert(laid.ok and laid.action == "pass", "pass to empty square succeeds")
@@ -1161,15 +1323,18 @@ func _test_pass() -> void:
 
 func _test_intercepts() -> void:
 	print("-- intercepts")
+	_assert(is_equal_approx(MatchRules.INTERCEPT_RADIUS, 0.7), "intercept radius is 0.7 tiles")
 	var radius := MatchRules.INTERCEPT_RADIUS
 	var along := MatchRules.segment_intersects_circle(Vector2(0, 0), Vector2(4, 0), Vector2(2, 0), radius)
 	_assert(along.hits, "player on the pass line intercepts")
 	var touch := MatchRules.segment_intersects_circle(Vector2(0, 0), Vector2(4, 0), Vector2(2, radius), radius)
-	_assert(touch.hits, "radius 1 touching the line intercepts")
+	_assert(touch.hits, "radius 0.7 touching the line intercepts")
 	var miss := MatchRules.segment_intersects_circle(Vector2(0, 0), Vector2(4, 0), Vector2(2, radius + 0.01), radius)
 	_assert(not miss.hits, "just outside the radius does not intercept")
 	var beside_start := MatchRules.segment_intersects_circle(Vector2(0, 0), Vector2(4, 0), Vector2(0, 1), radius)
 	_assert(not beside_start.hits, "player only next to the passer does not intercept")
+	var adjacent_row := MatchRules.segment_intersects_circle(Vector2(0, 0), Vector2(4, 0), Vector2(2, 1), radius)
+	_assert(not adjacent_row.hits, "1 tile off an axis-aligned pass is outside the 0.7 radius")
 	_assert(is_equal_approx(MatchRules.intercept_reach_factor(0.0), 1.0), "on the lane keeps full intercept chance")
 	_assert(
 		is_equal_approx(MatchRules.intercept_reach_factor(1.0), 0.5),
@@ -1192,9 +1357,9 @@ func _test_intercepts() -> void:
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var st := model.player_at(MatchRules.CENTER_SPOT)
-	var lane := _spot(3, 0)
-	model.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 1)
-	model.player_at(_spot(2, -3)).pos = _spot(2, -1)
+	var lane := _spot(3, 1)
+	model.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 0)
+	model.player_at(_spot(2, -3)).pos = _spot(1, 1)
 	var threats := model.interceptors_for_pass(st, lane)
 	_assert(threats.size() >= 2, "a lane through midfield has interceptors")
 	for threat in threats:
@@ -1262,16 +1427,13 @@ func _test_intercepts() -> void:
 	on_player.pos = Vector2i(passer.pos.x + 2, passer.pos.y)
 	off_player.pos = Vector2i(passer.pos.x + 2, passer.pos.y + 1)
 	var placed := spaced.interceptors_for_pass(passer, dest)
-	_assert(placed.size() == 2, "only the two placed helix players threaten the pass")
-	var on_first := float(placed[0].dist) < float(placed[1].dist)
-	var on_threat: Dictionary = placed[0] if on_first else placed[1]
-	var off_threat: Dictionary = placed[1] if on_first else placed[0]
+	_assert(placed.size() == 1, "only the on-lane helix player threatens the pass")
+	var on_threat: Dictionary = placed[0]
+	_assert(on_threat.player.id == on_player.id, "on-lane interceptor is the threat")
 	_assert(is_equal_approx(float(on_threat.dist), 0.0), "on-lane interceptor sits on the pass")
-	_assert(is_equal_approx(float(off_threat.dist), 1.0), "off-lane interceptor sits 1 tile off")
-	_assert(
-		int(off_threat.intercept_percent) < int(on_threat.intercept_percent),
-		"same DEF intercepts less often from 1 tile off the lane"
-	)
+	_assert(off_player.id != on_player.id, "on-lane and off-lane placements are different players")
+	for threat in placed:
+		_assert(threat.player.id != off_player.id, "1 tile off an axis-aligned pass does not intercept")
 
 
 func _test_swap_and_choice() -> void:
@@ -1333,6 +1495,7 @@ func _test_offside() -> void:
 	_assert(not st.has_ball, "passer lost the ball")
 	_assert(model.current_team == MatchRules.Team.HOME, "offside does not switch the planning team")
 	_assert(model.ball.pos == taker.pos, "ball sits on the restart tile")
+	_assert(model.offside_marked_ids.is_empty(), "offside restart clears the marks")
 
 	var onside := MatchModel.new()
 	onside.setup_kickoff()
@@ -1346,6 +1509,7 @@ func _test_offside() -> void:
 	var completed := onside.apply_pass(kicker.id, partner.id)
 	_assert(completed.ok and completed.action == "pass", "onside pass still completes")
 	_assert(partner.has_ball, "onside receiver got the ball")
+	_assert(onside.offside_marked_ids.is_empty(), "onside receive clears any marks")
 
 	var own_half := MatchModel.new()
 	own_half.setup_kickoff()
@@ -1363,6 +1527,7 @@ func _test_offside() -> void:
 	var laid := ground.apply_pass_to(carrier.id, _spot(5, 0))
 	_assert(laid.ok and laid.action == "pass", "pass to an empty square is not offside")
 	_assert(ground.ball.is_loose() and ground.ball.pos == _spot(5, 0), "empty-square pass stayed a ground pass")
+	_assert(ground.offside_marked_ids.is_empty(), "nobody was offside on that ground pass")
 
 	var stolen := MatchModel.new()
 	stolen.setup_kickoff()
@@ -1371,12 +1536,159 @@ func _test_offside() -> void:
 	passer.pos = Vector2i(22, MatchRules.CENTER_Y)
 	stolen.ball.pos = passer.pos
 	target.pos = Vector2i(24, MatchRules.CENTER_Y)
+	stolen.player_at(MatchRules.AWAY_KICKOFF).pos = Vector2i(23, MatchRules.CENTER_Y)
 	_assert(stolen.is_offside_receiver(passer, target), "setup is offside if the pass arrived")
 	stolen.scripted_first_intercept_wins = true
 	var cut := stolen.apply_pass_to(passer.id, target.pos)
 	_assert(cut.get("intercepted", false), "intercept happens before offside")
 	_assert(cut.action == "pass", "intercepted pass is not recorded as offside")
 	_assert(not target.has_ball, "offside teammate did not receive the intercepted pass")
+	_assert(stolen.offside_marked_ids.is_empty(), "intercepted pass does not leave offside marks")
+
+	var through := MatchModel.new()
+	through.setup_kickoff()
+	through.scripted_first_intercept_wins = false
+	var th_st := through.player_at(MatchRules.CENTER_SPOT)
+	var th_mate := through.player_at(_spot(0, -1))
+	th_st.pos = Vector2i(22, MatchRules.CENTER_Y)
+	through.ball.pos = th_st.pos
+	th_mate.pos = Vector2i(24, MatchRules.CENTER_Y)
+	th_mate.facing = Vector2i(-1, 0)
+	_assert(through.is_offside_receiver(th_st, th_mate), "through-ball runner is offside at the pass")
+	var through_preview := through.pass_preview(th_st, Vector2i(23, MatchRules.CENTER_Y))
+	_assert(not through_preview.get("offside", false), "empty-square through ball is not immediately offside")
+	_assert(th_mate.id in through_preview.get("marked_ids", []), "preview lists the offside runner")
+	_assert(
+		str(through_preview.get("offside_note", "")).contains("first to the ball"),
+		"preview says the marked runner is offside if first to the ball"
+	)
+	var through_pass := through.apply_pass_to(th_st.id, Vector2i(23, MatchRules.CENTER_Y))
+	_assert(through_pass.ok and through_pass.action == "pass", "through ball to an empty square is a pass")
+	_assert(through.is_offside_marked(th_mate), "offside runner is marked when the pass is played")
+	_assert(
+		through.ball.is_loose() and through.ball.pos == Vector2i(23, MatchRules.CENTER_Y),
+		"ball sits on the through square"
+	)
+	_assert(
+		through.would_collect_offside(th_mate, Vector2i(23, MatchRules.CENTER_Y)),
+		"collecting the through ball is previewed as offside"
+	)
+	var through_collect := through.apply_move(th_mate.id, Vector2i(23, MatchRules.CENTER_Y))
+	_assert(through_collect.ok and through_collect.action == "offside", "marked player collecting first is offside")
+	_assert(not th_mate.has_ball, "offside collector did not keep the ball")
+	_assert(through.offside_marked_ids.is_empty(), "flagging the collect clears the marks")
+
+	var run_on := MatchModel.new()
+	run_on.setup_kickoff()
+	run_on.scripted_first_intercept_wins = false
+	var run_st := run_on.player_at(MatchRules.CENTER_SPOT)
+	var run_mate := run_on.player_at(_spot(0, -1))
+	run_st.pos = Vector2i(21, MatchRules.CENTER_Y)
+	run_on.ball.pos = run_st.pos
+	run_mate.pos = Vector2i(23, MatchRules.CENTER_Y)
+	run_mate.facing = Vector2i(1, 0)
+	_assert(not run_on.is_offside_receiver(run_st, run_mate), "level with the last line is onside at the pass")
+	var run_pass := run_on.apply_pass_to(run_st.id, Vector2i(24, MatchRules.CENTER_Y))
+	_assert(run_pass.ok and run_pass.action == "pass", "through ball from an onside runner is a pass")
+	_assert(not run_on.is_offside_marked(run_mate), "onside runner is not marked")
+	var run_collect := run_on.apply_move(run_mate.id, Vector2i(24, MatchRules.CENTER_Y))
+	_assert(run_collect.ok and run_collect.action == "move", "onside runner's collect is a move")
+	_assert(run_mate.has_ball, "onside runner can collect after running beyond the last line")
+
+	var other_touch := MatchModel.new()
+	other_touch.setup_kickoff()
+	other_touch.scripted_first_intercept_wins = false
+	var ot_st := other_touch.player_at(MatchRules.CENTER_SPOT)
+	var ot_mate := other_touch.player_at(_spot(0, -1))
+	ot_st.pos = Vector2i(22, MatchRules.CENTER_Y)
+	other_touch.ball.pos = ot_st.pos
+	ot_mate.pos = Vector2i(24, MatchRules.CENTER_Y)
+	var ot_pass := other_touch.apply_pass_to(ot_st.id, Vector2i(23, MatchRules.CENTER_Y))
+	_assert(ot_pass.action == "pass" and other_touch.is_offside_marked(ot_mate), "runner is marked until someone else plays the ball")
+	var ot_collect := other_touch.apply_move(ot_st.id, Vector2i(23, MatchRules.CENTER_Y))
+	_assert(ot_collect.action == "move" and ot_st.has_ball, "passer collecting their own through ball is legal")
+	_assert(not other_touch.is_offside_marked(ot_mate), "another player touching the ball clears the marks")
+
+	var onside_recv := MatchModel.new()
+	onside_recv.setup_kickoff()
+	onside_recv.scripted_first_intercept_wins = false
+	var or_st := onside_recv.player_at(MatchRules.CENTER_SPOT)
+	var or_near := onside_recv.player_at(_spot(0, -1))
+	or_st.pos = Vector2i(22, MatchRules.CENTER_Y)
+	onside_recv.ball.pos = or_st.pos
+	or_near.pos = Vector2i(22, MatchRules.CENTER_Y - 1)
+	var or_far := onside_recv.player_at(_spot(-3, -1))
+	or_far.pos = Vector2i(24, MatchRules.CENTER_Y)
+	_assert(not onside_recv.is_offside_receiver(or_st, or_near), "adjacent partner is onside")
+	_assert(onside_recv.is_offside_receiver(or_st, or_far), "far teammate is offside at the pass")
+	var or_pass := onside_recv.apply_pass(or_st.id, or_near.id)
+	_assert(or_pass.action == "pass" and or_near.has_ball, "pass to the onside teammate completes")
+	_assert(onside_recv.offside_marked_ids.is_empty(), "onside first touch clears the offside marks")
+
+	var plan_off := MatchModel.new()
+	plan_off.setup_kickoff()
+	var pl_st := plan_off.player_at(MatchRules.CENTER_SPOT)
+	var pl_mate := plan_off.player_at(_spot(0, -1))
+	pl_st.pos = Vector2i(22, MatchRules.CENTER_Y)
+	plan_off.ball.pos = pl_st.pos
+	pl_mate.pos = Vector2i(24, MatchRules.CENTER_Y)
+	pl_mate.facing = Vector2i(-1, 0)
+	var pl_pass := plan_off.queue_plan(pl_st.id, {
+		id = "pass",
+		dest = Vector2i(23, MatchRules.CENTER_Y),
+		target_id = -1,
+		label = "Pass",
+	})
+	_assert(pl_pass.ok, "through ball can be queued")
+	_assert(not plan_off.planning_has_ball(pl_st), "passer no longer has planning possession")
+	var pl_move := plan_off.queue_plan(pl_mate.id, {
+		id = "move",
+		dest = Vector2i(23, MatchRules.CENTER_Y),
+		label = "Move",
+	})
+	_assert(pl_move.ok, "offside runner can still queue the collect")
+	_assert(not plan_off.planning_has_ball(pl_mate), "offside collector does not get planning possession")
+	_assert(plan_off.planning_carrier() == null, "through ball to a marked runner leaves nobody with the ball")
+	_assert(
+		plan_off.would_collect_offside(pl_mate, Vector2i(23, MatchRules.CENTER_Y)),
+		"queued collect is previewed as offside"
+	)
+
+	var cycle := MatchModel.new()
+	cycle.setup_kickoff()
+	cycle.scripted_first_intercept_wins = false
+	var cy_st := cycle.player_at(MatchRules.CENTER_SPOT)
+	var cy_mate := cycle.player_at(_spot(0, -1))
+	cy_st.pos = Vector2i(22, MatchRules.CENTER_Y)
+	cycle.ball.pos = cy_st.pos
+	cy_mate.pos = Vector2i(24, MatchRules.CENTER_Y)
+	cy_mate.facing = Vector2i(-1, 0)
+	_fill_plans(cycle, [
+		{
+			player_id = cy_st.id,
+			id = "pass",
+			dest = Vector2i(23, MatchRules.CENTER_Y),
+			target_id = -1,
+			label = "Pass",
+		},
+		{
+			player_id = cy_mate.id,
+			id = "move",
+			dest = Vector2i(23, MatchRules.CENTER_Y),
+			label = "Move",
+		},
+	])
+	cycle.end_planning()
+	_fill_plans(cycle, [])
+	var cycled := cycle.end_planning()
+	_assert(cycled.action == "resolve", "through-ball offside cycle resolved")
+	var saw_offside := false
+	for event in cycled.get("events", []):
+		if str(event.get("action", "")) == "offside":
+			saw_offside = true
+			break
+	_assert(saw_offside, "cycle flags offside when the marked runner is first to the ball")
+	_assert(not cy_mate.has_ball, "cycle offside collector did not keep the ball")
 
 
 func _dummy_empty_move(model: MatchModel, team: int, except: Dictionary) -> Dictionary:
@@ -1586,7 +1898,8 @@ func _test_planning_and_resolve() -> void:
 	}])
 	var fight := interrupt.end_planning()
 	_assert(fight.action == "resolve", "tackle-then-pass cycle resolved")
-	_assert(tackler.has_ball and tackler.pos == MatchRules.CENTER_SPOT, "tackle resolved first and won the ball")
+	_assert(tackler.has_ball and tackler.pos == _spot(1, 0), "tackle resolved first and won the ball in place")
+	_assert(carrier.pos == MatchRules.CENTER_SPOT, "the old carrier stayed on their tile")
 	_assert(not carrier.has_ball, "passer lost the ball")
 	_assert(not mate.has_ball, "pass did not arrive after the tackle")
 	var log_text := interrupt.combat_log.as_text()
@@ -1727,7 +2040,8 @@ func _test_planning_and_resolve() -> void:
 	cut.scripted_first_intercept_wins = true
 	var cut_st := cut.player_at(MatchRules.CENTER_SPOT)
 	var cut_mate := cut.player_at(_spot(0, -1))
-	cut.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(1, -1)
+	cut_mate.pos = _spot(2, 0)
+	cut.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(1, 0)
 	_fill_plans(cut, [
 		{
 			player_id = cut_st.id,
@@ -1739,7 +2053,7 @@ func _test_planning_and_resolve() -> void:
 		{
 			player_id = cut_mate.id,
 			id = "dribble",
-			dest = _spot(1, -1),
+			dest = _spot(3, 0),
 			label = "Dribble",
 		},
 	])
@@ -1747,7 +2061,7 @@ func _test_planning_and_resolve() -> void:
 	_fill_plans(cut, [])
 	var cut_result := cut.end_planning()
 	_assert(cut_result.action == "resolve", "intercepted pass-then-dribble resolved")
-	_assert(cut_mate.pos == _spot(0, -1), "receiver dribble did not play after the intercept")
+	_assert(cut_mate.pos == _spot(2, 0), "receiver dribble did not play after the intercept")
 	_assert(not cut_mate.has_ball, "receiver never got the intercepted pass")
 	_assert(cut.combat_log.as_text().contains("pass did not arrive"), "log cancels the expected-ball dribble")
 
@@ -2114,10 +2428,14 @@ func _test_shooting() -> void:
 		park += 1
 	_assert(helix_field.size() >= 1, "helix field players exist to intercept a shot")
 	var cutter: PlayerState = helix_field[0]
-	cutter.pos = Vector2i(cutter_st.pos.x + 4, cutter_st.pos.y + 1)
+	var aether_partner := cut_model.player_at(_spot(0, -1))
+	aether_partner.pos = Vector2i(0, 0)
+	cutter_st.pos = Vector2i(cutter_st.pos.x, cutter_st.pos.y - 1)
+	cut_model.ball.pos = cutter_st.pos
+	cutter.pos = Vector2i(18, 8)
 	var shot_threats := cut_model.interceptors_for_pass(cutter_st, MatchRules.AWAY_NET)
 	_assert(shot_threats.size() == 1, "only the placed defender threatens the shot")
-	_assert(shot_threats[0].player.id == cutter.id, "off-lane defender is the shot interceptor")
+	_assert(shot_threats[0].player.id == cutter.id, "placed defender is the shot interceptor")
 	var net_gk := cut_model.player_at(MatchRules.AWAY_NET)
 	_assert(net_gk != null and net_gk.role == "GK", "keeper is in the net")
 	for threat in shot_threats:
@@ -2201,6 +2519,9 @@ func _test_controller_click_flow() -> void:
 	_assert(controller.hud._forecast_label.text.contains("Pass success"), "forecast shows the pass success chance")
 	var shoot_cmd: Dictionary = controller.select_command("shoot")
 	_assert(shoot_cmd.get("ok", false), "shoot is available for the kickoff carrier")
+	var helix_marker: PlayerState = controller.model.player_at(MatchRules.AWAY_KICKOFF)
+	var helix_home: Vector2i = helix_marker.pos
+	helix_marker.pos = Vector2i(MatchRules.CENTER_SPOT.x + 4, MatchRules.CENTER_Y)
 	controller._set_hover(MatchRules.AWAY_NET)
 	await process_frame
 	_assert(controller.hud._forecast.visible, "shoot hover shows the success forecast")
@@ -2214,6 +2535,7 @@ func _test_controller_click_flow() -> void:
 		"shot hover draws the pass line to the net"
 	)
 	_assert(not controller.pitch.intercept_cells.is_empty(), "shot hover draws intercept circles")
+	helix_marker.pos = helix_home
 	_assert(
 		controller.hud._forecast_label.text.contains("intercept")
 		or controller.hud._forecast_label.text.contains("Through"),
@@ -2705,6 +3027,24 @@ func _test_controller_click_flow() -> void:
 	_assert(offside_click.get("action") == "queue", "clicking the offside teammate queues the pass")
 	_assert(off_st.has_ball, "offside pass has not resolved yet")
 	offside_main.queue_free()
+
+	var burst_ui: Node = packed.instantiate()
+	root.add_child(burst_ui)
+	burst_ui.animate_moves = false
+	burst_ui.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	_assert("sprint" in burst_ui.hud._command_ids, "action bar lists sprint")
+	var burst_pick: Dictionary = burst_ui.select_command("sprint")
+	_assert(burst_pick.get("action") == "command", "sprint is chosen from the action bar")
+	_assert(_spot(2, 0) in burst_pick.get("dests", []), "sprint highlights the two-tile landing")
+	_assert(burst_ui._pending_action == "sprint", "sprint stays armed until the tile click")
+	var burst_click: Dictionary = burst_ui.handle_cell_clicked(_spot(2, 0))
+	_assert(burst_click.get("action") == "queue", "clicking the sprint tile queues one sprint")
+	var burst_st: PlayerState = burst_ui.model.player_at(MatchRules.CENTER_SPOT)
+	_assert(burst_ui.model.plans_of(burst_st.id).size() == 1, "sprint is a single action, not two walks")
+	_assert(burst_ui.model.ap_spent(burst_st.id) == 2, "queued sprint spends 2 AP")
+	_assert(burst_ui.model.planning_pos(burst_st) == _spot(2, 0), "piece previews on the sprint landing")
+	_assert(str(burst_ui.model.plan_of(burst_st.id).get("action", "")) == "sprint", "queued action is sprint")
+	burst_ui.queue_free()
 	await process_frame
 
 

@@ -65,6 +65,10 @@ func _dests_for(model: MatchModel, player: PlayerState) -> Array[Vector2i]:
 		if not seen.has(cell):
 			seen[cell] = true
 			dests.append(cell)
+	for cell in model.valid_sprints(player):
+		if not seen.has(cell):
+			seen[cell] = true
+			dests.append(cell)
 	for cell in model.turn_dests(player):
 		if not seen.has(cell):
 			seen[cell] = true
@@ -83,7 +87,7 @@ func _dests_for(model: MatchModel, player: PlayerState) -> Array[Vector2i]:
 func _score(model: MatchModel, player: PlayerState, action: Dictionary, claimed: Dictionary) -> float:
 	var kind := str(action.get("id", ""))
 	var dest: Vector2i = action.get("dest", player.pos)
-	var clash := 18.0 if claimed.has(dest) and kind in ["move", "dribble", "tackle", "challenge"] else 0.0
+	var clash := 18.0 if claimed.has(dest) and kind in ["move", "sprint", "dribble", "tackle", "challenge"] else 0.0
 	var energy := 0.7 + 0.3 * player.energy_ratio()
 	var value := 0.0
 	match kind:
@@ -102,6 +106,8 @@ func _score(model: MatchModel, player: PlayerState, action: Dictionary, claimed:
 			value = 1.5
 		"move":
 			value = _score_move(model, player, dest)
+		"sprint":
+			value = _score_move(model, player, dest) * 1.15
 		"turn":
 			value = _score_turn(model, player, dest)
 		_:
@@ -116,6 +122,8 @@ func _score_pass(model: MatchModel, player: PlayerState, action: Dictionary, des
 	var value := 42.0 * through * (1.0 + maxf(gain, 0.0) * 0.4)
 	if bool(action.get("offside", false)) or bool(preview.get("offside", false)):
 		value -= 90.0
+	elif not preview.get("marked_ids", []).is_empty() and int(action.get("target_id", -1)) < 0:
+		value -= 8.0
 	if through < 0.28:
 		value *= 0.35
 	return value
@@ -144,8 +152,10 @@ func _score_move(model: MatchModel, player: PlayerState, dest: Vector2i) -> floa
 			MatchRules.chebyshev(player.pos, ball_pos) - MatchRules.chebyshev(dest, ball_pos)
 		)
 		value += 14.0 * float(closer)
-		if model.ball.is_loose() and dest == ball_pos:
+		if model.ball.is_loose() and dest == ball_pos and not model.would_collect_offside(player, dest):
 			value += 40.0
+	if model.would_collect_offside(player, dest):
+		value -= 90.0
 	var own_net := MatchRules.HOME_NET if team == MatchRules.Team.HOME else MatchRules.AWAY_NET
 	var holder := model.carrier()
 	if holder != null and holder.team != team and _is_back(player):

@@ -182,6 +182,11 @@ static func format_result(event: Dictionary) -> String:
 			event.get("attacker_label", event.get("label", "player")),
 			cell_text(event.get("dest", Vector2i.ZERO)),
 		]
+	if action == "sprint":
+		return "SPRINT  %s  →  %s" % [
+			event.get("attacker_label", event.get("label", "player")),
+			cell_text(event.get("dest", Vector2i.ZERO)),
+		]
 	if action != "dribble" and action != "challenge" and action != "tackle":
 		return ""
 	var verb := "SQUARE FIGHT"
@@ -238,6 +243,8 @@ static func plan_summary(plan: Dictionary) -> String:
 			core = "%s → %s" % [action, cell_text(dest)]
 		"turn":
 			core = "turn → %s" % cell_text(dest)
+		"sprint":
+			core = "sprint → %s" % cell_text(dest)
 		"done":
 			return "done"
 		_:

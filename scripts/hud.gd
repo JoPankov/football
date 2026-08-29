@@ -144,7 +144,17 @@ func _hint_for(
 	var turn_cost := (
 		model.action_cost_for(selected, "turn", hover_cell) if turn_dest else 0
 	)
-	if pending_action in ["move", "swap"] and selected != null and hover_cell in model.command_dests(selected, pending_action):
+	if (
+		pending_action in ["move", "sprint"]
+		and selected != null
+		and hover_cell in model.command_dests(selected, pending_action)
+		and model.would_collect_offside(selected, hover_cell)
+	):
+		return "OFFSIDE collect for %s (%d AP). First touch after the pass." % [
+			selected.label(),
+			model.action_cost_for(selected, pending_action, hover_cell),
+		]
+	if pending_action in ["move", "sprint", "swap"] and selected != null and hover_cell in model.command_dests(selected, pending_action):
 		if turn_dest:
 			return "Click to queue %s for %s (%d AP). Right-click to turn (%d AP)." % [
 				pending_action.to_upper(),
@@ -712,6 +722,8 @@ func _pass_forecast_text(passer: PlayerState, preview: Dictionary) -> String:
 		)
 	if bool(preview.get("offside", false)):
 		bits.append("Offside if it arrives.")
+	elif str(preview.get("offside_note", "")) != "":
+		bits.append(str(preview.offside_note))
 	var total := int(preview.get("total_percent", 100))
 	if preview.get("threats", []).is_empty():
 		bits.append("No interceptors. Pass success: %d%%" % total)

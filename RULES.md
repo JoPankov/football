@@ -15,7 +15,7 @@ This is what the game actually does today.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
 
-Each player **faces** one of those 8 directions (the chevron on the piece). Aether starts facing **+x**, Helix facing **−x**. After a player changes tile — move, dribble, tackle, square fight, swap, intercept cut-off, or offside restart — they face that step. A player who **wins a tackle and takes the ball** then turns their back to the player they stole from (faces away from them). That is the same as the step facing on a swap tackle; on an arrival tackle it may be a different direction from the step they took onto the square.
+Each player **faces** one of those 8 directions (the chevron on the piece). Aether starts facing **+x**, Helix facing **−x**. After a player changes tile — move, sprint, dribble, square fight, swap, intercept cut-off, or offside restart — they face that step. A player who **wins a tackle and takes the ball** then turns their back to the player they stole from (faces away from them), without changing tile. On an arrival tackle the winner still takes the empty square, then faces away — that may be a different direction from the step they took onto the square.
 
 ## Attributes
 
@@ -42,13 +42,13 @@ Kickoff values by role:
 ### Energy
 
 - Max energy is **STA × 10**. Players start each kickoff full.
-- Each resolved action (move, turn, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. Cancelled actions do not.
+- Each resolved action (move, turn, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. **Sprint** costs **3 energy**. Cancelled actions do not.
 - Live ACC / DEF / CTR scale with remaining energy: full energy is 100% of the printed stat; **empty energy halves them**. In between, the drop is linear. The inspector shows `ACC 10 (13)` when fatigue has reduced the live value.
 
 ## How to take a turn
 
 1. Click any player on the team that is planning.
-2. Choose an action from the bottom bar (or press **1–9**): Move, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot, Done. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after a walk so you can chain more steps.
+2. Choose an action from the bottom bar (or press **1–9**): Move, Sprint, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot, Done. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after a walk so you can chain more steps.
 3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps. With Move selected, every empty tile that player can still reach by walking (leftover AP, no turns) is highlighted; click a far tile to queue the whole walk at once.
 4. Repeat for up to **3 different players**, **6 AP** each. Gold pips around a piece show leftover AP after that player has spent at least one point. A gold ring marks a planned player; arrows show their queued steps.
 5. Filling **all 6 AP on 3 players**, or marking those players **Done**, ends the turn automatically. **Done** parks leftover AP and a mint check shows they are finished. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
@@ -61,11 +61,11 @@ Hotseat: plan arrows, gold rings, and plan log lines are visible only to the tea
 
 Highlights (after you pick an action):
 
-- **Green** — walk there
+- **Green** — walk or sprint there
 - **White** — turn to face that square (no step)
 - **Amber** — contest an opponent on that square
 - **Blue** — pass there
-- **Red** — pass to an offside teammate
+- **Red** — pass to an offside teammate, a player flagged from the last pass, or a collect that would be offside
 - **Purple** — swap with that teammate
 - **Gold** — shoot at the opponent net
 
@@ -82,6 +82,17 @@ Highlights (after you pick an action):
 - If the ball is loose on the destination, you take it.
 - After you queue a move onto a loose ball, you can plan as if you already have it (pass, shoot, dribble). If you do not actually collect it — for example someone else wins that square — those ball actions are ignored.
 - After the step, the player faces the direction they just moved.
+
+### Sprint
+
+- Costs **2 AP** and **3 energy**.
+- Two tiles **straight ahead** only — the exact direction the player is facing, not the 3-cell move cone.
+- Both the through tile and the landing must be empty and in bounds. You cannot sprint onto or through a player.
+- You cannot queue a sprint you cannot afford. With 1 AP left you cannot sprint.
+- If you have the ball, it comes with you. A loose ball on the landing **or** the through tile is collected and carried to the landing.
+- After you queue a sprint onto a loose ball, you can plan as if you already have it. If you do not actually collect it, those ball actions are ignored.
+- Walking the ball onto the opponent net by sprinting is a goal.
+- After the sprint, the player still faces the direction they ran.
 
 ### Turn
 
@@ -133,7 +144,7 @@ Highlights (after you pick an action):
 | Back (180°) | −85% |
 
 - Hover a tackle to see the penalised chance, e.g. `tackle NAME 13 DEF vs 9 CTR = 32% success (side -30%)`.
-- You win: you swap onto their square, take the ball, and turn your back to the player you stole from.
+- You win: you steal the ball and turn your back to the player you stole from. Both players stay on their tiles.
 - You lose: nothing changes.
 - A **tie**: both stay put and the ball bounces the same way as a tied dribble. The approach penalty does not turn a bounce into a win or a loss.
 
@@ -155,11 +166,12 @@ Highlights (after you pick an action):
 - Empty square: the ball becomes **loose** there. You cannot lay the ball into an empty net.
 - Teammate: they receive it and become the carrier. This includes the keeper standing in the net.
 - Adjacent empty square can be a **Move** or a **Pass** — pick the action first, then the tile.
+- Two tiles **straight ahead** can be a **Sprint** or a **Pass**.
 - Adjacent teammate can be a **Pass** or a **Swap** — pick the action first, then the teammate.
 - Pass still uses the 5-tile-length circle once Pass is selected.
-- A pass to a teammate in an **offside position** is still legal. If it is not intercepted, it is offside (see below). Empty-square passes are never offside.
-- After you queue a pass to a teammate, that teammate can plan as if they already have the ball (pass on, shoot, dribble). If the incoming pass is intercepted or cancelled, those ball actions do not play.
-- After you queue a pass onto an empty square, a teammate who then queues a step onto that square can plan as if they will collect it. If they never get the ball, those follow-up actions are ignored.
+- A pass to a teammate in an **offside position** is still legal. If it is not intercepted, that teammate receiving it is offside (see below). Empty-square passes are not immediately offside, but they still flag teammates who are offside when the ball is played.
+- After you queue a pass to an **onside** teammate, that teammate can plan as if they already have the ball (pass on, shoot, dribble). If the incoming pass is intercepted, offside, or cancelled, those ball actions do not play.
+- After you queue a pass onto an empty square, an **onside** teammate who then queues a step onto that square can plan as if they will collect it. A teammate who was offside when you passed cannot. If they never get the ball, those follow-up actions are ignored.
 
 ## Simultaneous resolution
 
@@ -178,12 +190,12 @@ Inside a wave:
 2. **Passes and shots** — the ball travels next, following the current carrier so a pass can feed another pass or a shot. A pass to a teammate who also queued a move arrives first; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
 3. **Dribbles**
 4. **Square fights**
-5. **Destination contests** — if two or more remaining **moves** target the same empty square:
+5. **Destination contests** — if two or more remaining **moves or sprints** target the same empty square:
    - **Opposite teams, one has the ball:** a **tackle** (the player without the ball rolls **DEF**, the carrier rolls **CTR**). Winner takes the square. If the tackler wins, they also steal the ball.
    - **Opposite teams, neither has the ball:** a **CTR vs CTR** square fight. Winner takes the square (and collects a loose ball there).
    - **Same team:** **1dCTR**; a tie goes to the player with the ball if one has it, otherwise the lower-id player (first claimer).
    Losers stay put.
-6. **Moves and swaps**
+6. **Moves, sprints, and swaps**
 
 So if Aether tackles the Helix carrier and that carrier also queued a pass, the tackle is resolved first. If the tackle wins the ball, the pass is cancelled and the log says why.
 
@@ -201,32 +213,37 @@ A teammate is in an **offside position** when all of these are true at the momen
 - They are **nearer the opponent goal than the ball** (Aether: larger `x`; Helix: smaller `x`). Level with the ball is onside.
 - **Fewer than two opponents** are as near the opponent goal as they are (same `x` comparison; level counts as covering). The keeper counts.
 
-Only **receiving a pass** is an offence. Standing offside, carrying the ball yourself, swapping, or collecting a loose ball is not.
+Standing offside is not an offence. When a **pass** is played (and not intercepted), every teammate in an offside position is **flagged**. Offside is then called if a flagged player is the **first** to play the ball — they receive the pass, or they collect it loose — before anyone else touches it.
 
-If a pass is intercepted, play continues. If it arrives to an offside teammate:
+- If an onside teammate, an opponent, or the passer themselves plays the ball first, the flags clear.
+- A player who was **onside** when the pass was made can run onto the ball even if they then look offside.
+- A player who was **offside** when the pass was made stays flagged until someone else touches the ball, even if they step back.
+- Carrying the ball yourself or swapping is not offside. Intercept happens **before** offside; a stolen pass is not flagged.
+
+If offside is called:
 
 - The **closest opponent** (Chebyshev, then lowest id) **moves onto the offside tile** and takes the ball.
 - The offside player is swapped onto that opponent’s old tile.
 - Remaining planned actions in the cycle continue from the new state.
 
-Hover an offside teammate to see the restart. Those tiles highlight **red**. The chooser labels the pass **Pass (offside)**.
+Hover an offside teammate to see the restart. Flagged players, a pass to an offside teammate, and a collect that would be offside highlight **red**. The chooser labels those **Pass (offside)** / **Move (offside)**. Hovering a through ball lists who is flagged if they collect first.
 
 ## Intercepts
 
 When the carrier is selected and you hover a legal **pass** tile, or hover the opponent net with **Shoot** selected:
 
 - A line is drawn from passer / shooter centre to target centre.
-- Opponents whose **1-tile radius** circle the line **crosses or touches** can intercept.
-- Standing only next to the passer (not along the lane) does not count.
+- Opponents whose **0.7-tile radius** circle the line **crosses or touches** can intercept.
+- Standing only next to the passer (not along the lane) does not count. An adjacent orthogonal cell is 1 tile off, so it does not intercept an axis-aligned pass.
 - Teammates and the intended receiver never intercept. On a shot, a keeper standing **in the net** is that occupant — they do not intercept; they save if the ball arrives.
 
-Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass or shot. Ties go to the **passer / shooter**. Standing off the line then cuts intercept chance: `reach = 1 / (1 + dist)`, so a player 1 tile off the lane keeps **half** their intercept chance. They must win the dice **and** make the reach.
+Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass or shot. Ties go to the **passer / shooter**. Standing off the line then cuts intercept chance: `reach = 1 / (1 + dist)`, so 0.7 tiles off keeps about **59%**. They must win the dice **and** make the reach.
 
 - Preview lists each interceptor’s intercept / through chance and how far they sit off the lane.
 - **Pass success** (or shot **through**) is the chance of beating every interceptor (independent rolls, multiplied).
 - First interceptor who wins the dice and makes the reach: they **move to the cut-off tile** (nearest square to the point where their circle meets the line) and take the ball there. Their old tile is left empty.
 - If that landing square is occupied, they take the closest free square to the intercept point.
-- If every interceptor fails, the pass arrives as planned — unless the receiver is offside, in which case the offside restart happens instead. A shot that beats every interceptor then rolls hit and save as usual.
+- If every interceptor fails, the pass arrives as planned — unless a flagged player is first to the ball, in which case the offside restart happens instead. A shot that beats every interceptor then rolls hit and save as usual.
 
 ## Contests (dice)
 

@@ -5,7 +5,7 @@ extends RefCounted
 ## Each player has 6 AP. Waves are AP slots 1..6: an action plays in the wave
 ## equal to the cumulative AP spent when it completes. A 2-AP first step plays
 ## in wave 2; a later 2-AP step on the same player plays in wave 4.
-## Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination contests, moves/swaps.
+## Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination contests, moves/sprints/swaps.
 
 
 static func resolve(model: MatchModel) -> Dictionary:
@@ -47,7 +47,7 @@ static func resolve(model: MatchModel) -> Dictionary:
 		if not reset:
 			reset = _resolve_destination_clashes(model, remaining, events)
 		if not reset:
-			reset = _run_phase(model, remaining, events, ["move", "swap"], "Movement")
+			reset = _run_phase(model, remaining, events, ["move", "sprint", "swap"], "Movement")
 		if reset:
 			for leftover in remaining:
 				events.append(_cancel(model, leftover, "play stopped — goal"))
@@ -151,7 +151,7 @@ static func _resolve_destination_clashes(
 ) -> bool:
 	var by_dest := {}
 	for plan in remaining:
-		if str(plan.get("action", "")) != "move":
+		if str(plan.get("action", "")) not in ["move", "sprint"]:
 			continue
 		var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
 		if not by_dest.has(dest):
@@ -333,23 +333,28 @@ static func _apply_arrival_result(
 	if stole:
 		model._give_ball(winner_player)
 	var applied := false
-	if winner_player != null and dest in model.valid_moves(winner_player):
-		var moved: Dictionary = model.apply_move(winner_id, dest)
-		if moved.get("ok", false):
-			if not moved.has("attacker_label"):
-				moved.attacker_label = winner_player.label()
-			if stole:
-				model._face_away_from(winner_player, carrier)
-				moved.facing = winner_player.facing
-			model.combat_log.event(moved)
-			events.append(moved)
-			applied = true
-			if moved.get("reset", false):
-				for plan in group:
-					_drop_plan(remaining, int(plan.get("player_id", -1)))
-					if int(plan.get("player_id", -1)) != winner_id:
-						events.append(_cancel(model, plan, "play stopped — goal"))
-				return true
+	var winner_kind := str(winner.get("action", "move"))
+	var moved := {}
+	if winner_player != null:
+		if winner_kind == "sprint" and dest in model.valid_sprints(winner_player):
+			moved = model.apply_sprint(winner_id, dest)
+		elif dest in model.valid_moves(winner_player):
+			moved = model.apply_move(winner_id, dest)
+	if moved.get("ok", false):
+		if not moved.has("attacker_label"):
+			moved.attacker_label = winner_player.label()
+		if stole:
+			model._face_away_from(winner_player, carrier)
+			moved.facing = winner_player.facing
+		model.combat_log.event(moved)
+		events.append(moved)
+		applied = true
+		if moved.get("reset", false):
+			for plan in group:
+				_drop_plan(remaining, int(plan.get("player_id", -1)))
+				if int(plan.get("player_id", -1)) != winner_id:
+					events.append(_cancel(model, plan, "play stopped — goal"))
+			return true
 	var reason := "lost the square fight"
 	if carrier != null:
 		reason = "lost the tackle"
@@ -439,6 +444,11 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 			if dest not in model.valid_moves(player):
 				return _cancel(model, plan, "destination no longer legal")
 			result = model.apply_move(player.id, dest)
+		"sprint":
+			var dest: Vector2i = plan.get("dest", player.pos)
+			if dest not in model.valid_sprints(player):
+				return _cancel(model, plan, "destination no longer legal")
+			result = model.apply_sprint(player.id, dest)
 		"swap":
 			result = model.apply_swap(player.id, int(plan.get("target_id", -1)))
 			if not result.get("ok", false):
@@ -468,7 +478,7 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 			return _cancel(model, plan, "unknown action")
 	if not result.get("ok", false):
 		return _cancel(model, plan, str(result.get("reason", "failed")))
-	if result.get("action", "") == "move" and not result.has("attacker_label"):
+	if result.get("action", "") in ["move", "sprint"] and not result.has("attacker_label"):
 		result.attacker_label = player.label()
 	model.combat_log.event(result)
 	return result

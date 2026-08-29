@@ -549,24 +549,28 @@ func _present_result(result: Dictionary) -> bool:
 		var origin: Vector2i = result.get("origin", dest)
 		piece.set_facing(MatchRules.step_direction(origin, dest))
 		return await _anim_wait(0.12)
-	if action == "move" or action == "offside" or won:
+	if action == "move" or action == "sprint" or action == "offside" or (won and action != "tackle"):
 		var origin: Vector2i = result.get("origin", dest)
 		var face: Vector2i = result.get("facing", MatchRules.step_direction(origin, dest))
 		piece.set_facing(face)
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.set_parallel(true)
-		tween.tween_property(piece, "position", pitch.grid_to_world(dest), _anim(0.2))
+		var travel := 0.28 if action == "sprint" else 0.2
+		tween.tween_property(piece, "position", pitch.grid_to_world(dest), _anim(travel))
 		var displaced_id: int = result.get("displaced_id", -1)
 		if displaced_id >= 0:
 			var other: PlayerPiece = pieces.get(displaced_id)
 			if other != null:
 				other.set_facing(MatchRules.step_direction(dest, origin))
-				tween.tween_property(other, "position", pitch.grid_to_world(origin), _anim(0.2))
+				tween.tween_property(other, "position", pitch.grid_to_world(origin), _anim(travel))
 		var ball_target := _event_ball_target(result, dest)
 		if ball_target != Vector2.INF:
-			tween.tween_property(pitch.ball_piece, "position", ball_target, _anim(0.2))
+			tween.tween_property(pitch.ball_piece, "position", ball_target, _anim(travel))
 		return await _wait_for_tween(tween)
+	if action == "tackle" and won:
+		var origin: Vector2i = result.get("origin", dest)
+		piece.set_facing(result.get("facing", MatchRules.step_direction(dest, origin)))
 	var start := piece.position
 	var bump: Vector2 = start.lerp(pitch.grid_to_world(dest), 0.4)
 	var tween := create_tween()
@@ -606,6 +610,11 @@ func _event_ball_target(result: Dictionary, dest: Vector2i) -> Vector2:
 		if holder_id != int(result.get("player_id", -1)):
 			cell = result.origin
 		return pitch.grid_to_world(cell) + pitch.carried_ball_offset(holder.team)
+	if action == "tackle" and result.get("gained_possession", false):
+		var holder := model.player_by_id(int(result.get("player_id", -1)))
+		var team := holder.team if holder != null else MatchRules.Team.HOME
+		var cell: Vector2i = result.get("origin", dest)
+		return pitch.grid_to_world(cell) + pitch.carried_ball_offset(team)
 	if (
 		result.get("gained_possession", false)
 		or result.get("carried", false)
@@ -727,17 +736,24 @@ func _refresh() -> void:
 	var passes: Array[Vector2i] = []
 	var choices: Array[Vector2i] = []
 	var shots: Array[Vector2i] = []
-	var offsides: Array[Vector2i] = []
+	var offsides: Array[Vector2i] = model.offside_marked_cells()
 	var turns: Array[Vector2i] = []
 	if selected != null and _pending_action != "":
 		var dests := model.command_dests(selected, _pending_action)
 		match _pending_action:
-			"move":
-				moves = dests
+			"move", "sprint":
+				for cell in dests:
+					if model.would_collect_offside(selected, cell):
+						if cell not in offsides:
+							offsides.append(cell)
+					else:
+						moves.append(cell)
 			"turn":
 				turns = dests
 			"pass":
-				offsides = model.offside_pass_cells(selected)
+				for cell in model.offside_pass_cells(selected):
+					if cell not in offsides:
+						offsides.append(cell)
 				for cell in dests:
 					if cell not in offsides:
 						passes.append(cell)
@@ -751,9 +767,13 @@ func _refresh() -> void:
 			model.planning_pos(selected), moves, contests, passes, choices, shots, offsides, turns
 		)
 	elif selected != null:
-		pitch.set_highlights(model.planning_pos(selected), [], [], [], [], [], [], [])
-	else:
+		pitch.set_highlights(
+			model.planning_pos(selected), [], [], [], [], [], offsides, []
+		)
+	elif offsides.is_empty():
 		pitch.clear_highlights()
+	else:
+		pitch.set_highlights(Vector2i(-99, -99), [], [], [], [], [], offsides, [])
 	_update_pass_preview(selected)
 	pitch.set_plans(_plan_markers())
 

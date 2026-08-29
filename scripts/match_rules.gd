@@ -15,12 +15,17 @@ const PLAYER_ACTION_POINTS := 6
 const DEFAULT_ACTION_COST := 1
 const MOVE_ORTHO_COST := 2
 const MOVE_DIAG_COST := 3
+## Sprint is two tiles straight ahead, 2 AP, 3 energy. Facing cone does not apply.
+const SPRINT_DISTANCE := 2
+const SPRINT_AP_COST := 2
+const SPRINT_ENERGY_COST := 3
 ## One AP turns up to this many 45° ring steps (90°). 135° and 180° cost 2 AP.
 const TURN_STEPS_PER_AP := 2
 const ACTION_ENERGY_COST := 1
 const ENERGY_PER_STAMINA := 10
 const ENERGY_EMPTY_FACTOR := 0.5
-const INTERCEPT_RADIUS := 1.0
+## Circle around each opponent, in tile lengths, that must touch the pass/shot segment.
+const INTERCEPT_RADIUS := 0.7
 ## Off-lane intercept penalty: on the pass line is 1.0; 1 tile off is 1/(1+K).
 const INTERCEPT_DIST_K := 1.0
 const TILE_SIZE := 72.0
@@ -255,7 +260,7 @@ static func turn_ap_cost(from_facing: Vector2i, to_facing: Vector2i) -> int:
 
 
 ## Shoot spends every leftover AP. Done costs 0. Steps cost 2 orthogonal / 3 diagonal.
-## Turn costs 1 AP up to 90°, 2 AP for 135°/180°. Else 1.
+## Sprint costs 2 AP. Turn costs 1 AP up to 90°, 2 AP for 135°/180°. Else 1.
 static func action_ap_cost(
 	action_id: String,
 	from: Vector2i,
@@ -267,11 +272,21 @@ static func action_ap_cost(
 		return 0
 	if action_id == "shoot":
 		return maxi(1, remaining_ap)
+	if action_id == "sprint":
+		return SPRINT_AP_COST
 	if action_id == "turn":
 		return turn_ap_cost(facing, step_direction(from, to))
 	if action_id in STEP_ACTIONS:
 		return step_ap_cost(from, to)
 	return DEFAULT_ACTION_COST
+
+
+static func action_energy_cost(action_id: String) -> int:
+	if action_id == "done":
+		return 0
+	if action_id == "sprint":
+		return SPRINT_ENERGY_COST
+	return ACTION_ENERGY_COST
 
 
 static func in_bounds(pos: Vector2i) -> bool:
@@ -373,6 +388,37 @@ static func is_move_step(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool
 	if face == Vector2i.ZERO:
 		return is_adjacent(from, to)
 	return (to - from) in move_facings(face)
+
+
+## The empty cell two tiles straight ahead. Occupied through or dest tiles block it.
+static func sprint_destinations(
+	from: Vector2i,
+	facing: Vector2i,
+	occupied: Dictionary
+) -> Array[Vector2i]:
+	var result: Array[Vector2i] = []
+	var face := normalize_facing(facing)
+	if face == Vector2i.ZERO:
+		return result
+	var through: Vector2i = from + face
+	var dest: Vector2i = from + face * SPRINT_DISTANCE
+	if not in_bounds(through) or not in_bounds(dest):
+		return result
+	if occupied.has(through) or occupied.has(dest):
+		return result
+	result.append(dest)
+	return result
+
+
+static func sprint_through(from: Vector2i, dest: Vector2i) -> Vector2i:
+	return from + normalize_facing(dest - from)
+
+
+static func is_sprint_step(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool:
+	var face := normalize_facing(facing)
+	if face == Vector2i.ZERO:
+		return false
+	return to == from + face * SPRINT_DISTANCE
 
 
 static func turn_destinations(from: Vector2i, facing: Vector2i) -> Array[Vector2i]:

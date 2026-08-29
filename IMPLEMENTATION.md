@@ -100,6 +100,7 @@ Constants live on `MatchRules`.
 - `PlayerState.facing` is one of those 8 dirs. Kickoff: Aether `(1, 0)`, Helix `(-1, 0)`. `PlayerState.relocate` writes facing from the step. `turn_facings` is the other 7 dirs. `turn_ap_cost` is 1 AP for 1–2 ring steps (45°/90°) and 2 AP for 3–4 (135°/180°). `action_ap_cost(..., facing)` needs the current facing for turns.
 - `move_destinations(from, blocked, facing)` drops the one square **directly behind** `facing`. `facing == ZERO` skips that filter (geometry-only callers).
 - `move_reach(from, facing, blocked, remaining_ap)` is every empty cell a cone-walk can hit by spending at most that many AP (no turns). Values are `{cost, path}`. `MatchModel.command_dests(..., "move")` uses this. A non-adjacent `queue_plan` move expands into those path steps.
+- `sprint_destinations(from, facing, occupied)` is the empty cell two tiles **straight ahead** of `facing`, or empty if the through tile or landing is occupied / out of bounds. Sprint is not a cone. AP cost is `SPRINT_AP_COST` (2); energy is `SPRINT_ENERGY_COST` (3). `MatchModel.valid_sprints` / `command_dests(..., "sprint")` use this. A sprint is one plan, not two walk steps.
 - Back pass: `is_back_pass` is the rear cone, directly back ± `BACK_PASS_HALF_ANGLE_DEG` (43). Adjacent cells are never back passes.
 - Keepers start **in the net**. From a net, `move_destinations` yields the **3** adjacent pitch tiles (diagonals + forward). The old goal-line square in front of the net is empty at kickoff.
 
@@ -108,7 +109,7 @@ World space (drawing only):
 - `TILE_SIZE = 72`.
 - Piece centre: `(cell + (0.5, 0.5)) * TILE_SIZE`.
 - Grid pick: `floor(world / TILE_SIZE)`.
-- **Intercept / shot math uses tile units**, not pixels. `MatchRules.tile_center(cell)` is `Vector2(cell)` (integer cell as float). `INTERCEPT_RADIUS = 1.0` tile. Pitch scales that by `TILE_SIZE` only when drawing the preview circle.
+- **Intercept / shot math uses tile units**, not pixels. `MatchRules.tile_center(cell)` is `Vector2(cell)` (integer cell as float). `INTERCEPT_RADIUS = 0.7` tile. Pitch scales that by `TILE_SIZE` only when drawing the preview circle. Adjacent orthogonal cells sit 1.0 away, so they do not intercept an axis-aligned pass.
 
 Halfway: integer `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. Helix’s is `x < 13`. Attacking third is 8 columns: Aether `x >= 18`, Helix `x < 8`.
 
@@ -151,7 +152,7 @@ factor = 0.5 + 0.5 * (energy / max_energy)
 live   = max(1, round(printed * factor))
 ```
 
-Empty energy **halves** the printed number (rounded), it does not zero it. Each **resolved** action costs 1 energy (`_finish_action` / a few goal paths). Cancelled actions do not spend. A kickoff rebuild refills everyone.
+Empty energy **halves** the printed number (rounded), it does not zero it. Each **resolved** action costs 1 energy (`_finish_action` / a few goal paths), except **sprint** which costs 3 (`SPRINT_ENERGY_COST`). Cancelled actions do not spend. A kickoff rebuild refills everyone.
 
 ---
 
@@ -173,7 +174,7 @@ Walking onto a loose ball takes it. Walking the ball onto the **opponent net** i
 {
   player_id, team, action, dest, target_id, origin, label,
   ap_index,       # sequence of this action for this player (0, 1, …)
-  ap_cost,        # 2 ortho / 3 diagonal / 1–2 turn / 1 pass / leftover for shoot
+  ap_cost,        # 2 ortho / 3 diagonal / 2 sprint / 1–2 turn / 1 pass / leftover for shoot
   ap_end,         # cumulative AP after this action = resolve wave (1..6)
   ap_left,        # remaining AP before this action (shot hit bonus)
   expects_ball    # true if this pass/shoot/dribble is planned off a pass or a collect
@@ -181,7 +182,7 @@ Walking onto a loose ball takes it. Walking the ball onto the **opponent net** i
 }
 ```
 
-Action ids: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`, `done`.
+Action ids: `move`, `sprint`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`, `done`.
 
 Rules of a queue:
 
@@ -197,10 +198,10 @@ Rules of a queue:
 
 `has_ball` is the **real** board. `planning_carrier()` / `planning_has_ball()` walk the acting team’s queue so a player can already queue pass / shoot / dribble as if they will have the ball.
 
-- Pass to a teammate: planning possession moves to that teammate (and can chain).
-- Pass to an empty square: planning possession ends, unless a teammate has queued a **move** onto that square — they collect it and can chain.
+- Pass to an onside teammate: planning possession moves to that teammate (and can chain). An offside teammate does not get it.
+- Pass to an empty square: planning possession ends, unless an **onside** teammate has queued a **move** or **sprint** onto that square — they collect it and can chain. A marked / offside collector does not.
 - Shoot: planning possession ends.
-- Loose ball: the first queued **move** onto the ball’s cell collects it for planning.
+- Loose ball: the first queued **move** or **sprint** onto the ball’s cell collects it for planning, unless that player is marked from the last pass.
 - Cycle detection: if a pass loop exists, stop.
 
 The real ball never moves during planning. Resolve playback snaps pieces and the ball back to the pre-cycle snapshot, then plays the events.
@@ -225,11 +226,13 @@ The resolver never implements dribble/tackle itself. It calls model methods. **S
 | no | yes | `tackle` | mover DEF vs occupant CTR |
 | no | no | `challenge` | CTR vs CTR |
 
-Win: swap onto the square (loser shoved to origin). Dribble win keeps the ball; tackle win steals it and the winner **faces away** from the player they stole from (`_face_away_from`). Dribble loss: stay put, occupant steals the ball. Tackle/fight loss: nothing changes. Dribble or tackle **numeric tie**: both stay put and the ball bounces to a random in-bounds cell of the 3×3 around its current tile (`MatchRules.bounce_cells`), including staying put. Occupied landings give that player the ball; empty landings leave it loose. Square-fight ties still use `attacker_wins_ties`.
+Win: dribble and square fight swap onto the square (loser shoved to origin). Dribble win keeps the ball. Tackle win steals in place — both stay put, the ball moves to the tackler, and the winner **faces away** from the player they stole from (`_face_away_from`). Dribble loss: stay put, occupant steals the ball. Tackle/fight loss: nothing changes. Dribble or tackle **numeric tie**: both stay put and the ball bounces to a random in-bounds cell of the 3×3 around its current tile (`MatchRules.bounce_cells`), including staying put. Occupied landings give that player the ball; empty landings leave it loose. Square-fight ties still use `attacker_wins_ties`.
 
 Tackle success is the 1dDEF vs 1dCTR chance minus an **approach-angle penalty** (`MatchRules.tackle_direction`): 0° front 0, 45° −15pp, 90° side −30pp, 135° −50pp, 180° back −85pp, clamped at 0%. Angle is carrier facing vs the vector from the contested cell to the tackler. Dice still roll; a win can be dropped so overall P(win) matches the penalised chance. Numeric ties still bounce. Scripted contest outcomes skip the extra drop. HUD `contest_preview` shows the penalised percent.
 
-Pass: `apply_pass_to`. Intercepts first (see below), then offside, then give or drop. Passer does not move.
+Pass: `apply_pass_to`. Intercepts first (see below), then snapshot teammates in an offside position into `offside_marked_ids`, then offside if the occupant is marked, else give or drop. Passer does not move. A later collect by a marked player (`apply_move` / `apply_sprint` onto the loose ball) is also offside. Anyone else receiving the ball (`_give_ball`) clears the marks.
+
+Sprint: `apply_sprint`. Two tiles straight ahead of facing. Through tile and dest must be empty. Carries or collects the ball (dest or through). Costs 3 energy. Opponent net with the ball is a goal, same as a walk-in.
 
 Swap: adjacent teammate only. Carrier keeps the ball and it follows them.
 
@@ -272,11 +275,11 @@ Inside a wave:
 2. **Ball** (`pass`, `shoot`) — not id order. Always play the **current carrier’s** pass/shot next, so a pass can feed another pass or a shot. If the carrier has no ball action left, lowest id in the leftover batch.
 3. **Dribbles**
 4. **Square fights** (`challenge`)
-5. **Destination contests** — remaining **moves** that share a dest:
+5. **Destination contests** — remaining **moves and sprints** that share a dest:
    - Same team: 1dCTR, tie via `attacker_wins_ties` (ball / lower id). Losers cancelled `"lost the square fight"`. Winner stays in `remaining` for the move phase.
    - Opposite, one has the ball: treat as **tackle** (DEF vs CTR, same approach-angle penalty as a step-on tackle, measured from the meeting square). Winner may steal and then faces away from the old carrier. A numeric tie bounces the ball and both stay put.
    - Opposite, neither has the ball: CTR vs CTR square fight. Winner also collects a loose ball on that tile if `apply_move` runs onto it.
-6. **Moves and swaps**
+6. **Moves, sprints, and swaps**
 
 A result with `reset == true` (goal) **stops the cycle**. Leftover plans are cancelled `"play stopped — goal"`. Kickoff already ran inside `_award_goal`.
 
@@ -292,9 +295,9 @@ Pass destinations stored as a teammate `target_id` are resolved to that player�
 
 ## Intercepts
 
-Computed in **tile space**. Segment = passer / shooter tile centre → target tile centre. Shots reuse `interceptors_for_pass` / `_resolve_pass_intercepts` with dest = opponent net. An opponent intercepts if their 1-tile-radius circle touches the segment at `t > 0` (standing only next to the passer does not count). Teammates and the intended receiver never intercept. A keeper standing in the net is that dest occupant, so they save rather than intercept.
+Computed in **tile space**. Segment = passer / shooter tile centre → target tile centre. Shots reuse `interceptors_for_pass` / `_resolve_pass_intercepts` with dest = opponent net. An opponent intercepts if their 0.7-tile-radius circle touches the segment at `t > 0` (standing only next to the passer does not count; an adjacent orthogonal cell is 1.0 away and is out). Teammates and the intended receiver never intercept. A keeper standing in the net is that dest occupant, so they save rather than intercept.
 
-Order: increasing `t` along the lane. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). Intercept chance is then multiplied by `reach = 1 / (1 + INTERCEPT_DIST_K * dist)` (`INTERCEPT_DIST_K = 1`, so 1 tile off the lane keeps half). First failure steals — interceptor must win the dice and pass the reach roll.
+Order: increasing `t` along the lane. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). Intercept chance is then multiplied by `reach = 1 / (1 + INTERCEPT_DIST_K * dist)` (`INTERCEPT_DIST_K = 1`, so 0.7 tiles off keeps `1/1.7`). First failure steals — interceptor must win the dice and pass the reach roll.
 
 Landing: snap the closest point on the segment to a tile; if occupied, search nearby free tiles. Interceptor leaves their old cell empty.
 
@@ -304,9 +307,11 @@ Landing: snap the closest point on the segment to a tile; if occupied, search ne
 
 ## Offside
 
-Position check (`MatchRules.is_offside_position`): in opponent’s half, strictly nearer the opponent goal than the **ball/passer** cell, and fewer than two opponents as near that goal as the receiver (level counts as covering). Keeper counts. Level with the ball is onside.
+Position check (`MatchRules.is_offside_position`): in opponent’s half, strictly nearer the opponent goal than the **ball/passer** cell, and fewer than two opponents as near that goal as the player (level counts as covering). Keeper counts. Level with the ball is onside.
 
-Only a **completed pass to a teammate** is an offence. Empty-square passes, carrying, swapping, collecting a loose ball: never offside. Intercept happens **before** offside; a stolen pass is not flagged.
+A **completed, non-intercepted pass** snapshots every teammate in an offside position (`offside_marked_ids`, `offside_passer_id`). Offside is called if a marked player is the next to play the ball: they occupy the pass dest, or they collect the loose ball later (`_take_loose_ball`). An onside teammate, opponent, interceptor, or the passer touching it first clears the marks (`_give_ball`). Kickoff clears them. Carrying, swapping, and collecting while unmarked are never offside. Intercept happens **before** the snapshot; a stolen pass is not flagged.
+
+`planning_carrier` does not hand the ball to an offside receiver or a marked collector, so they cannot queue follow-up pass/shoot/dribble.
 
 Restart: closest opponent (Chebyshev, then lowest id) swaps onto the receiver’s tile and takes the ball.
 
@@ -349,7 +354,7 @@ HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plan
 
 Why not “click the tile then pick Move/Pass”? One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). The old chooser is still in the HUD (`show_choices`) and `_open_choice` still exists on the controller, but **nothing calls `_open_choice`**. Do not revive it without wiring; current tests assume command-then-tile.
 
-Highlight colours (pitch): green walk, white turn, amber contest, blue pass, red offside pass, purple swap (`choice_cells` reused for this), gold shot. Pass hover and Shoot-on-net hover share `set_pass_preview` (lane + intercept circles). Right-click queues a turn even when Move is armed (a 45° cell is both a walk and a turn).
+Highlight colours (pitch): green walk, white turn, amber contest, blue pass, red offside (pass dest, flagged players, offside collect), purple swap (`choice_cells` reused for this), gold shot. Pass hover and Shoot-on-net hover share `set_pass_preview` (lane + intercept circles). Right-click queues a turn even when Move is armed (a 45° cell is both a walk and a turn).
 
 Selecting a **planned** player twice clears their plan (`clear_plan`) so you can pick someone else before the third action locks.
 
@@ -389,12 +394,12 @@ Almost every public function returns `{ok, action, ...}`. The log formatter and 
 | `pop_plan` | Last queued action removed; PLAN log line dropped |
 | `end_planning` | Side locked; other team to move |
 | `resolve` | Cycle done; `events` is the playback list |
-| `move` / `dribble` / `tackle` / `challenge` / `swap` / `pass` / `shoot` / `offside` / `clash` | Applied |
+| `move` / `sprint` / `dribble` / `tackle` / `challenge` / `swap` / `pass` / `shoot` / `offside` / `clash` | Applied |
 | `cancelled` | Plan dropped; `reason` / `reason_text` |
 
 Useful flags: `contest_won`, `contest_tied`, `bounced`, `bounce_cell`, `gained_possession`, `lost_possession`, `intercepted`, `goal`, `reset`, `hit`, `saved`, `expects_ball` (on the plan, not the event), `displaced_id` (shove/swap partner), `player_id` / `defender_id` / `receiver_id`. Tackles also carry `angle_deg` / `angle_penalty` / `angle_label`. A steal may set `facing` on the winner’s result so playback does not use the step direction.
 
-If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._apply_plan` + phase lists, `CombatLog.format_result`, controller `_present_result` / highlights, `AiCoach._score`, and tests.
+If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._apply_plan` + phase lists, `CombatLog.format_result`, controller `_present_result` / highlights, `AiCoach._score`, and tests. `sprint` is a 2-tile facing-only step: queue as one plan, resolve in the movement phase, clash with moves that share its dest.
 
 ---
 
@@ -402,7 +407,7 @@ If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._ap
 
 `tests/run_tests.gd` extends `SceneTree`, `call_deferred("_run")`, `quit(0|1)`.
 
-It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside/shoot (including shot intercepts), full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan.
+It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside (including delayed first-touch after a through ball)/shoot (including shot intercepts), full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan.
 
 Controller tests instantiate `main.tscn`, set `animate_moves = false`, and often `queue_free()` the instance. They reach into HUD private fields (`_end_turn`, `_forecast`) — ugly but load-bearing.
 
@@ -415,7 +420,7 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 ## Invariants (break these and something subtle dies)
 
 1. **Model is truth.** Visual positions are synced from `PlayerState.pos` in `_refresh` except during a tween. After a tween, `_refresh` / `_spawn_visuals` snap back.
-2. **Never two players on one cell.** Contests swap; intercepts refuse occupied landings; moves onto teammates are illegal (use swap).
+2. **Never two players on one cell.** Dribble and square-fight wins swap; a won tackle steals in place; intercepts refuse occupied landings; moves onto teammates are illegal (use swap).
 3. **`has_ball` and `ball.carrier_id` stay paired.** Only `_give_ball` / `_release_ball`.
 4. **Planning does not mutate the board.** If a click moves a piece immediately, you bypassed `queue_plan`.
 5. **Resolver is the only multi-action path.** Phase order is the design. Do not “just apply plans in queue order”.
@@ -439,7 +444,7 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 
 | You want to… | Start here |
 |---|---|
-| Change grid size, pass range, energy, AP pool, move costs, turn costs, shot curve, intercept radius / reach, tackle angle penalties | `MatchRules` constants + tests |
+| Change grid size, pass range, energy, AP pool, move costs, sprint costs, turn costs, shot curve, intercept radius / reach, tackle angle penalties | `MatchRules` constants + tests |
 | Change kickoff shape or role stats | `Formation` |
 | Change when an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` |
 | Change what an action **does** | `MatchModel.apply_*` |
