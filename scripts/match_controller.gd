@@ -261,6 +261,12 @@ func select_command(action_id: String) -> Dictionary:
 	var selected := _selected_player()
 	if selected == null:
 		return {ok = false, reason = "no_selection"}
+	if action_id == "done":
+		return perform_action({
+			id = "done",
+			label = "Done",
+			dest = model.planning_pos(selected),
+		})
 	var dests := model.command_dests(selected, action_id)
 	if dests.is_empty():
 		return {ok = false, reason = "no_targets"}
@@ -331,7 +337,7 @@ func perform_action(action: Dictionary) -> Dictionary:
 	if not result.ok:
 		return result
 	hud.last_event = result
-	if model.ap_spent(selected.id) >= MatchRules.PLAYER_ACTION_POINTS:
+	if not model.can_queue(selected):
 		_deselect()
 	else:
 		_arm_move(selected)
@@ -459,7 +465,7 @@ func _wait_for_tween(tween: Tween) -> bool:
 
 func _present_result(result: Dictionary) -> bool:
 	var action: String = result.get("action", "move")
-	if action == "cancelled" or action == "queue" or action == "end_planning":
+	if action == "cancelled" or action == "queue" or action == "end_planning" or action == "done":
 		return await _anim_wait(0.08)
 	if action == "clash":
 		return await _anim_wait(0.18)
@@ -495,7 +501,8 @@ func _present_result(result: Dictionary) -> bool:
 		return await _anim_wait(0.12)
 	if action == "move" or action == "offside" or won:
 		var origin: Vector2i = result.get("origin", dest)
-		piece.set_facing(MatchRules.step_direction(origin, dest))
+		var face: Vector2i = result.get("facing", MatchRules.step_direction(origin, dest))
+		piece.set_facing(face)
 		var tween := create_tween()
 		tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		tween.set_parallel(true)
@@ -529,6 +536,12 @@ func _pass_ball_target(_result: Dictionary, dest: Vector2i, receiver: PlayerStat
 
 func _event_ball_target(result: Dictionary, dest: Vector2i) -> Vector2:
 	var action := str(result.get("action", ""))
+	if result.get("bounced", false):
+		var cell: Vector2i = result.get("bounce_cell", dest)
+		var occupant := model.player_at(cell)
+		if occupant != null and occupant.has_ball:
+			return pitch.grid_to_world(cell) + pitch.carried_ball_offset(occupant.team)
+		return pitch.grid_to_world(cell)
 	if result.get("lost_possession", false):
 		var defender := model.player_by_id(int(result.get("defender_id", -1)))
 		if defender != null:
@@ -704,6 +717,16 @@ func _refresh() -> void:
 		piece.set_energy_ratio(state.energy_ratio())
 		piece.set_facing(face)
 		piece.set_on_turn(state.team == model.current_team and (planned or model.can_select(state)))
+		if preview:
+			var remaining := model.ap_remaining(state.id)
+			if remaining < MatchRules.PLAYER_ACTION_POINTS:
+				piece.set_ap_left(remaining)
+			else:
+				piece.set_ap_left(-1)
+			piece.set_finished(model.player_is_done(state.id))
+		else:
+			piece.set_ap_left(-1)
+			piece.set_finished(false)
 		piece.z_index = 5 if piece.selected else 3
 
 	_sync_ball_visual()

@@ -11,11 +11,11 @@ This is what the game actually does today.
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
 - Aether **#9 ST** starts on the centre spot `(12, 6)` **with the ball**. Helix does not start in possession.
 - After **Helix** scores, that same Aether kickoff is used again. After **Aether** scores, the whole 4-4-2 is rotated 180° through the pitch centre: Helix **#9 ST** takes `(13, 6)` with the ball, and Aether’s strikers sit one cell off the centre so they cannot contest the first pass.
-- **Simultaneous cycles.** The kicking team plans first. Aether plans **up to 3 players** at match start (and after Helix scores); Helix plans first after Aether scores. Each of those players has **6 action points**. The turn auto-ends when all 3 players have spent their AP; **End Turn** can finish early with fewer players or leftover AP. The other side then plans the same way. All queued actions resolve together (everyone’s first action, then second, and so on). Then Aether plans again.
+- **Simultaneous cycles.** The kicking team plans first. Aether plans **up to 3 players** at match start (and after Helix scores); Helix plans first after Aether scores. Each of those players has **6 action points**. The turn auto-ends when all 3 players have spent their AP; **End Turn** can finish early with fewer players or leftover AP. The other side then plans the same way. All queued actions resolve together in **six waves**, one per action point. An action plays in the wave equal to the AP spent when it finishes. Then Aether plans again.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
 
-Each player **faces** one of those 8 directions (the chevron on the piece). Aether starts facing **+x**, Helix facing **−x**. After a player changes tile — move, dribble, tackle, square fight, swap, intercept cut-off, or offside restart — they face that step.
+Each player **faces** one of those 8 directions (the chevron on the piece). Aether starts facing **+x**, Helix facing **−x**. After a player changes tile — move, dribble, tackle, square fight, swap, intercept cut-off, or offside restart — they face that step. A player who **wins a tackle and takes the ball** then turns their back to the player they stole from (faces away from them). That is the same as the step facing on a swap tackle; on an arrival tackle it may be a different direction from the step they took onto the square.
 
 ## Attributes
 
@@ -32,12 +32,12 @@ Kickoff values by role:
 
 | Role | ACC | DEF | CTR | STA |
 |---|---|---|---|---|
-| ST | 26 | 4 | 9 | 9 |
-| Central mid (LCM/RCM) | 12 | 8 | 7 | 13 |
-| Wide mid (LM/RM) | 16 | 6 | 9 | 11 |
-| Centre back (LCB/RCB) | 8 | 13 | 7 | 8 |
-| Full back (LB/RB) | 10 | 11 | 8 | 10 |
-| GK | 8 | 13 | 11 | 7 |
+| ST | 20 | 10 | 15 | 10 |
+| Central mid (LCM/RCM) | 10 | 15 | 15 | 10 |
+| Wide mid (LM/RM) | 15 | 10 | 10 | 10 |
+| Centre back (LCB/RCB) | 10 | 20 | 20 | 10 |
+| Full back (LB/RB) | 10 | 15 | 15 | 10 |
+| GK | 10 | 20 | 20 | 10 |
 
 ### Energy
 
@@ -48,11 +48,11 @@ Kickoff values by role:
 ## How to take a turn
 
 1. Click any player on the team that is planning.
-2. Choose an action from the bottom bar (or press **1–9**): Move, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after the first step so you can chain-click tiles.
+2. Choose an action from the bottom bar (or press **1–9**): Move, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot, Done. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after the first step so you can chain-click tiles.
 3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps.
-4. Repeat for up to **3 different players**, **6 AP** each. A gold ring marks a planned player; arrows show their queued steps.
-5. Filling **all 6 AP on 3 players** ends the turn automatically. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
-6. After Helix’s turn ends, all queued actions resolve. First action for every planned player, then second, and so on. The match log lists every public event and roll.
+4. Repeat for up to **3 different players**, **6 AP** each. Gold pips around a piece show leftover AP after that player has spent at least one point. A gold ring marks a planned player; arrows show their queued steps.
+5. Filling **all 6 AP on 3 players**, or marking those players **Done**, ends the turn automatically. **Done** parks leftover AP and a mint check shows they are finished. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
+6. After Helix’s turn ends, all queued actions resolve in **six AP waves**. A 2-AP first step plays in wave 2; a later 2-AP step on the same player plays in wave 4. The match log lists every public event and roll.
 7. Click a planned player twice to clear their actions and pick someone else. Right-click or Escape cancels the current action, then the selection; Escape with nothing selected opens the menu.
 
 You cannot pick a fourth player.
@@ -89,6 +89,14 @@ Highlights (after you pick an action):
 - A **180°** reverse takes **two** turns (two AP).
 - Click the adjacent tile in the direction you want to face. You do not move there.
 
+### Done
+
+- Costs **0 AP**. The player is finished planning even with leftover AP.
+- Choosing it from the action bar queues immediately — no tile click.
+- They still occupy one of the **3 player slots**. A mint check on the piece marks them finished.
+- They no longer count as an unmoved player for auto-end. Filling 3 players who are out of AP **or** Done ends the turn.
+- Click the piece twice to clear their plan and pick someone else.
+
 ### Swap places
 
 - Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
@@ -104,14 +112,28 @@ Highlights (after you pick an action):
 - Roll: your **CTR** vs their **DEF**.
 - You win: you take the square, they are shoved back to where you came from, you keep the ball.
 - You lose: you stay put, they steal the ball.
+- A **tie** (both dice show the same number): both players stay put and the ball **bounces** to a random cell of the 3×3 centred on where it was, including staying put. An occupied landing gives that player the ball; an empty landing leaves it loose.
 
 ### Tackle
 
 - Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
 - Player **without** the ball steps onto the **carrier** in the **move cone**.
 - Roll: your **DEF** vs their **CTR**.
-- You win: you swap onto their square and take the ball.
+- Approach angle is measured from the **carrier’s facing** to the cell you are coming from (the square you occupy, or the meeting square on an arrival tackle). Front is head-on; back is from behind.
+- That angle subtracts percentage points from tackle success (clamped at 0%):
+
+| Approach | Penalty |
+|---|---|
+| Front (0°) | none |
+| 45° | −15% |
+| Side (90°) | −30% |
+| 135° | −50% |
+| Back (180°) | −85% |
+
+- Hover a tackle to see the penalised chance, e.g. `tackle NAME 13 DEF vs 9 CTR = 32% success (side -30%)`.
+- You win: you swap onto their square, take the ball, and turn your back to the player you stole from.
 - You lose: nothing changes.
+- A **tie**: both stay put and the ball bounces the same way as a tied dribble. The approach penalty does not turn a bounce into a win or a loss.
 
 ### Square fight
 
@@ -125,21 +147,30 @@ Highlights (after you pick an action):
 
 - Costs **1 AP**.
 - Only the player with the ball.
-- Range: **3 tiles** (Chebyshev), to a **teammate** or an **empty square**.
+- Range: a **circle** of radius **5 tile lengths** (cell centre to cell centre). Orthogonal 5 is in; diagonal 4 is out. To a **teammate** or an **empty square**.
 - Cannot pass into the **rear cone**: directly back and **43°** to each side. **Adjacent** tiles are excepted — you may still pass to a neighbouring cell even if it is behind you.
 - You stay put. The ball travels to the target.
 - Empty square: the ball becomes **loose** there. You cannot lay the ball into an empty net.
 - Teammate: they receive it and become the carrier. This includes the keeper standing in the net.
 - Adjacent empty square can be a **Move** or a **Pass** — pick the action first, then the tile.
 - Adjacent teammate can be a **Pass** or a **Swap** — pick the action first, then the teammate.
-- Pass still uses the 3-tile range once Pass is selected.
+- Pass still uses the 5-tile-length circle once Pass is selected.
 - A pass to a teammate in an **offside position** is still legal. If it is not intercepted, it is offside (see below). Empty-square passes are never offside.
 - After you queue a pass to a teammate, that teammate can plan as if they already have the ball (pass on, shoot, dribble). If the incoming pass is intercepted or cancelled, those ball actions do not play.
 - After you queue a pass onto an empty square, a teammate who then queues a step onto that square can plan as if they will collect it. If they never get the ball, those follow-up actions are ignored.
 
 ## Simultaneous resolution
 
-Actions are planned against the current board, then resolve **wave by wave** (everyone’s first queued action, then second, …). Inside a wave:
+Actions are planned against the current board, then resolve in **six waves**, one per action point. Each action plays in the wave equal to the cumulative AP that player has spent when that action finishes. A first action that costs 2 AP plays in wave 2; a first action that costs 3 AP plays in wave 3; a second 2-AP action on the same player plays in wave 4. Wave 1 is empty unless someone queued a 1-AP action (turn or pass). Empty waves are skipped.
+
+Example: Aether queues a 2-AP step then another 2-AP step. Helix queues a 3-AP step.
+
+- Wave 1 — nothing
+- Wave 2 — Aether’s first step
+- Wave 3 — Helix’s step
+- Wave 4 — Aether’s second step
+
+Inside a wave:
 
 1. **Tackles**
 2. **Passes and shots** — the ball travels next, following the current carrier so a pass can feed another pass or a shot. A pass to a teammate who also queued a move arrives first; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
@@ -201,7 +232,8 @@ All contested actions use the same roll:
 
 - Each side rolls **1dSTAT** (faces `1` through that side’s live stat)
 - Higher roll wins
-- A tie goes to **the team with the ball**: a pass beats the interceptor, a dribble beats the defender, a tackle fails, a shot beats the keeper’s save. If neither contestant’s team has the ball, the occupant / first claimer keeps the square.
+- A **numeric tie** on a **dribble or tackle** (including an arrival tackle) bounces the ball to a random cell of the 3×3 centred on it, including the cell it already occupies. Both players stay put. Occupied landings give that player the ball; empty landings leave it loose.
+- Other ties go to **the team with the ball**: a pass beats the interceptor, a shot beats the keeper’s save. If neither contestant’s team has the ball, the occupant / first claimer keeps the square.
 
 Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 
@@ -212,6 +244,7 @@ Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 - A completed pass to an empty tile leaves it loose.
 - A completed pass to a teammate gives it to them.
 - A failed dribble or a successful tackle / intercept changes the carrier.
+- A tied dribble or tackle can leave the ball loose, or give it to whoever stands on the bounce cell.
 
 ### Shoot
 

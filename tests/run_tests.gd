@@ -27,8 +27,10 @@ func _run() -> void:
 	_test_attributes()
 	_test_dribble_win()
 	_test_dribble_loss()
+	_test_contest_bounce()
 	_test_square_fight()
 	_test_challenge_takes_ball()
+	_test_tackle_direction()
 	_test_contest_preview()
 	_test_pass()
 	_test_intercepts()
@@ -36,6 +38,7 @@ func _run() -> void:
 	_test_offside()
 	_test_shooting()
 	_test_planning_and_resolve()
+	_test_ap_waves()
 	_test_game_settings()
 	await _test_controller_click_flow()
 	await _test_game_menu()
@@ -166,6 +169,7 @@ func _test_action_points() -> void:
 	_assert(MatchRules.action_ap_cost("pass", Vector2i(5, 5), Vector2i(7, 5), 6) == 1, "pass costs 1 AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 5) == 5, "shot spends leftover AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 1) == 1, "shot with 1 AP spends that point")
+	_assert(MatchRules.action_ap_cost("done", Vector2i(5, 5), Vector2i(5, 5), 4) == 0, "done costs 0 AP")
 	_assert(is_equal_approx(MatchRules.shot_ap_bonus(1), 0.03), "+3% hit per leftover AP")
 	_assert(is_equal_approx(MatchRules.shot_ap_bonus(5), 0.15), "5 leftover AP is +15% hit")
 
@@ -267,6 +271,48 @@ func _test_action_points() -> void:
 	_assert(t2.ok and kicker.facing == Vector2i(-1, 0), "second 90° turn completes a 180")
 	_assert(not about.apply_turn(kicker.id, _spot(1, 0)).ok, "cannot turn 180 in one action")
 
+	var parked := MatchModel.new()
+	parked.setup_kickoff()
+	var parker := parked.player_at(MatchRules.CENTER_SPOT)
+	var ids: PackedStringArray = PackedStringArray()
+	for command in parked.commands_for(parker):
+		ids.append(str(command.get("id", "")))
+	_assert("done" in ids, "action bar offers done while the player has leftover AP")
+	var first_done := parked.queue_plan(parker.id, {id = "done", dest = parker.pos, label = "Done"})
+	_assert(first_done.ok, "done queues with leftover AP")
+	_assert(parked.player_is_done(parker.id), "queued done marks the player finished")
+	_assert(parked.ap_remaining(parker.id) == 6, "done does not spend leftover AP")
+	_assert(not parked.can_queue(parker), "a done player cannot queue more")
+	_assert(parked.acting_player_count() == 1, "done occupies an acting slot")
+	_assert(not parked.planning_complete(), "one done player is not a full side")
+	_assert(not parked.queue_plan(parker.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "done blocks further actions")
+	parked.clear_plan(parker.id)
+	_assert(not parked.player_is_done(parker.id), "clearing the plan un-dones the player")
+	_assert(parked.queue_plan(parker.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "after clearing, the player can act again")
+	_assert(parked.queue_plan(parker.id, {id = "done", dest = _spot(1, 0), label = "Done"}).ok, "done still works after a queued move")
+	_assert(parked.ap_remaining(parker.id) == 4, "done after a straight step leaves 4 AP unused")
+	_assert(not parked.can_queue(parker), "done after a move still ends that player's planning")
+	_fill_plans(parked, [])
+	for player in parked.players:
+		if player.team != MatchRules.Team.HOME or parked.plan_of(player.id).is_empty():
+			continue
+		if parked.player_is_done(player.id) or parked.ap_spent(player.id) >= MatchRules.PLAYER_ACTION_POINTS:
+			continue
+		_assert(parked.queue_plan(player.id, {id = "done", dest = parked.planning_pos(player), label = "Done"}).ok, "teammates can also mark done")
+	_assert(parked.planning_complete(), "three finished players auto-complete the side")
+	var energy_before := parker.energy
+	parked.end_planning()
+	_fill_plans(parked, [])
+	var parked_resolve := parked.end_planning()
+	_assert(parked_resolve.get("action") == "resolve", "done still lets the cycle resolve")
+	_assert(parker.pos == _spot(1, 0), "the move before done still applies")
+	_assert(parker.energy == energy_before - 1, "done does not spend energy")
+	var saw_done := false
+	for ev in parked_resolve.get("events", []):
+		if str(ev.get("action", "")) == "done":
+			saw_done = true
+	_assert(not saw_done, "done is planning-only and is not resolved")
+
 
 func _test_move_destinations() -> void:
 	print("-- destinations")
@@ -362,7 +408,7 @@ func _test_kickoff() -> void:
 	_assert(not MatchRules.is_adjacent(home_st.pos, helix_other.pos), "helix #10 cannot contest kickoff")
 	var helix_cm := model.player_at(Vector2i(MatchRules.GRID_WIDTH - 9, MatchRules.CENTER_Y - 1))
 	_assert(helix_cm != null and helix_cm.role == "RCM", "helix CMs sit one cell closer to their net")
-	_assert(MatchRules.chebyshev(helix_st.pos, helix_cm.pos) == 3, "helix striker to CM still in pass range")
+	_assert(MatchRules.chebyshev(helix_st.pos, helix_cm.pos) == 3, "helix striker to CM is 3 Chebyshev tiles")
 
 
 func _test_helix_kickoff() -> void:
@@ -458,16 +504,22 @@ func _test_attributes() -> void:
 	var st := model.player_at(MatchRules.CENTER_SPOT)
 	var gk := model.player_at(MatchRules.HOME_NET)
 	var cm := model.player_at(_spot(-3, -1))
-	_assert(st.accuracy == 26 and st.control == 9, "striker is accuracy/control leaning")
-	_assert(st.stamina == 9 and st.energy == 90 and st.max_energy == 90, "striker stamina fills a 10× energy pool")
-	_assert(gk.defense == 13 and gk.control == 11, "keeper is defense/control leaning")
-	_assert(gk.stamina == 7 and gk.max_energy == 70, "keeper stamina is lower")
-	_assert(cm.accuracy == 12 and cm.defense == 8, "central mid keeps midfield ACC/DEF")
-	_assert(cm.stamina == 13, "central mid has the biggest energy pool")
-	_assert(st.live_accuracy() == 26, "full energy keeps printed stats")
+	var lb := model.player_at(Vector2i(2, 0))
+	var lm := model.player_at(Vector2i(MatchRules.CENTER_SPOT.x - 3, 0))
+	var cb := model.player_at(Vector2i(2, MatchRules.CENTER_Y - 1))
+	_assert(st.role == "ST" and st.accuracy == 20 and st.defense == 10 and st.control == 15, "striker is 20/10/15")
+	_assert(cm.role == "LCM" and cm.accuracy == 10 and cm.defense == 15 and cm.control == 15, "central mid is 10/15/15")
+	_assert(lb.role == "LB" and lb.accuracy == 10 and lb.defense == 15 and lb.control == 15, "full back matches central mid")
+	_assert(lm.role == "LM" and lm.accuracy == 15 and lm.defense == 10 and lm.control == 10, "wide mid is 15/10/10")
+	_assert(cb.role == "LCB" and cb.accuracy == 10 and cb.defense == 20 and cb.control == 20, "centre back is 10/20/20")
+	_assert(gk.role == "GK" and gk.accuracy == 10 and gk.defense == 20 and gk.control == 20, "keeper matches centre back")
+	_assert(st.stamina == 10 and st.energy == 100 and st.max_energy == 100, "striker stamina fills a 10× energy pool")
+	_assert(gk.stamina == 10 and gk.max_energy == 100, "keeper stamina matches the rest of the XI")
+	_assert(cm.stamina == 10 and lb.stamina == 10 and lm.stamina == 10 and cb.stamina == 10, "every listed role has STA 10")
+	_assert(st.live_accuracy() == 20, "full energy keeps printed stats")
 	st.energy = 0
-	_assert(st.live_accuracy() == 13, "empty energy halves ACC with rounding")
-	_assert(st.live_defense() == 2, "empty energy halves DEF with rounding")
+	_assert(st.live_accuracy() == 10, "empty energy halves ACC with rounding")
+	_assert(st.live_defense() == 5, "empty energy halves DEF with rounding")
 	st.energy = st.max_energy
 	var away := model.player_at(MatchRules.AWAY_KICKOFF)
 	away.pos = _spot(1, 1)
@@ -475,7 +527,7 @@ func _test_attributes() -> void:
 	_assert(away.pos in model.contest_moves(st), "opponent tile is listed as a contest")
 	var tired := model.apply_move(st.id, _spot(1, 0))
 	_assert(tired.ok, "move still works while spending energy")
-	_assert(st.energy == 89, "a resolved move costs 1 energy")
+	_assert(st.energy == 99, "a resolved move costs 1 energy")
 
 
 func _test_dribble_win() -> void:
@@ -511,6 +563,79 @@ func _test_dribble_loss() -> void:
 	_assert(away.pos == _spot(1, 1), "defender held the square")
 	_assert(away.has_ball and not st.has_ball, "defender won the ball")
 	_assert(result.lost_possession, "result reports lost possession")
+
+
+func _test_contest_bounce() -> void:
+	print("-- contest bounce")
+	var interior := MatchRules.bounce_cells(Vector2i(10, 6))
+	_assert(interior.size() == 9, "interior bounce has 9 cells")
+	_assert(Vector2i(10, 6) in interior, "bounce can stay on the original cell")
+	_assert(Vector2i(9, 5) in interior and Vector2i(11, 7) in interior, "bounce includes the 3×3 corners")
+	var corner := MatchRules.bounce_cells(Vector2i(0, 0))
+	_assert(corner.size() == 4, "pitch-corner bounce drops out-of-bounds cells")
+	_assert(Vector2i(0, 0) in corner and Vector2i(1, 1) in corner, "corner bounce keeps the origin and the in-bounds diagonal")
+	var net := MatchRules.bounce_cells(MatchRules.HOME_NET)
+	_assert(MatchRules.HOME_NET in net, "a ball in the net can bounce in place")
+	_assert(not Vector2i(-2, 6) in net, "bounce never leaves the playable grid")
+
+	var stay := MatchModel.new()
+	stay.setup_kickoff()
+	var stay_st := stay.player_at(MatchRules.CENTER_SPOT)
+	var stay_away := stay.player_at(MatchRules.AWAY_KICKOFF)
+	stay_away.pos = _spot(1, 1)
+	stay.scripted_contest_tie = true
+	stay.scripted_bounce_cell = MatchRules.CENTER_SPOT
+	var stay_result := stay.apply_move(stay_st.id, stay_away.pos)
+	_assert(stay_result.action == "dribble", "tied dribble is still a dribble")
+	_assert(stay_result.get("contest_tied", false) and stay_result.get("bounced", false), "tied dribble reports a bounce")
+	_assert(not stay_result.get("contest_won", false), "a bounce is not a contest win")
+	_assert(stay_st.pos == MatchRules.CENTER_SPOT and stay_away.pos == _spot(1, 1), "tied dribble leaves both players in place")
+	_assert(stay_st.has_ball and stay.ball.pos == MatchRules.CENTER_SPOT, "bounce onto the original cell leaves the carrier with the ball")
+	_assert(CombatLog.format_result(stay_result).contains("DRIBBLE BOUNCE"), "log names a dribble bounce")
+
+	var loose := MatchModel.new()
+	loose.setup_kickoff()
+	var loose_st := loose.player_at(MatchRules.CENTER_SPOT)
+	var loose_away := loose.player_at(MatchRules.AWAY_KICKOFF)
+	loose_away.pos = _spot(1, 1)
+	loose.scripted_contest_tie = true
+	loose.scripted_bounce_cell = _spot(1, 0)
+	var loose_result := loose.apply_move(loose_st.id, loose_away.pos)
+	_assert(loose_result.get("bounced", false), "tied dribble onto an empty neighbour bounces")
+	_assert(loose_result.get("bounce_cell") == _spot(1, 0), "bounce records the landing cell")
+	_assert(loose_st.pos == MatchRules.CENTER_SPOT and loose_away.pos == _spot(1, 1), "players stay put when the ball bounces away")
+	_assert(loose.ball.is_loose() and loose.ball.pos == _spot(1, 0), "ball is loose on the bounce cell")
+	_assert(not loose_st.has_ball and not loose_away.has_ball, "neither contestant keeps a ball that bounced away")
+
+	var steal := MatchModel.new()
+	steal.setup_kickoff()
+	var steal_st := steal.player_at(MatchRules.CENTER_SPOT)
+	var steal_away := steal.player_at(MatchRules.AWAY_KICKOFF)
+	steal_away.pos = _spot(1, 1)
+	steal.scripted_contest_tie = true
+	steal.scripted_bounce_cell = _spot(1, 1)
+	var steal_result := steal.apply_move(steal_st.id, steal_away.pos)
+	_assert(steal_result.get("bounced", false), "tied dribble can bounce onto the defender")
+	_assert(steal_away.has_ball and not steal_st.has_ball, "defender collects a bounce onto their cell")
+	_assert(steal.ball.pos == steal_away.pos, "ball sits with the player who collected the bounce")
+
+	var poke := MatchModel.new()
+	poke.setup_kickoff()
+	var poke_st := poke.player_at(MatchRules.CENTER_SPOT)
+	var poke_decoy := poke.player_at(Vector2i(MatchRules.CENTER_SPOT.x - 3, 0))
+	poke.apply_move(poke_decoy.id, Vector2i(MatchRules.CENTER_SPOT.x - 3, 1))
+	var poke_away := poke.player_at(MatchRules.AWAY_KICKOFF)
+	poke_away.pos = _spot(1, 1)
+	poke.scripted_contest_tie = true
+	poke.scripted_bounce_cell = _spot(0, 1)
+	poke.ignore_team_gate = true
+	var poke_result := poke.apply_move(poke_away.id, MatchRules.CENTER_SPOT)
+	_assert(poke_result.action == "tackle", "tied tackle is still a tackle")
+	_assert(poke_result.get("contest_tied", false) and poke_result.get("bounced", false), "tied tackle reports a bounce")
+	_assert(poke_away.pos == _spot(1, 1) and poke_st.pos == MatchRules.CENTER_SPOT, "tied tackle leaves both players in place")
+	_assert(poke.ball.is_loose() and poke.ball.pos == _spot(0, 1), "tied tackle dumps the ball onto the bounce cell")
+	_assert(not poke_st.has_ball and not poke_away.has_ball, "neither player keeps the ball after a tackle bounce")
+	_assert(CombatLog.format_result(poke_result).contains("TACKLE BOUNCE"), "log names a tackle bounce")
 
 
 func _test_square_fight() -> void:
@@ -560,13 +685,146 @@ func _test_challenge_takes_ball() -> void:
 	_assert(result.get("gained_possession"), "winner of the tackle took the ball")
 	_assert(away.has_ball and not st.has_ball, "challenger is the new carrier")
 	_assert(away.pos == MatchRules.CENTER_SPOT and st.pos == _spot(1, 1), "players swapped")
+	_assert(
+		away.facing == MatchRules.step_direction(st.pos, away.pos),
+		"tackle winner turns their back to the player they stole from"
+	)
+
+
+func _test_tackle_direction() -> void:
+	print("-- tackle direction")
+	var east := Vector2i(1, 0)
+	var origin := Vector2i(8, 4)
+	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(1, 0), origin) == 0, "cell ahead is a front tackle")
+	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(1, 1), origin) == 45, "forward-diagonal is 45°")
+	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(0, 1), origin) == 90, "cell to the side is 90°")
+	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(-1, 1), origin) == 135, "rear-diagonal is 135°")
+	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(-1, 0), origin) == 180, "cell behind is a back tackle")
+	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(-1, -1), origin) == 135, "the other rear-diagonal is also 135°")
+	_assert(MatchRules.tackle_angle_penalty(0) == 0.0, "front tackle has no penalty")
+	_assert(MatchRules.tackle_angle_penalty(45) == -0.15, "45° costs 15 percentage points")
+	_assert(MatchRules.tackle_angle_penalty(90) == -0.30, "side costs 30 percentage points")
+	_assert(MatchRules.tackle_angle_penalty(135) == -0.50, "135° costs 50 percentage points")
+	_assert(MatchRules.tackle_angle_penalty(180) == -0.85, "back tackle costs 85 percentage points")
+	_assert(MatchRules.tackle_angle_label(90) == "side", "90° is labelled side")
+	_assert(MatchRules.tackle_angle_label(180) == "back", "180° is labelled back")
+	var even := MatchRules.contest_win_chance(9, 9, false)
+	_assert(
+		absi(MatchRules.apply_tackle_angle_chance(even, -0.30) - clampf(even - 0.30, 0.0, 1.0)) < 0.0001,
+		"side penalty subtracts 30 percentage points from success"
+	)
+	_assert(MatchRules.apply_tackle_angle_chance(even, -0.85) == 0.0, "back penalty can clamp success to 0")
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1
+	var lost_back := {
+		attacker_won = true,
+		tied = false,
+		attacker_stat = 9,
+		defender_stat = 9,
+	}
+	MatchRules.apply_tackle_direction_penalty(lost_back, -0.85, rng)
+	_assert(not bool(lost_back.attacker_won), "a 0% back tackle drops a dice win")
+	var kept_front := {
+		attacker_won = true,
+		tied = false,
+		attacker_stat = 9,
+		defender_stat = 9,
+	}
+	MatchRules.apply_tackle_direction_penalty(kept_front, 0.0, rng)
+	_assert(bool(kept_front.attacker_won), "front tackles do not drop a dice win")
+
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var st := model.player_at(MatchRules.CENTER_SPOT)
+	var cb := model.player_at(Vector2i(MatchRules.GRID_WIDTH - 3, MatchRules.CENTER_Y - 1))
+	_assert(cb != null and cb.role == "RCB" and cb.team == MatchRules.Team.AWAY, "helix centre back is the high-DEF tackler")
+	st.facing = Vector2i(1, 0)
+	cb.pos = _spot(1, 0)
+	var base := MatchRules.contest_win_chance(cb.live_defense(), st.live_control(), false)
+	var front := MatchRules.contest_preview(cb, st)
+	_assert(front.action == "tackle" and int(front.angle_deg) == 0, "preview from ahead is a front tackle")
+	_assert(absi(float(front.chance) - base) < 0.0001, "front preview chance matches DEF vs CTR")
+	_assert(not front.text.contains("front"), "front preview omits a 0% penalty suffix")
+	cb.pos = _spot(1, 1)
+	var diag := MatchRules.contest_preview(cb, st)
+	_assert(int(diag.angle_deg) == 45, "forward-diagonal preview is 45°")
+	_assert(
+		absi(float(diag.chance) - MatchRules.apply_tackle_angle_chance(base, -0.15)) < 0.0001,
+		"45° preview subtracts 15 percentage points"
+	)
+	_assert(diag.text.contains("45° -15%"), "45° preview names the penalty")
+	cb.pos = _spot(0, 1)
+	var side := MatchRules.contest_preview(cb, st)
+	_assert(int(side.angle_deg) == 90 and side.angle_label == "side", "preview from the wing is a side tackle")
+	_assert(
+		absi(float(side.chance) - MatchRules.apply_tackle_angle_chance(base, -0.30)) < 0.0001,
+		"side preview subtracts 30 percentage points"
+	)
+	_assert(side.text.contains("side -30%"), "side preview names the penalty")
+	cb.pos = _spot(-1, 1)
+	var rear_diag := MatchRules.contest_preview(cb, st)
+	_assert(int(rear_diag.angle_deg) == 135, "rear-diagonal preview is 135°")
+	_assert(
+		absi(float(rear_diag.chance) - MatchRules.apply_tackle_angle_chance(base, -0.50)) < 0.0001,
+		"135° preview subtracts 50 percentage points"
+	)
+	cb.pos = _spot(-1, 0)
+	var back := MatchRules.contest_preview(cb, st)
+	_assert(int(back.angle_deg) == 180 and back.angle_label == "back", "preview from behind is a back tackle")
+	_assert(absi(float(back.chance) - 0.0) < 0.0001, "back preview is clamped to 0% with these stats")
+	_assert(back.text.contains("back -85%"), "back preview names the penalty")
+	_assert(back.percent == 0, "HUD percent is 0 for an impossible back tackle")
+
+	var steal := MatchModel.new()
+	steal.setup_kickoff()
+	var steal_st := steal.player_at(MatchRules.CENTER_SPOT)
+	var steal_cb := steal.player_at(Vector2i(MatchRules.GRID_WIDTH - 3, MatchRules.CENTER_Y - 1))
+	var steal_decoy := steal.player_at(Vector2i(MatchRules.CENTER_SPOT.x - 3, 0))
+	steal.apply_move(steal_decoy.id, Vector2i(MatchRules.CENTER_SPOT.x - 3, 1))
+	steal_cb.pos = _spot(1, 0)
+	steal_cb.facing = Vector2i(-1, 0)
+	steal.scripted_attacker_wins = true
+	steal.ignore_team_gate = true
+	var won := steal.apply_move(steal_cb.id, MatchRules.CENTER_SPOT)
+	_assert(won.action == "tackle" and won.get("gained_possession"), "scripted front tackle still steals")
+	_assert(int(won.get("angle_deg", -1)) == 0, "resolved front tackle records 0°")
+	_assert(
+		steal_cb.facing == MatchRules.step_direction(steal_st.pos, steal_cb.pos),
+		"swap-tackle winner faces away from the old carrier"
+	)
+	_assert(CombatLog.format_result(won).contains("(front)"), "log names a front tackle")
+
+	var from_behind := MatchModel.new()
+	from_behind.setup_kickoff()
+	var back_st := from_behind.player_at(MatchRules.CENTER_SPOT)
+	var back_cb := from_behind.player_at(Vector2i(MatchRules.GRID_WIDTH - 3, MatchRules.CENTER_Y - 1))
+	var back_decoy := from_behind.player_at(Vector2i(MatchRules.CENTER_SPOT.x - 3, 0))
+	from_behind.apply_move(back_decoy.id, Vector2i(MatchRules.CENTER_SPOT.x - 3, 1))
+	back_st.facing = Vector2i(1, 0)
+	back_cb.pos = _spot(-1, 0)
+	back_cb.facing = Vector2i(1, 0)
+	from_behind.scripted_attacker_wins = false
+	from_behind.ignore_team_gate = true
+	var poke := from_behind.apply_move(back_cb.id, MatchRules.CENTER_SPOT)
+	_assert(poke.action == "tackle", "back-angle step is still a tackle")
+	_assert(int(poke.get("angle_deg", -1)) == 180, "resolved back tackle records 180°")
+	_assert(not poke.get("contest_won", true), "failed back tackle does not steal")
+	_assert(back_st.has_ball and back_st.pos == MatchRules.CENTER_SPOT, "carrier keeps the ball on a failed back tackle")
+	_assert(back_cb.pos == _spot(-1, 0), "failed back tackler stays put")
+	_assert(CombatLog.format_result(poke).contains("back -85%"), "log names the back-tackle penalty")
 
 
 func _test_contest_preview() -> void:
 	print("-- contest preview")
 	_assert(MatchRules.scaled_stat(13, 0, 9) == 7, "zero energy scales 13 to 7")
 	_assert(MatchRules.scaled_stat(13, 9, 9) == 13, "full energy keeps 13")
-	_assert(MatchRules.PASS_RANGE == 3, "pass range is 3 tiles")
+	_assert(MatchRules.PASS_RANGE == 5, "pass radius is 5 tile lengths")
+	_assert(MatchRules.in_pass_range(Vector2i(0, 0), Vector2i(5, 0)), "orthogonal 5 is on the pass circle")
+	_assert(MatchRules.in_pass_range(Vector2i(0, 0), Vector2i(4, 3)), "4,3 sits on the pass circle")
+	_assert(MatchRules.in_pass_range(Vector2i(0, 0), Vector2i(3, 3)), "diagonal 3 is inside the pass circle")
+	_assert(not MatchRules.in_pass_range(Vector2i(0, 0), Vector2i(5, 1)), "offset 5,1 is outside the pass circle")
+	_assert(not MatchRules.in_pass_range(Vector2i(0, 0), Vector2i(4, 4)), "diagonal 4 is outside the pass circle")
 	var even := MatchRules.contest_win_chance(9, 9, false)
 	_assert(absi(even - 36.0 / 81.0) < 0.0001, "even 1d9 contest is 36/81 (ties to occupant)")
 	var even_ball := MatchRules.contest_win_chance(9, 9, true)
@@ -596,13 +854,25 @@ func _test_contest_preview() -> void:
 	_assert(preview.text.contains("%d%% success" % preview.percent), "hint shows success percent")
 	var decoy := model.player_at(Vector2i(MatchRules.CENTER_SPOT.x - 3, 0))
 	model.apply_move(decoy.id, Vector2i(MatchRules.CENTER_SPOT.x - 3, 0))
+	away.pos = _spot(1, 0)
+	st.facing = Vector2i(1, 0)
 	var tackle := MatchRules.contest_preview(away, st)
 	_assert(tackle.action == "tackle", "preview of off-ball vs carrier is a tackle")
 	_assert(tackle.text.begins_with("tackle "), "tackle hint starts with tackle")
 	_assert(tackle.text.contains("%d DEF" % away.defense), "tackle hint uses mover DEF")
 	_assert(tackle.text.contains("%d CTR" % st.control), "tackle hint uses carrier CTR")
-	_assert(MatchRules.attacker_wins_ties(st, away), "dribble ties go to the carrier")
-	_assert(not MatchRules.attacker_wins_ties(away, st), "tackle ties go to the carrier")
+	var front_chance := MatchRules.contest_win_chance(away.live_defense(), st.live_control(), false)
+	_assert(int(tackle.get("angle_deg", -1)) == 0, "head-on preview is a front tackle")
+	_assert(
+		absi(float(tackle.chance) - front_chance) < 0.0001,
+		"front tackle preview keeps the raw DEF vs CTR chance"
+	)
+	_assert(MatchRules.attacker_wins_ties(st, away), "the ball-holder still wins non-bounce ties")
+	_assert(not MatchRules.attacker_wins_ties(away, st), "the ball-holder still wins non-bounce ties against a tackler")
+	_assert(
+		absi(float(preview.chance) - MatchRules.contest_win_chance(st.live_control(), away.live_defense(), false)) < 0.0001,
+		"dribble success ignores ties — those bounce the ball"
+	)
 	var decoy_vs_wing := MatchRules.attacker_wins_ties(
 		decoy, model.player_at(Vector2i(MatchRules.GRID_WIDTH - 10, 0)), MatchRules.Team.HOME
 	)
@@ -617,9 +887,9 @@ func _test_pass() -> void:
 	var near := model.player_at(_spot(0, -1))
 	var gk := model.player_at(MatchRules.HOME_NET)
 	var away := model.player_at(MatchRules.AWAY_KICKOFF)
-	_assert(model.can_pass_to(st, near), "can pass to a teammate within 3")
-	_assert(MatchRules.chebyshev(st.pos, gk.pos) > MatchRules.PASS_RANGE, "keeper in the net is beyond pass range")
-	_assert(not model.can_pass_to(st, gk), "cannot pass beyond 3 tiles")
+	_assert(model.can_pass_to(st, near), "can pass to a teammate within range")
+	_assert(not MatchRules.in_pass_range(st.pos, gk.pos), "keeper in the net is beyond pass range")
+	_assert(not model.can_pass_to(st, gk), "cannot pass beyond the pass circle")
 	_assert(not model.can_pass_to(st, away), "cannot pass to an opponent")
 	_assert(not model.can_pass_to(near, st), "non-carrier cannot pass")
 	model.scripted_first_intercept_wins = false
@@ -636,7 +906,15 @@ func _test_pass() -> void:
 	var kicker := open.player_at(MatchRules.CENTER_SPOT)
 	_assert(open.can_pass_to_cell(kicker, _spot(0, 1)), "can pass to an empty adjacent square")
 	_assert(open.can_pass_to_cell(kicker, _spot(2, 0)), "can pass to an empty square 2 tiles away")
-	_assert(not open.can_pass_to_cell(kicker, _spot(-4, 0)), "cannot pass 4 tiles to empty")
+	_assert(open.can_pass_to_cell(kicker, _spot(5, 0)), "can pass onto the orthogonal edge of the circle")
+	_assert(open.can_pass_to_cell(kicker, _spot(4, 3)), "can pass onto a 4,3 cell on the circle")
+	_assert(not open.can_pass_to_cell(kicker, _spot(5, 2)), "cannot pass to a 5,2 cell outside the circle")
+	_assert(not open.can_pass_to_cell(kicker, _spot(4, 4)), "cannot pass to a square-corner cell")
+	_assert(not open.can_pass_to_cell(kicker, _spot(6, 0)), "cannot pass 6 tiles to empty")
+	_assert(_spot(5, 0) in open.pass_cells(kicker), "pass highlights include the orthogonal edge")
+	_assert(_spot(4, 3) in open.pass_cells(kicker), "pass highlights include 4,3 on the circle")
+	_assert(_spot(5, 2) not in open.pass_cells(kicker), "pass highlights omit 5,2 outside the circle")
+	_assert(_spot(4, 4) not in open.pass_cells(kicker), "pass highlights omit the square corners")
 	var empty_actions := open.actions_for(kicker, _spot(1, 0))
 	_assert(empty_actions.size() == 2, "adjacent empty square is move or pass")
 	_assert(empty_actions[0].id == "move" and empty_actions[1].id == "pass", "move and pass are both offered")
@@ -656,12 +934,13 @@ func _test_pass() -> void:
 	var back_st := back.player_at(MatchRules.CENTER_SPOT)
 	var back_gk := back.player_at(MatchRules.HOME_NET)
 	var back_lcb := back.player_at(Vector2i(2, MatchRules.CENTER_Y - 1))
+	back_lcb.pos = Vector2i(2, MatchRules.CENTER_Y)
 	back_st.pos = Vector2i(5, MatchRules.CENTER_Y)
 	back_st.facing = Vector2i(-1, 0)
 	back.ball.pos = back_st.pos
 	back.scripted_first_intercept_wins = false
 	var to_cb := back.apply_pass(back_st.id, back_lcb.id)
-	_assert(to_cb.ok and back_lcb.has_ball, "back line can receive a 3-tile pass")
+	_assert(to_cb.ok and back_lcb.has_ball, "back line can receive a 3-tile orthogonal pass")
 	back_lcb.facing = Vector2i(-1, 0)
 	_assert(back.can_pass_to(back_lcb, back_gk), "can pass to the keeper in the net")
 	_assert(MatchRules.HOME_NET in back.pass_cells(back_lcb), "own net highlights as a pass tile")
@@ -799,10 +1078,11 @@ func _test_swap_and_choice() -> void:
 	var wing := model.player_at(Vector2i(MatchRules.CENTER_SPOT.x - 3, 0))
 	var away := model.player_at(MatchRules.AWAY_KICKOFF)
 	var lcm := model.player_at(_spot(-3, -1))
-	_assert(not model.can_pass_to(st, lcm), "cannot pass into the rear cone")
+	_assert(not model.can_pass_to_cell(st, _spot(-2, 0)), "cannot pass into the rear cone")
 	st.facing = Vector2i(-1, 0)
+	lcm.pos = _spot(-3, 0)
 	var far := model.actions_for(st, lcm.pos)
-	_assert(far.size() == 1 and far[0].id == "pass", "3-tile teammate is pass only")
+	_assert(far.size() == 1 and far[0].id == "pass", "in-range non-adjacent teammate is pass only")
 	st.facing = Vector2i(0, -1)
 	var adjacent := model.actions_for(st, near.pos)
 	_assert(adjacent.size() == 2, "adjacent teammate offers two actions")
@@ -985,7 +1265,7 @@ func _test_planning_and_resolve() -> void:
 	held.setup_kickoff()
 	var held_st := held.player_at(MatchRules.CENTER_SPOT)
 	var held_away := held.player_at(MatchRules.AWAY_KICKOFF)
-	held_away.facing = Vector2i(0, -1)
+	held_away.pos = _spot(2, 0)
 	held.scripted_attacker_wins = false
 	_fill_plans(held, [{
 		player_id = held_st.id,
@@ -1003,14 +1283,14 @@ func _test_planning_and_resolve() -> void:
 	var held_result := held.end_planning()
 	_assert(held_result.action == "resolve", "arrival tackle cycle resolved")
 	_assert(held_st.pos == _spot(1, 0) and held_st.has_ball, "carrier won the arrival tackle and kept the ball")
-	_assert(held_away.pos == MatchRules.AWAY_KICKOFF, "failed tackler stayed put")
+	_assert(held_away.pos == _spot(2, 0), "failed tackler stayed put")
 	_assert(held.combat_log.as_text().contains("TACKLE"), "log records the arrival as a tackle")
 
 	var poke := MatchModel.new()
 	poke.setup_kickoff()
 	var poke_st := poke.player_at(MatchRules.CENTER_SPOT)
 	var poke_away := poke.player_at(MatchRules.AWAY_KICKOFF)
-	poke_away.facing = Vector2i(0, -1)
+	poke_away.pos = _spot(2, 0)
 	poke.scripted_attacker_wins = true
 	_fill_plans(poke, [{
 		player_id = poke_st.id,
@@ -1029,6 +1309,10 @@ func _test_planning_and_resolve() -> void:
 	_assert(poke_result.action == "resolve", "arrival tackle steal resolved")
 	_assert(poke_away.pos == _spot(1, 0) and poke_away.has_ball, "tackler won the square and stole the ball")
 	_assert(poke_st.pos == MatchRules.CENTER_SPOT and not poke_st.has_ball, "carrier lost the arrival tackle")
+	_assert(
+		poke_away.facing == MatchRules.step_direction(poke_st.pos, poke_away.pos),
+		"arrival steal turns the winner's back to the old carrier"
+	)
 
 	var square := MatchModel.new()
 	square.setup_kickoff()
@@ -1069,16 +1353,24 @@ func _test_planning_and_resolve() -> void:
 	var carrier := interrupt.player_at(MatchRules.CENTER_SPOT)
 	var mate := interrupt.player_at(_spot(0, -1))
 	var tackler := interrupt.player_at(MatchRules.AWAY_KICKOFF)
-	tackler.pos = _spot(1, 1)
+	tackler.pos = _spot(1, 0)
 	interrupt.scripted_attacker_wins = true
 	interrupt.scripted_first_intercept_wins = false
-	_fill_plans(interrupt, [{
-		player_id = carrier.id,
-		id = "pass",
-		dest = mate.pos,
-		target_id = mate.id,
-		label = "Pass",
-	}])
+	_fill_plans(interrupt, [
+		{
+			player_id = carrier.id,
+			id = "turn",
+			dest = mate.pos,
+			label = "Turn",
+		},
+		{
+			player_id = carrier.id,
+			id = "pass",
+			dest = mate.pos,
+			target_id = mate.id,
+			label = "Pass",
+		},
+	])
 	interrupt.end_planning()
 	_fill_plans(interrupt, [{
 		player_id = tackler.id,
@@ -1333,6 +1625,7 @@ func _test_planning_and_resolve() -> void:
 	var denied_st := denied.player_at(MatchRules.CENTER_SPOT)
 	var denied_mate := denied.player_at(_spot(0, -1))
 	var denied_helix := denied.player_at(MatchRules.AWAY_KICKOFF)
+	denied_helix.pos = _spot(2, 0)
 	denied.apply_pass_to(denied_st.id, _spot(1, 0))
 	denied.queue_plan(denied_st.id, {id = "move", dest = _spot(1, 0), label = "Move"})
 	denied.queue_plan(denied_st.id, {
@@ -1383,6 +1676,56 @@ func _test_planning_and_resolve() -> void:
 	_assert(skip_resolve.ok and skip_resolve.action == "resolve", "helix can also end with no plan")
 	_assert(skip.current_team == MatchRules.Team.HOME, "empty cycle returns planning to aether")
 	_assert(skip_st.pos == MatchRules.CENTER_SPOT, "empty cycle leaves the board unchanged")
+
+
+func _test_ap_waves() -> void:
+	print("-- AP waves")
+	var model := MatchModel.new()
+	model.setup_kickoff()
+	var st := model.player_at(MatchRules.CENTER_SPOT)
+	var helix := model.player_at(MatchRules.AWAY_KICKOFF)
+	var first := model.queue_plan(st.id, {id = "move", dest = _spot(1, 0), label = "Move"})
+	_assert(int(first.plan.get("ap_end", 0)) == 2, "2-AP first action completes in wave 2")
+	var second := model.queue_plan(st.id, {id = "move", dest = _spot(2, 0), label = "Move"})
+	_assert(int(second.plan.get("ap_end", 0)) == 4, "second 2-AP action completes in wave 4")
+	model.end_planning()
+	var helix_step := model.queue_plan(helix.id, {id = "move", dest = _spot(1, 2), label = "Move"})
+	_assert(int(helix_step.plan.get("ap_cost", 0)) == 3, "helix first step is a 3-AP diagonal")
+	_assert(int(helix_step.plan.get("ap_end", 0)) == 3, "3-AP first action completes in wave 3")
+	var resolved := model.end_planning()
+	_assert(resolved.get("action") == "resolve", "staggered-cost cycle resolved")
+	var moves: Array = []
+	for event in resolved.get("events", []):
+		if str(event.get("action", "")) != "move":
+			continue
+		if int(event.get("player_id", -1)) in [st.id, helix.id]:
+			moves.append(event)
+	_assert(moves.size() == 3, "both players' three steps played")
+	_assert(int(moves[0].get("player_id", -1)) == st.id and moves[0].get("dest") == _spot(1, 0), "wave 2: aether's first 2-AP step")
+	_assert(int(moves[1].get("player_id", -1)) == helix.id and moves[1].get("dest") == _spot(1, 2), "wave 3: helix's 3-AP step")
+	_assert(int(moves[2].get("player_id", -1)) == st.id and moves[2].get("dest") == _spot(2, 0), "wave 4: aether's second 2-AP step")
+	_assert(st.pos == _spot(2, 0), "aether finished on the second step")
+	_assert(helix.pos == _spot(1, 2), "helix finished on the diagonal")
+	_assert(model.combat_log.as_text().contains("Wave 3"), "log labels the AP-3 wave")
+	_assert(model.combat_log.as_text().contains("Wave 4"), "log labels the AP-4 wave")
+
+	var bounce_arrive := MatchModel.new()
+	bounce_arrive.setup_kickoff()
+	var arrive_st := bounce_arrive.player_at(MatchRules.CENTER_SPOT)
+	var arrive_away := bounce_arrive.player_at(MatchRules.AWAY_KICKOFF)
+	arrive_away.pos = _spot(2, 0)
+	bounce_arrive.scripted_contest_tie = true
+	bounce_arrive.scripted_bounce_cell = _spot(0, 1)
+	bounce_arrive.queue_plan(arrive_st.id, {id = "move", dest = _spot(1, 0), label = "Move"})
+	bounce_arrive.end_planning()
+	bounce_arrive.queue_plan(arrive_away.id, {id = "move", dest = _spot(1, 0), label = "Move"})
+	var arrive_result := bounce_arrive.end_planning()
+	_assert(arrive_result.get("action") == "resolve", "tied arrival tackle resolved")
+	_assert(arrive_st.pos == MatchRules.CENTER_SPOT, "tied arrival leaves the carrier in place")
+	_assert(arrive_away.pos == _spot(2, 0), "tied arrival leaves the tackler in place")
+	_assert(bounce_arrive.ball.is_loose() and bounce_arrive.ball.pos == _spot(0, 1), "tied arrival bounce dumps the ball")
+	_assert(bounce_arrive.combat_log.as_text().contains("TACKLE BOUNCE"), "log names the arrival bounce")
+	_assert(bounce_arrive.combat_log.as_text().contains("the ball bounced"), "both arrival steps cancel after the bounce")
 
 
 func _test_shooting() -> void:
@@ -1494,6 +1837,8 @@ func _test_controller_click_flow() -> void:
 	_assert(controller.selected_id >= 0, "selection stored")
 	_assert(controller._pending_action == "move", "selecting a player arms move")
 	_assert("move" in controller.hud._command_ids, "action bar lists move")
+	var selected_before_spend: PlayerState = controller.model.player_by_id(controller.selected_id)
+	_assert(selected_before_spend != null and controller.pieces[selected_before_spend.id].ap_left < 0, "AP pips stay hidden until the player spends")
 	var move_result: Dictionary = controller.handle_cell_clicked(_spot(1, 0))
 	_assert(move_result.get("action") == "queue", "clicking a highlighted tile queues the default move")
 	var model: MatchModel = controller.model
@@ -1505,6 +1850,15 @@ func _test_controller_click_flow() -> void:
 	_assert(controller._pending_action == "move", "move stays armed after the first queued step")
 	_assert(controller._plan_markers().size() == 1, "own plan arrow is visible")
 	_assert(controller.pieces[striker.id].planned, "own gold ring is visible")
+	_assert(controller.pieces[striker.id].ap_left == 4, "piece shows leftover AP after spending")
+	var idle_pip := false
+	for state in model.players:
+		if state.team == MatchRules.Team.HOME and state.id != striker.id:
+			var idle_piece: PlayerPiece = controller.pieces.get(state.id)
+			_assert(idle_piece != null and idle_piece.ap_left < 0, "unspent teammates hide AP pips")
+			idle_pip = true
+			break
+	_assert(idle_pip, "found an unspent teammate to check AP pips")
 	_assert(controller.hud._phase.text.contains("AETHER"), "banner names the planning team")
 	_assert(controller.hud._turn.text.contains("2 PLAYERS LEFT"), "banner shows remaining players")
 	var enemy_select: Dictionary = controller.handle_cell_clicked(MatchRules.AWAY_NET)
@@ -1523,6 +1877,17 @@ func _test_controller_click_flow() -> void:
 	_assert(second_step.get("action") == "queue", "second move click chains without re-selecting the action")
 	_assert(chain.model.ap_spent(chain.model.player_at(MatchRules.CENTER_SPOT).id) == 4, "two chained straight moves spend 4 AP")
 	_assert(chain.selected_id >= 0, "player stays selected with leftover AP after two steps")
+	var chain_st: PlayerState = chain.model.player_at(MatchRules.CENTER_SPOT)
+	var chain_piece: PlayerPiece = chain.pieces.get(chain_st.id)
+	_assert(chain_piece != null and chain_piece.ap_left == 2, "piece shows 2 leftover AP after two straight steps")
+	_assert("done" in chain.hud._command_ids, "action bar lists done while AP remain")
+	_assert(chain.hud._card_ap.text.contains("2/6"), "inspector shows leftover AP")
+	var marked: Dictionary = chain.select_command("done")
+	_assert(marked.get("action") == "queue", "choosing done queues immediately")
+	_assert(chain.model.player_is_done(chain_st.id), "selecting done marks the player finished")
+	_assert(chain.selected_id < 0, "done deselects the player")
+	chain._refresh()
+	_assert(chain_piece.finished, "piece shows a done badge after the action")
 	chain.queue_free()
 
 	var pickup_ui: Node = packed.instantiate()
@@ -1708,6 +2073,43 @@ func _test_controller_click_flow() -> void:
 		auto_main.selected_id = mover.id
 		last_queue = auto_main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
 	_assert(last_queue.get("action") == "queue", "third player with leftover AP does not auto-end")
+	var done_except := {}
+	var last_done: Dictionary = {}
+	for home_id in auto_except:
+		done_except[home_id] = true
+		auto_main.selected_id = int(home_id)
+		last_done = auto_main.select_command("done")
+	_assert(last_done.get("action") == "end_planning", "marking the third leftover player done auto-ends")
+	_assert(auto_model.current_team == MatchRules.Team.AWAY, "helix plans after three done players")
+	auto_except = {}
+	last_queue = {}
+	for away_i in range(MatchRules.ACTIONS_PER_SIDE):
+		var dummy := _dummy_empty_move(auto_model, MatchRules.Team.AWAY, auto_except)
+		_assert(not dummy.is_empty(), "needed a helix dummy move after aether auto-end")
+		var mover: PlayerState = dummy.player
+		auto_except[mover.id] = true
+		auto_main.selected_id = mover.id
+		last_queue = auto_main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
+	_assert(last_queue.get("action") == "queue", "third helix player with leftover AP does not auto-resolve after aether done")
+	last_queue = auto_main.end_planning()
+	_assert(last_queue.get("action") == "resolve", "helix end turn still resolves after aether auto-end")
+	_assert(auto_model.current_team == MatchRules.Team.HOME, "aether plans the next cycle after done auto-end")
+	auto_main.queue_free()
+
+	auto_main = packed.instantiate()
+	root.add_child(auto_main)
+	auto_main.animate_moves = false
+	auto_model = auto_main.model
+	auto_except = {}
+	last_queue = {}
+	for home_i in range(MatchRules.ACTIONS_PER_SIDE):
+		var dummy := _dummy_empty_move(auto_model, MatchRules.Team.HOME, auto_except)
+		_assert(not dummy.is_empty(), "needed an aether dummy move for leftover auto-end")
+		var mover: PlayerState = dummy.player
+		auto_except[mover.id] = true
+		auto_main.selected_id = mover.id
+		last_queue = auto_main.perform_action({id = "move", dest = dummy.dest, label = "Move"})
+	_assert(last_queue.get("action") == "queue", "three leftover-AP players still need End Turn without done")
 	last_queue = auto_main.end_planning()
 	_assert(last_queue.get("action") == "end_planning", "end turn after three aether players")
 	_assert(auto_model.current_team == MatchRules.Team.AWAY, "helix plans after aether locks in")

@@ -19,11 +19,26 @@ func _fill(model: MatchModel) -> void:
 	while not model.planning_complete():
 		var best := _best_action(model, claimed)
 		if best.is_empty():
-			break
+			if not _mark_done(model):
+				break
+			continue
 		var queued: Dictionary = model.queue_plan(int(best.player_id), best.action)
 		if not queued.get("ok", false):
 			break
 		claimed[best.action.get("dest", Vector2i.ZERO)] = true
+
+
+func _mark_done(model: MatchModel) -> bool:
+	for player in model.players:
+		if not model.can_queue(player):
+			continue
+		var queued := model.queue_plan(player.id, {
+			id = "done",
+			label = "Done",
+			dest = model.planning_pos(player),
+		})
+		return bool(queued.get("ok", false))
+	return false
 
 
 func _best_action(model: MatchModel, claimed: Dictionary) -> Dictionary:

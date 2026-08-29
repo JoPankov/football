@@ -2,16 +2,21 @@ class_name TurnResolver
 extends RefCounted
 
 ## Resolves one planned cycle: Aether's queued actions + Helix's queued actions.
-## Each player has 6 AP. Waves are action sequence (first action, then second, …),
-## not AP slots — a 2-AP ortho step and a 3-AP diagonal still share wave 0.
+## Each player has 6 AP. Waves are AP slots 1..6: an action plays in the wave
+## equal to the cumulative AP spent when it completes. A 2-AP first step plays
+## in wave 2; a later 2-AP step on the same player plays in wave 4.
 ## Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination contests, moves/swaps.
 
 
 static func resolve(model: MatchModel) -> Dictionary:
 	var plans: Array[Dictionary] = []
 	for plan in model.home_plans:
+		if str(plan.get("action", "")) == "done":
+			continue
 		plans.append(plan)
 	for plan in model.away_plans:
+		if str(plan.get("action", "")) == "done":
+			continue
 		plans.append(plan)
 	model.combat_log.header("── Resolve cycle %d ──" % (model.turn_index + 1))
 	model.ignore_team_gate = true
@@ -19,17 +24,17 @@ static func resolve(model: MatchModel) -> Dictionary:
 	var all_plans := _copy_plans(plans)
 	var reset := false
 
-	for wave in MatchRules.PLAYER_ACTION_POINTS:
+	for wave in range(1, MatchRules.PLAYER_ACTION_POINTS + 1):
 		if reset:
 			break
 		var remaining: Array[Dictionary] = []
 		for plan in all_plans:
-			if int(plan.get("ap_index", 0)) == wave:
+			if int(plan.get("ap_end", 0)) == wave:
 				remaining.append(plan)
 		if remaining.is_empty():
 			continue
-		if wave > 0:
-			model.combat_log.note("Action %d" % (wave + 1))
+		if wave > 1:
+			model.combat_log.note("Wave %d" % wave)
 		reset = _run_phase(model, remaining, events, ["turn"], "Turns")
 		if not reset:
 			reset = _run_phase(model, remaining, events, ["tackle"], "Tackles")
@@ -47,7 +52,7 @@ static func resolve(model: MatchModel) -> Dictionary:
 			for leftover in remaining:
 				events.append(_cancel(model, leftover, "play stopped — goal"))
 			for plan in all_plans:
-				if int(plan.get("ap_index", 0)) > wave:
+				if int(plan.get("ap_end", 0)) > wave:
 					events.append(_cancel(model, plan, "play stopped — goal"))
 			break
 		for leftover in remaining:
@@ -206,6 +211,8 @@ static func _arrival_winner(
 	var champ: Dictionary = contenders[0]
 	for i in range(1, contenders.size()):
 		champ = _arrival_pair(model, champ, contenders[i], dest, events)
+		if bool(champ.get("tied", false)):
+			return champ
 	return champ
 
 
@@ -247,10 +254,20 @@ static func _arrival_pair(
 		defender_stat = player_a.live_control()
 	var holder := model.carrier()
 	var possession_team := holder.team if holder != null else -1
-	var ties_to_atk := MatchRules.attacker_wins_ties(attacker, defender, possession_team)
+	var ties_to_atk := false
+	if action not in ["tackle", "dribble"]:
+		ties_to_atk = MatchRules.attacker_wins_ties(attacker, defender, possession_team)
 	var roll := MatchRules.resolve_contest(attacker_stat, defender_stat, model.rng, ties_to_atk)
 	if model.scripted_attacker_wins != null:
 		MatchRules.apply_scripted_winner(roll, bool(model.scripted_attacker_wins))
+	elif model.scripted_contest_tie:
+		MatchRules.apply_scripted_tie(roll)
+	var tackle_dir := {}
+	if action == "tackle":
+		tackle_dir = MatchRules.tackle_direction(carrier.facing, attacker.pos, dest)
+		if model.scripted_attacker_wins == null and not model.scripted_contest_tie:
+			MatchRules.apply_tackle_direction_penalty(roll, float(tackle_dir.penalty), model.rng)
+	var tied := action in ["tackle", "dribble"] and bool(roll.get("tied", false))
 	var winner_player := attacker if roll.attacker_won else defender
 	var contest := {
 		ok = true,
@@ -260,7 +277,7 @@ static func _arrival_pair(
 		dest = dest,
 		attacker_label = attacker.label(),
 		defender_label = defender.label(),
-		winner_label = winner_player.label(),
+		winner_label = "" if tied else winner_player.label(),
 		attacker_stat = attacker_stat,
 		defender_stat = defender_stat,
 		attacker_stat_name = attacker_name,
@@ -269,8 +286,21 @@ static func _arrival_pair(
 		defender_dice = roll.defender_dice,
 		attacker_total = roll.attacker_total,
 		defender_total = roll.defender_total,
-		contest_won = roll.attacker_won,
+		contest_won = roll.attacker_won and not tied,
+		contest_tied = tied,
+		bounced = false,
 	}
+	if not tackle_dir.is_empty():
+		contest.angle_deg = tackle_dir.angle_deg
+		contest.angle_penalty = tackle_dir.penalty
+		contest.angle_label = tackle_dir.label
+	if tied:
+		var bounce_cell := model._bounce_ball()
+		contest.bounced = true
+		contest.bounce_cell = bounce_cell
+		events.append(contest)
+		model.combat_log.event(contest)
+		return {tied = true, player_id = -1}
 	events.append(contest)
 	model.combat_log.event(contest)
 	if winner_player.id == int(plan_a.get("player_id", -1)):
@@ -286,15 +316,21 @@ static func _apply_arrival_result(
 	winner: Dictionary,
 	dest: Vector2i
 ) -> bool:
+	if bool(winner.get("tied", false)):
+		for plan in group:
+			_drop_plan(remaining, int(plan.get("player_id", -1)))
+			events.append(_cancel(model, plan, "the ball bounced"))
+		return false
 	var winner_id := int(winner.get("player_id", -1))
 	var winner_player := model.player_by_id(winner_id)
 	var carrier := _group_carrier(model, group)
-	if (
+	var stole := (
 		winner_player != null
 		and carrier != null
 		and carrier.id != winner_id
 		and not _all_same_team(model, group)
-	):
+	)
+	if stole:
 		model._give_ball(winner_player)
 	var applied := false
 	if winner_player != null and dest in model.valid_moves(winner_player):
@@ -302,6 +338,9 @@ static func _apply_arrival_result(
 		if moved.get("ok", false):
 			if not moved.has("attacker_label"):
 				moved.attacker_label = winner_player.label()
+			if stole:
+				model._face_away_from(winner_player, carrier)
+				moved.facing = winner_player.facing
 			model.combat_log.event(moved)
 			events.append(moved)
 			applied = true
@@ -422,6 +461,8 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 		"turn":
 			var dest: Vector2i = plan.get("dest", player.pos)
 			result = model.apply_turn(player.id, dest)
+		"done":
+			return {ok = true, action = "done"}
 		_:
 			return _cancel(model, plan, "unknown action")
 	if not result.get("ok", false):

@@ -4,7 +4,7 @@ This is the onboarding note for a new coding session. It is **not** the rules bi
 
 | File | Audience | Use it for |
 |---|---|---|
-| **This file** | Agents and new sessions | What the game is, how the repo is layered, how to run it, what not to break |
+| **This file** | Agents and new sessions | What the game is, how the repo is layered, how to run it, how to add a feature, what not to break |
 | [`RULES.md`](RULES.md) | Players | How a match feels to play. Geometry numbers here have drifted; do not copy them into code |
 | [`IMPLEMENTATION.md`](IMPLEMENTATION.md) | People changing the game | File map, phase order, result dictionaries, invariants, where to edit |
 
@@ -21,6 +21,32 @@ Godot **4.3**. GDScript. No autoloads. Shared types are `class_name` scripts. Mo
 ```
 
 After a rules change, run the suite before considering it done. Prefer adding a test in `tests/run_tests.gd` in the same change. Prefer `scripted_*` flags on `MatchModel` over seeding RNG.
+
+---
+
+## Adding a feature
+
+A feature is not done when the code runs. The same change must include a test and the docs that describe the new behaviour. Do not leave a “docs later” note.
+
+### Code
+
+1. Edit the layer that owns the behaviour ([Where to edit, by job](#where-to-edit-by-job)). Keep legality in the model, dice math in `MatchRules`, cycle order in `TurnResolver`.
+2. Add or extend a test in `tests/run_tests.gd` in the same change. Prefer `scripted_*` flags on `MatchModel` over seeding RNG.
+3. Run the headless suite. If you add an **action**, also update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, and `AiCoach._score`. `done` is planning-only: skip it in the resolver.
+
+### Docs (same change, not a follow-up)
+
+| File | Update it when… | Write for… |
+|---|---|---|
+| [`RULES.md`](RULES.md) | The match **feels different to play**: a new action, a changed cost / range / formula, kickoff, highlights, turn flow, or a change to what is or is not implemented | Players. No file names, no function names. Geometry must match `MatchRules` — do not leave a new drift row |
+| [`IMPLEMENTATION.md`](IMPLEMENTATION.md) | The **code map** changed: new file, new `action` key, new phase, new invariant, new result flag, new “where to edit” job, or a RULES drift you just fixed | People changing the game |
+| **This file** | A later session would get it wrong without the note: mental model, layering, planning UX, geometry gotchas, invariants, file map, or this checklist | Agents and new sessions |
+
+Skip a file only when that audience cannot be affected. A HUD colour tweak does not need `RULES.md`. A new contest type needs all three.
+
+If you implement something listed under “not implemented”, delete that item from every doc that lists it. If you fix a number already in IMPLEMENTATION’s [Known RULES.md drift](IMPLEMENTATION.md#known-rulesmd-drift) table, delete that row — do not add to the table instead of updating `RULES.md`.
+
+Truth order is unchanged: `scripts/` + tests > `IMPLEMENTATION.md` > `RULES.md`. The point of this checklist is to stop that order from being necessary.
 
 ---
 
@@ -61,7 +87,7 @@ Each cycle:
 
 1. Aether **queues** up to **3 players**, **6 action points** each. Nothing on the board moves.
 2. Helix does the same (in vs-AI, Helix is pre-planned *before* Aether queues, still without seeing Aether’s plans).
-3. `TurnResolver` applies both queues in waves (first action for everyone, then second, …). Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination clashes, then moves/swaps. Straight steps cost 2 AP, diagonal 3 AP. A shot spends leftover AP for +3% hit each and ends that player’s turn.
+3. `TurnResolver` applies both queues in **six AP waves**. An action plays in the wave equal to the cumulative AP spent when it finishes: a 2-AP first step is wave 2, a later 2-AP step on the same player is wave 4, a 3-AP first step is wave 3. Empty waves do nothing. Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination clashes, then moves/swaps. Straight steps cost 2 AP, diagonal 3 AP. A shot spends leftover AP for +3% hit each and ends that player’s turn. A tackle or dribble that rolls a **numeric tie** bounces the ball to a random cell of the 3×3 around it (including staying put). Tackle success is DEF vs CTR minus an approach-angle penalty vs the carrier’s facing (front 0, 45° −15pp, side −30pp, 135° −50pp, back −85pp). A player who steals with a tackle then faces away from the old carrier.
 4. Repeat. A goal rebuilds kickoff; the conceding side has the ball and plans first. Helix’s restart is the 180° of Aether’s 4-4-2. Vs-AI still preplans Helix invisibly and always leaves Aether in the chair — including after a Helix kickoff.
 
 The UI only **queues**. Resolution is the only place pieces, the ball, energy, and score change in a real match. Tests often call `MatchModel.apply_*` directly and skip the queue — that is intentional.
@@ -103,10 +129,10 @@ If a click moves a piece immediately, you bypassed `queue_plan`. If you “just 
 - Command-first UX: select a player, pick an action (Move is armed by default and stays armed after the first step), click a highlighted tile. One cell is often two actions (adjacent empty = move or pass; adjacent teammate = pass or swap; net = shoot and maybe move). Do not revive the old tile-then-chooser without wiring; tests assume command-then-tile.
 - A player’s queued actions are an array, not a single slot. `ap_spent` = sum of each plan’s `ap_cost`. Cap is `PLAYER_ACTION_POINTS` (6). Orthogonal steps cost 2, diagonal 3, turn/pass 1. A shot costs every leftover AP. Cap on distinct acting players is `ACTIONS_PER_SIDE` (3).
 - `planning_pos` / `planning_facing` / `planning_has_ball` walk the acting team’s queue so the second AP, a pass-fed teammate, and a player who steps onto a loose ball can be planned against the *intended* board. The real `PlayerState.pos` / `has_ball` do not change until resolve. If they never actually get the ball, those follow-up actions are cancelled.
-- Filling all 6 AP on 3 players auto-ends the side unless `GameSettings.require_end_turn`. End Turn / Enter / Space is always legal, including 0 actions.
+- Filling all 6 AP on 3 players, or marking those players **Done**, auto-ends the side unless `GameSettings.require_end_turn`. Done costs 0 AP, occupies an acting slot, and blocks further queues for that player. End Turn / Enter / Space is always legal, including 0 actions.
 - Hotseat fog: plan arrows, gold rings, and PLAN log lines are visible only to the team that queued them. Resolution events are public.
 
-Action ids in code: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`.
+Action ids in code: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight), `swap`, `shoot`, `done`.
 
 ---
 
@@ -118,7 +144,7 @@ Constants live on `MatchRules`. Do not hardcode 12-wide / 9-tall leftovers from 
 - Nets are playable (`in_bounds`). Cells like `(-1, 0)` are dead. From a net the keeper has **3** steps onto the pitch (forward + both diagonals).
 - Halfway is `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. Helix’s is `x < 13`. `RULES.md` still says `x ≥ 6` / `x ≤ 5` — that is wrong.
 - Penalty box = the three **pitch** tiles adjacent to that net: Aether `(0, 5) (0, 6) (0, 7)`, Helix `(25, 5) (25, 6) (25, 7)`. Shooting zone = box plus every pitch tile Chebyshev-adjacent to any box tile. You cannot shoot from the net itself.
-- Move = 1 tile into the **3-cell cone** (facing ± 45°). Turn faces 45° or 90° either side (not 180°; that takes two turns). Pass range = 3 Chebyshev, not into the rear cone except adjacent cells.
+- Move = 1 tile into the **3-cell cone** (facing ± 45°). Turn faces 45° or 90° either side (not 180°; that takes two turns). Pass range = Euclidean radius 5 tile lengths (cell centre to cell centre), not into the rear cone except adjacent cells.
 - Kickoff: Aether #9 ST on `CENTER_SPOT` `(12, 6)` with the ball. Helix #9 on `AWAY_KICKOFF` `(14, 7)` when receiving. When Helix kicks, that 4-4-2 is rotated 180° (`AWAY_SPOT` `(13, 6)` with the ball). Two players never share a cell.
 - Intercept and shot math use **tile units**, not pixels. `MatchRules.tile_center(cell)` is `Vector2(cell)`. `TILE_SIZE = 72` is drawing only.
 - Live stats, not printed stats, go to dice and HUD percents. Empty energy **halves** ACC/DEF/CTR; it does not zero them.
@@ -157,10 +183,10 @@ HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markin
 3. **`has_ball` and `ball.carrier_id` stay paired.** Only `_give_ball` / `_release_ball`.
 4. **Planning does not mutate the board.**
 5. **Resolver is the only multi-action path.** Phase order is the design.
-6. **Pass range and move range are different.** Move = 1. Pass = 3.
+6. **Pass range and move range are different.** Move = 1. Pass = Euclidean radius 5.
 7. **Dice use live stats** (`live_accuracy()` etc.).
 8. **Fog is a view filter**, not deleted data. `CombatLog.as_text()` with no args still contains PLAN lines.
-9. **Almost every public function returns `{ok, action, ...}`.** The log formatter and the tween code switch on `action`. Keep those keys stable. If you add an action, update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, `AiCoach._score`, and tests.
+9. **Almost every public function returns `{ok, action, ...}`.** The log formatter and the tween code switch on `action`. Keep those keys stable. If you add an action, update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, `AiCoach._score`, and tests. `done` is planning-only: skip it in the resolver.
 
 ---
 

@@ -33,6 +33,7 @@ var _card_def: Label
 var _card_ctr: Label
 var _card_sta: Label
 var _card_nrg: Label
+var _card_ap: Label
 var _card_vs: Label
 var _card_b_title: Label
 var _card_b_acc: Label
@@ -149,8 +150,10 @@ func _hint_for(
 			model.ap_remaining(selected.id),
 			MatchRules.PLAYER_ACTION_POINTS,
 		]
+	if selected != null and model.player_is_done(selected.id):
+		return "%s is done this turn. Click them twice to clear their plan." % selected.label()
 	if selected != null:
-		return "Pick an action for %s (%d/%d AP), then click a highlighted tile. Keys 1–9 select actions." % [
+		return "Pick an action for %s (%d/%d AP), then click a highlighted tile. Keys 1–9 select actions. Done parks leftover AP." % [
 			selected.label(),
 			model.ap_remaining(selected.id),
 			MatchRules.PLAYER_ACTION_POINTS,
@@ -163,8 +166,8 @@ func _hint_for(
 			return "Pick up to %d %s players (%d AP each). Press End Turn to lock in. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
 		return "Pick up to %d %s players (%d AP each). Press End Turn to lock in. Click a planned player twice to clear their actions." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
 	if holder == null:
-		return "Pick up to %d %s players (%d AP each). Filling 3 players' AP ends the turn; End Turn finishes early." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
-	return "Pick up to %d %s players (%d AP each). Filling 3 players' AP ends the turn; End Turn finishes early. Click a planned player twice to clear." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
+		return "Pick up to %d %s players (%d AP each). Filling 3 players' AP or marking them Done ends the turn; End Turn finishes early." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
+	return "Pick up to %d %s players (%d AP each). Filling 3 players' AP or marking them Done ends the turn; End Turn finishes early. Click a planned player twice to clear." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
 
 
 func _event_line(event: Dictionary) -> String:
@@ -177,7 +180,7 @@ func _show_inspector(model: MatchModel, selected: PlayerState, hovered: PlayerSt
 		_card.visible = false
 		return
 	_card.visible = true
-	_fill_card(primary, _card_title, _card_acc, _card_def, _card_ctr, _card_sta, _card_nrg)
+	_fill_card(model, primary, _card_title, _card_acc, _card_def, _card_ctr, _card_sta, _card_nrg, _card_ap)
 
 	var compare := (
 		hovered != null
@@ -199,7 +202,7 @@ func _show_inspector(model: MatchModel, selected: PlayerState, hovered: PlayerSt
 			kind = "dribble"
 		elif hovered.has_ball:
 			kind = "tackle"
-		_fill_card(hovered, _card_b_title, _card_b_acc, _card_b_def, _card_b_ctr, _card_b_sta, _card_b_nrg)
+		_fill_card(model, hovered, _card_b_title, _card_b_acc, _card_b_def, _card_b_ctr, _card_b_sta, _card_b_nrg)
 		if kind == "dribble":
 			_emphasize_stat(_card_ctr, true)
 			_emphasize_stat(_card_b_def, true)
@@ -209,17 +212,19 @@ func _show_inspector(model: MatchModel, selected: PlayerState, hovered: PlayerSt
 		else:
 			_emphasize_stat(_card_ctr, true)
 			_emphasize_stat(_card_b_ctr, true)
-	_card.offset_bottom = 400.0 if compare else 236.0
+	_card.offset_bottom = 420.0 if compare else 256.0
 
 
 func _fill_card(
+	model: MatchModel,
 	player: PlayerState,
 	title: Label,
 	acc: Label,
 	defense: Label,
 	ctr: Label,
 	sta: Label,
-	nrg: Label
+	nrg: Label,
+	ap: Label = null
 ) -> void:
 	title.text = player.label()
 	title.add_theme_color_override(
@@ -236,6 +241,14 @@ func _fill_card(
 	ctr.add_theme_color_override("font_color", CTR_COLOR)
 	sta.add_theme_color_override("font_color", STA_COLOR)
 	nrg.add_theme_color_override("font_color", NRG_COLOR)
+	if ap != null:
+		var left := model.ap_remaining(player.id)
+		if model.player_is_done(player.id):
+			ap.text = "AP   %d/%d  DONE" % [left, MatchRules.PLAYER_ACTION_POINTS]
+		else:
+			ap.text = "AP   %d/%d" % [left, MatchRules.PLAYER_ACTION_POINTS]
+		ap.add_theme_color_override("font_color", Color("ffe27a"))
+		ap.visible = true
 
 
 func _stat_text(name: String, live: int, base: int) -> String:
@@ -412,7 +425,7 @@ func _on_command_pressed(action_id: String) -> void:
 func _command_button(text: String) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(108, 36)
+	button.custom_minimum_size = Vector2(96, 36)
 	button.focus_mode = Control.FOCUS_NONE
 	button.mouse_filter = Control.MOUSE_FILTER_STOP
 	button.add_theme_font_size_override("font_size", 14)
@@ -557,7 +570,7 @@ func _build_card() -> void:
 	_card.offset_left = 8.0
 	_card.offset_top = 120.0
 	_card.offset_right = 128.0
-	_card.offset_bottom = 236.0
+	_card.offset_bottom = 256.0
 	add_child(_card)
 
 	var edge := ColorRect.new()
@@ -578,33 +591,35 @@ func _build_card() -> void:
 	_card_ctr = _stat_label(8, 64, CTR_COLOR)
 	_card_sta = _stat_label(8, 84, STA_COLOR)
 	_card_nrg = _stat_label(8, 104, NRG_COLOR)
+	_card_ap = _stat_label(8, 124, Color("ffe27a"))
 	_card.add_child(_card_acc)
 	_card.add_child(_card_def)
 	_card.add_child(_card_ctr)
 	_card.add_child(_card_sta)
 	_card.add_child(_card_nrg)
+	_card.add_child(_card_ap)
 
 	_card_vs = _label("VS", 11, Color(0.85, 0.85, 0.9, 0.7), HORIZONTAL_ALIGNMENT_CENTER)
 	_card_vs.offset_left = 8.0
-	_card_vs.offset_top = 128.0
+	_card_vs.offset_top = 148.0
 	_card_vs.offset_right = 116.0
-	_card_vs.offset_bottom = 144.0
+	_card_vs.offset_bottom = 164.0
 	_card_vs.visible = false
 	_card.add_child(_card_vs)
 
 	_card_b_title = _label("", 12, Color("ff4d8d"), HORIZONTAL_ALIGNMENT_LEFT)
 	_card_b_title.offset_left = 8.0
-	_card_b_title.offset_top = 146.0
+	_card_b_title.offset_top = 166.0
 	_card_b_title.offset_right = 116.0
-	_card_b_title.offset_bottom = 164.0
+	_card_b_title.offset_bottom = 184.0
 	_card_b_title.visible = false
 	_card.add_child(_card_b_title)
 
-	_card_b_acc = _stat_label(8, 166, ACC_COLOR)
-	_card_b_def = _stat_label(8, 186, DEF_COLOR)
-	_card_b_ctr = _stat_label(8, 206, CTR_COLOR)
-	_card_b_sta = _stat_label(8, 226, STA_COLOR)
-	_card_b_nrg = _stat_label(8, 246, NRG_COLOR)
+	_card_b_acc = _stat_label(8, 186, ACC_COLOR)
+	_card_b_def = _stat_label(8, 206, DEF_COLOR)
+	_card_b_ctr = _stat_label(8, 226, CTR_COLOR)
+	_card_b_sta = _stat_label(8, 246, STA_COLOR)
+	_card_b_nrg = _stat_label(8, 266, NRG_COLOR)
 	for label in [_card_b_acc, _card_b_def, _card_b_ctr, _card_b_sta, _card_b_nrg]:
 		label.visible = false
 		_card.add_child(label)

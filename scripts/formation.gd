@@ -3,7 +3,7 @@ extends RefCounted
 
 ## 4-4-2 kickoff on the 26×13 grid. Home attacks +x, away attacks −x.
 ## y=0 is the top touchline (home's left wing).
-## Forwards and central mids sit 3 tiles apart around halfway so kickoff passes still reach.
+## Forwards and central mids sit 3 Chebyshev tiles apart around halfway.
 ## The receiving strikers start one cell off the centre so they cannot contest the first pass.
 ## When Helix kicks, both shapes are rotated 180° through the pitch centre.
 ## The extra length sits behind the back four; full-backs stay on the touchlines.
@@ -65,19 +65,19 @@ static func _away() -> Array[Dictionary]:
 static func base_stats(role: String) -> Dictionary:
 	match role:
 		"GK":
-			return _stats(8, 13, 11, 7)
+			return _stats(10, 20, 20, 10)
 		"LB", "RB":
-			return _stats(10, 11, 8, 10)
+			return _stats(10, 15, 15, 10)
 		"LCB", "RCB":
-			return _stats(8, 13, 7, 8)
+			return _stats(10, 20, 20, 10)
 		"LM", "RM":
-			return _stats(16, 6, 9, 11)
+			return _stats(15, 10, 10, 10)
 		"LCM", "RCM":
-			return _stats(12, 8, 7, 13)
+			return _stats(10, 15, 15, 10)
 		"ST":
-			return _stats(26, 4, 9, 9)
+			return _stats(20, 10, 15, 10)
 		_:
-			return _stats(16, 8, 8, 8)
+			return _stats(10, 10, 10, 10)
 
 
 static func _stats(accuracy: int, defense: int, control: int, stamina: int) -> Dictionary:

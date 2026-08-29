@@ -22,6 +22,10 @@ var combat_log := _CombatLog.new()
 var ignore_team_gate: bool = false
 ## null = roll; true = attacker wins; false = occupant wins. Tests use this.
 var scripted_attacker_wins = null
+## null = roll; true = force a numeric tie (dribble/tackle bounce). Tests use this.
+var scripted_contest_tie = null
+## null = random bounce cell; Vector2i = that cell. Tests use this.
+var scripted_bounce_cell = null
 ## null = roll; true = first interceptor wins the ball; false = passer beats every interceptor.
 var scripted_first_intercept_wins = null
 ## null = roll; "goal", "save", or "miss".
@@ -261,8 +265,17 @@ func clear_plan(player_id: int) -> Dictionary:
 	return {ok = true, action = "clear_plan", player_id = player_id}
 
 
+func player_is_done(player_id: int) -> bool:
+	for plan in plans_of(player_id):
+		if str(plan.get("action", "")) == "done":
+			return true
+	return false
+
+
 func can_queue(player: PlayerState) -> bool:
 	if not _acting_allowed(player):
+		return false
+	if player_is_done(player.id):
 		return false
 	var spent := ap_spent(player.id)
 	if spent >= MatchRules.PLAYER_ACTION_POINTS:
@@ -286,6 +299,7 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 	if cost > remaining:
 		return {ok = false, reason = "not_enough_ap"}
 	var ap_index := plans_of(player_id).size()
+	var ap_end := ap_spent(player_id) + cost
 	var plan := {
 		player_id = player_id,
 		team = player.team,
@@ -295,6 +309,7 @@ func queue_plan(player_id: int, action: Dictionary) -> Dictionary:
 		origin = origin,
 		ap_index = ap_index,
 		ap_cost = cost,
+		ap_end = ap_end,
 		ap_left = remaining,
 		label = str(action.get("label", action_id)),
 		expects_ball = (
@@ -439,7 +454,7 @@ func _pass_geometry_ok(passer: PlayerState, dest: Vector2i) -> bool:
 	var from := _query_pos(passer)
 	if not MatchRules.in_bounds(dest) or dest == from:
 		return false
-	if MatchRules.chebyshev(from, dest) > MatchRules.PASS_RANGE:
+	if not MatchRules.in_pass_range(from, dest):
 		return false
 	if MatchRules.is_back_pass(from, dest, _query_facing(passer)):
 		return false
@@ -521,7 +536,7 @@ func _cells_in_range(origin: Vector2i, reach: int) -> Array[Vector2i]:
 			var dest := Vector2i(x, y)
 			if dest == origin or not MatchRules.in_bounds(dest):
 				continue
-			if MatchRules.chebyshev(origin, dest) <= reach:
+			if MatchRules.tile_distance(origin, dest) <= float(reach) + 0.0001:
 				cells.append(dest)
 	return cells
 
@@ -607,6 +622,8 @@ func commands_for(player: PlayerState) -> Array[Dictionary]:
 			var bonus_pct := int(round(MatchRules.shot_ap_bonus(leftover) * 100.0))
 			label = "Shoot +%d%%" % bonus_pct
 		result.append({id = spec.id, label = label, dests = dests})
+	if ap_remaining(player.id) > 0:
+		result.append({id = "done", label = "Done", dests = []})
 	return result
 
 
@@ -888,14 +905,16 @@ func pass_preview(passer: PlayerState, dest: Vector2i) -> Dictionary:
 	var total_pct := int(round(total * 100.0))
 	var occupant := player_at(dest)
 	var target_name := occupant.label() if occupant != null else "open square"
-	var dist := MatchRules.chebyshev(passer.pos, dest)
+	var dist := MatchRules.tile_distance(passer.pos, dest)
 	var offside := occupant != null and is_offside_receiver(passer, occupant)
 	var taker: PlayerState = null
 	if offside:
 		taker = closest_player(MatchRules.opposite_team(passer.team), dest)
-	var header := "pass to %s (%d %s)" % [target_name, dist, "tile" if dist == 1 else "tiles"]
+	var dist_txt := str(int(round(dist))) if is_equal_approx(dist, round(dist)) else ("%.1f" % dist)
+	var unit := "tile" if is_equal_approx(dist, 1.0) else "tiles"
+	var header := "pass to %s (%s %s)" % [target_name, dist_txt, unit]
 	if offside:
-		header = "OFFSIDE pass to %s (%d %s)" % [target_name, dist, "tile" if dist == 1 else "tiles"]
+		header = "OFFSIDE pass to %s (%s %s)" % [target_name, dist_txt, unit]
 	if offside and taker != null:
 		lines.append(
 			"If it arrives: offside. %s takes the tile and the ball." % taker.label()
@@ -1219,10 +1238,19 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		defender_name = "CTR"
 	var holder := carrier()
 	var possession_team := holder.team if holder != null else -1
-	var ties_to_atk := MatchRules.attacker_wins_ties(player, occupant, possession_team)
+	var ties_to_atk := false
+	if not is_dribble and not is_tackle:
+		ties_to_atk = MatchRules.attacker_wins_ties(player, occupant, possession_team)
 	var roll := MatchRules.resolve_contest(attacker_stat, defender_stat, rng, ties_to_atk)
 	if scripted_attacker_wins != null:
 		MatchRules.apply_scripted_winner(roll, bool(scripted_attacker_wins))
+	elif scripted_contest_tie:
+		MatchRules.apply_scripted_tie(roll)
+	var tackle_dir := {}
+	if is_tackle:
+		tackle_dir = MatchRules.tackle_direction(occupant.facing, player.pos, dest)
+		if scripted_attacker_wins == null and not scripted_contest_tie:
+			MatchRules.apply_tackle_direction_penalty(roll, float(tackle_dir.penalty), rng)
 
 	var result := {
 		ok = true,
@@ -1234,6 +1262,8 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		gained_possession = false,
 		lost_possession = false,
 		contest_won = roll.attacker_won,
+		contest_tied = false,
+		bounced = false,
 		displaced_id = -1,
 		attacker_label = player.label(),
 		defender_label = occupant.label(),
@@ -1246,6 +1276,10 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		attacker_total = roll.attacker_total,
 		defender_total = roll.defender_total,
 	}
+	if not tackle_dir.is_empty():
+		result.angle_deg = tackle_dir.angle_deg
+		result.angle_penalty = tackle_dir.penalty
+		result.angle_label = tackle_dir.label
 
 	if roll.attacker_won:
 		player.relocate(dest)
@@ -1256,6 +1290,15 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		elif is_tackle:
 			_give_ball(player)
 			result.gained_possession = true
+			_face_away_from(player, occupant)
+			result.facing = player.facing
+	elif (is_dribble or is_tackle) and bool(roll.get("tied", false)):
+		var bounce_cell := _bounce_ball()
+		result.contest_tied = true
+		result.bounced = true
+		result.bounce_cell = bounce_cell
+		result.lost_possession = holder != null and not holder.has_ball
+		result.gained_possession = player.has_ball and (holder == null or holder.id != player.id)
 	elif is_dribble:
 		_give_ball(occupant)
 		result.lost_possession = true
@@ -1276,6 +1319,15 @@ func _finish_action(player: PlayerState, result: Dictionary) -> Dictionary:
 	if player != null and result.get("ok", false):
 		player.spend_energy()
 	return result
+
+
+## Face away from `other` so the winner's back is toward the player they stole from.
+func _face_away_from(player: PlayerState, other: PlayerState) -> void:
+	if player == null or other == null:
+		return
+	if player.pos == other.pos:
+		return
+	player.facing = MatchRules.step_direction(other.pos, player.pos)
 
 
 func _carrier_in_opponent_net(player: PlayerState) -> bool:
@@ -1305,6 +1357,25 @@ func _release_ball(pos: Vector2i) -> void:
 		previous.has_ball = false
 	ball.carrier_id = -1
 	ball.pos = pos
+
+
+## Scatter the live ball to one cell of the 3×3 around its current tile.
+## Occupied landings give that player the ball; empty landings leave it loose.
+func _bounce_ball() -> Vector2i:
+	var origin := ball.pos
+	var cell: Vector2i = origin
+	if scripted_bounce_cell != null:
+		cell = scripted_bounce_cell
+	else:
+		cell = MatchRules.pick_bounce_cell(origin, rng)
+	if not MatchRules.in_bounds(cell):
+		cell = origin
+	var occupant := player_at(cell)
+	if occupant != null:
+		_give_ball(occupant)
+	else:
+		_release_ball(cell)
+	return cell
 
 
 func _positions_unique() -> bool:

@@ -170,7 +170,9 @@ static func format_result(event: Dictionary) -> String:
 	elif action == "tackle":
 		verb = "TACKLE"
 	var outcome := "WON" if event.get("contest_won", false) else "LOST"
-	return "%s %s  %s %s %s  vs  %s %s %s" % [
+	if event.get("contest_tied", false) or event.get("bounced", false):
+		outcome = "BOUNCE"
+	var line := "%s %s  %s %s %s  vs  %s %s %s" % [
 		verb,
 		outcome,
 		event.get("attacker_label", "attacker"),
@@ -180,6 +182,18 @@ static func format_result(event: Dictionary) -> String:
 		event.get("defender_stat_name", "DEF"),
 		dice_text(event.get("defender_stat", 0), event.get("defender_dice", 0)),
 	]
+	if event.get("bounced", false):
+		line += "  →  %s" % cell_text(event.get("bounce_cell", event.get("dest", Vector2i.ZERO)))
+	if action == "tackle" and event.has("angle_label"):
+		var penalty := float(event.get("angle_penalty", 0.0))
+		if penalty < 0.0:
+			line += "  (%s %d%%)" % [
+				event.get("angle_label", "angle"),
+				int(round(penalty * 100.0)),
+			]
+		else:
+			line += "  (%s)" % event.get("angle_label", "front")
+	return line
 
 
 static func dice_text(stat: int, roll: int) -> String:
@@ -204,6 +218,8 @@ static func plan_summary(plan: Dictionary) -> String:
 			core = "%s → %s" % [action, cell_text(dest)]
 		"turn":
 			core = "turn → %s" % cell_text(dest)
+		"done":
+			return "done"
 		_:
 			core = "move → %s" % cell_text(dest)
 	return "%s  %d AP" % [core, cost]

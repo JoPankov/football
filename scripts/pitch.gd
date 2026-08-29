@@ -258,6 +258,8 @@ func _draw_plans() -> void:
 	var tile := MatchRules.TILE_SIZE
 	for plan in plan_markers:
 		var act := str(plan.get("action", ""))
+		if act == "done":
+			continue
 		var from_cell: Vector2i = plan.get("origin", Vector2i.ZERO)
 		var to_cell: Vector2i = plan.get("dest", from_cell)
 		var start := grid_to_world(from_cell)

@@ -8,7 +8,8 @@ enum Team { HOME, AWAY }
 const GRID_WIDTH := 26
 const GRID_HEIGHT := 13
 const MOVE_DISTANCE := 1
-const PASS_RANGE := 3
+## Euclidean pass radius in tile lengths, centre to centre. Orthogonal 5 is in; (5,1) is out.
+const PASS_RANGE := 5
 const ACTIONS_PER_SIDE := 3
 const PLAYER_ACTION_POINTS := 6
 const DEFAULT_ACTION_COST := 1
@@ -38,6 +39,13 @@ const SHOT_AP_HIT_BONUS := 0.03
 const STEP_ACTIONS: Array[String] = ["move", "dribble", "tackle", "challenge", "swap"]
 ## Rear pass cone: directly back plus this many degrees to each side.
 const BACK_PASS_HALF_ANGLE_DEG := 43.0
+## Tackle success penalty by approach angle vs the carrier's facing.
+## Front is 0°; back is 180°. Values are percentage points on the dice chance.
+const TACKLE_FRONT_PENALTY := 0.0
+const TACKLE_45_PENALTY := -0.15
+const TACKLE_SIDE_PENALTY := -0.30
+const TACKLE_135_PENALTY := -0.50
+const TACKLE_BACK_PENALTY := -0.85
 
 ## 1dSTAT faces are 1..stat. Live stats are already at least 1.
 
@@ -150,13 +158,15 @@ static func step_ap_cost(from: Vector2i, to: Vector2i) -> int:
 	return MOVE_ORTHO_COST
 
 
-## Shoot spends every leftover AP. Steps cost 2 orthogonal / 3 diagonal. Else 1.
+## Shoot spends every leftover AP. Done costs 0. Steps cost 2 orthogonal / 3 diagonal. Else 1.
 static func action_ap_cost(
 	action_id: String,
 	from: Vector2i,
 	to: Vector2i,
 	remaining_ap: int
 ) -> int:
+	if action_id == "done":
+		return 0
 	if action_id == "shoot":
 		return maxi(1, remaining_ap)
 	if action_id in STEP_ACTIONS:
@@ -170,6 +180,15 @@ static func in_bounds(pos: Vector2i) -> bool:
 
 static func chebyshev(a: Vector2i, b: Vector2i) -> int:
 	return maxi(absi(a.x - b.x), absi(a.y - b.y))
+
+
+## Euclidean distance between cell centres, in tile lengths.
+static func tile_distance(a: Vector2i, b: Vector2i) -> float:
+	return tile_center(a).distance_to(tile_center(b))
+
+
+static func in_pass_range(from: Vector2i, to: Vector2i) -> bool:
+	return tile_distance(from, to) <= float(PASS_RANGE) + 0.0001
 
 
 static func is_adjacent(from: Vector2i, to: Vector2i) -> bool:
@@ -369,7 +388,27 @@ static func scaled_stat(base: int, energy: int, pool: int) -> int:
 	return maxi(1, int(floor(float(base) * energy_factor(energy, pool) + 0.5)))
 
 
-## Each side rolls 1dSTAT (1..stat). Higher roll wins. Ties go to the team with the ball.
+## The 3×3 neighbourhood centred on `origin`, including the origin itself.
+## Out-of-bounds cells are dropped, so edges and nets yield fewer than 9.
+static func bounce_cells(origin: Vector2i) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var cell := origin + Vector2i(dx, dy)
+			if in_bounds(cell):
+				cells.append(cell)
+	return cells
+
+
+static func pick_bounce_cell(origin: Vector2i, rng: RandomNumberGenerator) -> Vector2i:
+	var cells := bounce_cells(origin)
+	if cells.is_empty():
+		return origin
+	return cells[rng.randi_range(0, cells.size() - 1)]
+
+
+## Each side rolls 1dSTAT (1..stat). Higher roll wins. Numeric ties set `tied`.
+## When `tie_goes_to_attacker`, a numeric tie is still an attacker win.
 static func resolve_contest(
 	attacker_stat: int,
 	defender_stat: int,
@@ -378,9 +417,10 @@ static func resolve_contest(
 ) -> Dictionary:
 	var attacker_dice := roll_d_stat(attacker_stat, rng)
 	var defender_dice := roll_d_stat(defender_stat, rng)
+	var tied := attacker_dice == defender_dice
 	var attacker_won := (
 		attacker_dice > defender_dice
-		or (attacker_dice == defender_dice and tie_goes_to_attacker)
+		or (tied and tie_goes_to_attacker)
 	)
 	return {
 		attacker_stat = attacker_stat,
@@ -390,12 +430,14 @@ static func resolve_contest(
 		attacker_total = attacker_dice,
 		defender_total = defender_dice,
 		attacker_won = attacker_won,
+		tied = tied,
 	}
 
 
 ## Tests force a winner; dice are filled in so the log still reads as 1dSTAT.
 static func apply_scripted_winner(roll: Dictionary, attacker_won: bool) -> void:
 	roll.attacker_won = attacker_won
+	roll.tied = false
 	if attacker_won:
 		roll.attacker_dice = maxi(int(roll.get("attacker_stat", 1)), 2)
 		roll.defender_dice = 1
@@ -404,6 +446,20 @@ static func apply_scripted_winner(roll: Dictionary, attacker_won: bool) -> void:
 		roll.defender_dice = maxi(int(roll.get("defender_stat", 1)), 2)
 	roll.attacker_total = roll.attacker_dice
 	roll.defender_total = roll.defender_dice
+
+
+## Tests force a numeric tie. Dice share the smaller face so the log still reads 1dSTAT.
+static func apply_scripted_tie(roll: Dictionary) -> void:
+	var face := mini(
+		maxi(int(roll.get("attacker_stat", 1)), 1),
+		maxi(int(roll.get("defender_stat", 1)), 1)
+	)
+	roll.tied = true
+	roll.attacker_won = false
+	roll.attacker_dice = face
+	roll.defender_dice = face
+	roll.attacker_total = face
+	roll.defender_total = face
 
 
 ## If one contestant has the ball they win ties. Else the side in possession.
@@ -424,6 +480,99 @@ static func attacker_wins_ties(
 	if possession_team < 0:
 		return false
 	return attacker.team == possession_team
+
+
+## Angle between the carrier's facing and the cell the tackler is coming from.
+## Snaps to the 8-dir ring: 0 front, 45, 90 side, 135, 180 back.
+static func tackle_approach_angle_deg(
+	carrier_facing: Vector2i,
+	tackler_pos: Vector2i,
+	from_cell: Vector2i
+) -> int:
+	var face := Vector2(normalize_facing(carrier_facing))
+	var approach := Vector2(tackler_pos - from_cell)
+	if face == Vector2.ZERO or approach == Vector2.ZERO:
+		return 0
+	var angle_deg := absf(rad_to_deg(face.angle_to(approach)))
+	var snapped_deg := int(round(angle_deg / 45.0)) * 45
+	return clampi(snapped_deg, 0, 180)
+
+
+static func tackle_angle_penalty(angle_deg: int) -> float:
+	match angle_deg:
+		0:
+			return TACKLE_FRONT_PENALTY
+		45:
+			return TACKLE_45_PENALTY
+		90:
+			return TACKLE_SIDE_PENALTY
+		135:
+			return TACKLE_135_PENALTY
+		180:
+			return TACKLE_BACK_PENALTY
+		_:
+			return TACKLE_FRONT_PENALTY
+
+
+static func tackle_angle_label(angle_deg: int) -> String:
+	match angle_deg:
+		0:
+			return "front"
+		45:
+			return "45°"
+		90:
+			return "side"
+		135:
+			return "135°"
+		180:
+			return "back"
+		_:
+			return "%d°" % angle_deg
+
+
+static func tackle_direction(
+	carrier_facing: Vector2i,
+	tackler_pos: Vector2i,
+	from_cell: Vector2i
+) -> Dictionary:
+	var angle_deg := tackle_approach_angle_deg(carrier_facing, tackler_pos, from_cell)
+	var penalty := tackle_angle_penalty(angle_deg)
+	return {
+		angle_deg = angle_deg,
+		penalty = penalty,
+		label = tackle_angle_label(angle_deg),
+	}
+
+
+static func apply_tackle_angle_chance(base_chance: float, penalty: float) -> float:
+	return clampf(base_chance + penalty, 0.0, 1.0)
+
+
+## After a 1dSTAT win, drop some successes so overall P(win) matches the angled chance.
+## Ties are left alone. A 0% final chance converts every dice win into a loss.
+static func apply_tackle_direction_penalty(
+	roll: Dictionary,
+	penalty: float,
+	rng: RandomNumberGenerator
+) -> void:
+	if penalty >= 0.0:
+		return
+	if not bool(roll.get("attacker_won", false)) or bool(roll.get("tied", false)):
+		return
+	var base := contest_win_chance(
+		int(roll.get("attacker_stat", 1)),
+		int(roll.get("defender_stat", 1)),
+		false
+	)
+	var final_chance := apply_tackle_angle_chance(base, penalty)
+	if final_chance <= 0.0:
+		roll.attacker_won = false
+		return
+	if base <= 0.0:
+		return
+	var keep := final_chance / base
+	if rng.randf() >= keep:
+		roll.attacker_won = false
 
 
 ## Chance the attacker wins a 1dSTAT vs 1dSTAT contest.
@@ -472,18 +621,28 @@ static func contest_preview(
 		def_name = "CTR"
 		atk = mover.live_defense()
 		deff = occupant.live_control()
+	## Dribble and tackle ties bounce the ball; they are not attacker wins.
 	var ties_to_atk := false
-	if on_ball:
-		ties_to_atk = true
-	elif occupant.has_ball:
+	if on_ball or occupant.has_ball:
 		ties_to_atk = false
 	else:
 		ties_to_atk = attacker_wins_ties(mover, occupant, possession_team)
 	var chance := contest_win_chance(atk, deff, ties_to_atk)
+	var angle_deg := 0
+	var angle_penalty := 0.0
+	var angle_label := "front"
+	if action == "tackle":
+		var direction := tackle_direction(occupant.facing, mover.pos, occupant.pos)
+		angle_deg = int(direction.angle_deg)
+		angle_penalty = float(direction.penalty)
+		angle_label = str(direction.label)
+		chance = apply_tackle_angle_chance(chance, angle_penalty)
 	var pct := int(round(chance * 100.0))
 	var text := "%s %s %d %s vs %d %s = %d%% success" % [
 		verb, occupant.label(), atk, atk_name, deff, def_name, pct
 	]
+	if action == "tackle" and angle_penalty < 0.0:
+		text += " (%s %d%%)" % [angle_label, int(round(angle_penalty * 100.0))]
 	return {
 		action = action,
 		verb = verb,
@@ -493,6 +652,9 @@ static func contest_preview(
 		defender_stat = deff,
 		chance = chance,
 		percent = pct,
+		angle_deg = angle_deg,
+		angle_penalty = angle_penalty,
+		angle_label = angle_label,
 		text = text,
 	}
 
