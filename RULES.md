@@ -53,7 +53,7 @@ Kickoff values by role:
 4. Repeat for up to **3 different players**, **6 AP** each. Gold pips around a piece show leftover AP after that player has spent at least one point. A gold ring marks a planned player; arrows show their queued steps.
 5. Filling **all 6 AP on 3 players**, or marking those players **Done**, ends the turn automatically. **Done** parks leftover AP and a mint check shows they are finished. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
 6. After Helix’s turn ends, all queued actions resolve in **six AP waves**. A 2-AP first step plays in wave 2; a later 2-AP step on the same player plays in wave 4. The match log lists every public event and roll.
-7. Click a planned player twice to clear their actions and pick someone else. **Right-click an adjacent tile** to turn toward it (1 AP up to 90°, 2 AP for 135°/180°) without picking Turn first. Right-click anywhere else, or Escape, cancels the current action, then the selection; Escape with nothing selected opens the menu.
+7. **Backspace** cancels the latest queued action of the selected player. With nobody selected — or if the selected player has no actions — it cancels this side’s latest action. Click a planned player twice to clear all of theirs and pick someone else. **Right-click an adjacent tile** to turn toward it (1 AP up to 90°, 2 AP for 135°/180°) without picking Turn first. Right-click anywhere else, or Escape, cancels the current action, then the selection; Escape with nothing selected opens the menu.
 
 You cannot pick a fourth player.
 
@@ -96,7 +96,7 @@ Highlights (after you pick an action):
 - Choosing it from the action bar queues immediately — no tile click.
 - They still occupy one of the **3 player slots**. A mint check on the piece marks them finished.
 - They no longer count as an unmoved player for auto-end. Filling 3 players who are out of AP **or** Done ends the turn.
-- Click the piece twice to clear their plan and pick someone else.
+- **Backspace** undoes Done (or their last queued action). Click the piece twice to clear their plan and pick someone else.
 
 ### Swap places
 

@@ -395,6 +395,57 @@ func _test_action_points() -> void:
 			saw_done = true
 	_assert(not saw_done, "done is planning-only and is not resolved")
 
+	var undo := MatchModel.new()
+	undo.setup_kickoff()
+	var undo_st := undo.player_at(MatchRules.CENTER_SPOT)
+	_assert(not undo.pop_last_plan().ok, "popping an empty queue fails")
+	_assert(undo.queue_plan(undo_st.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "first undo step queues")
+	_assert(undo.queue_plan(undo_st.id, {id = "move", dest = _spot(2, 0), label = "Move"}).ok, "second undo step queues")
+	_assert(undo.ap_spent(undo_st.id) == 4, "two straight steps spend 4 AP before pop")
+	_assert(undo.combat_log.as_text().contains("move → (14, 8)"), "PLAN log lists the second step")
+	var popped := undo.pop_last_plan(undo_st.id)
+	_assert(popped.ok and str(popped.get("action", "")) == "pop_plan", "pop_last_plan removes the latest action")
+	_assert(undo.ap_spent(undo_st.id) == 2, "popping the last step refunds its AP")
+	_assert(undo.planning_pos(undo_st) == _spot(1, 0), "planning position rewinds to the remaining step")
+	_assert(undo.plans_of(undo_st.id).size() == 1, "the earlier step stays queued")
+	_assert(not undo.combat_log.as_text().contains("move → (14, 8)"), "popping drops that PLAN log line")
+	_assert(undo.combat_log.as_text().contains("move → (13, 8)"), "the remaining PLAN line stays")
+	var undone_done := MatchModel.new()
+	undone_done.setup_kickoff()
+	var done_st := undone_done.player_at(MatchRules.CENTER_SPOT)
+	_assert(undone_done.queue_plan(done_st.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "done-undo starts with a move")
+	_assert(undone_done.queue_plan(done_st.id, {id = "done", dest = _spot(1, 0), label = "Done"}).ok, "done-undo then parks")
+	_assert(undone_done.player_is_done(done_st.id), "player is done before pop")
+	_assert(undone_done.pop_last_plan(done_st.id).ok, "popping Done is legal")
+	_assert(not undone_done.player_is_done(done_st.id), "popping Done un-dones the player")
+	_assert(undone_done.can_queue(done_st), "the player can queue again after undoing Done")
+	_assert(undone_done.ap_spent(done_st.id) == 2, "the move before Done is still queued")
+	var pass_undo := MatchModel.new()
+	pass_undo.setup_kickoff()
+	var pass_st := pass_undo.player_at(MatchRules.CENTER_SPOT)
+	var pass_mate := pass_undo.player_at(_spot(0, -1))
+	_assert(pass_mate != null, "kickoff places a teammate next to the carrier")
+	_assert(
+		pass_undo.queue_plan(
+			pass_st.id,
+			{id = "pass", dest = pass_mate.pos, target_id = pass_mate.id, label = "Pass"}
+		).ok,
+		"pass to the teammate queues"
+	)
+	_assert(pass_undo.planning_has_ball(pass_mate), "queued pass grants the teammate planning possession")
+	_assert(pass_undo.pop_last_plan().ok, "popping with no player id uses the side's last plan")
+	_assert(pass_undo.planning_has_ball(pass_st), "undoing the pass restores the passer")
+	_assert(not pass_undo.planning_has_ball(pass_mate), "the teammate no longer has planning possession")
+	var two := MatchModel.new()
+	two.setup_kickoff()
+	var two_a := two.player_at(MatchRules.CENTER_SPOT)
+	var two_b := two.player_at(_spot(0, -1))
+	_assert(two.queue_plan(two_a.id, {id = "move", dest = _spot(1, 0), label = "Move"}).ok, "first actor queues before a teammate pop")
+	_assert(two.queue_plan(two_b.id, {id = "move", dest = _spot(1, -1), label = "Move"}).ok, "second actor queues after")
+	_assert(two.pop_last_plan(two_a.id).ok, "popping a selected player undoes their last action, not the side's last")
+	_assert(two.plans_of(two_a.id).is_empty(), "first actor has no plan after their pop")
+	_assert(two.plans_of(two_b.id).size() == 1, "the teammate's later action stays queued")
+
 
 func _test_move_destinations() -> void:
 	print("-- destinations")
@@ -2218,6 +2269,61 @@ func _test_controller_click_flow() -> void:
 	space_main._input(space)
 	_assert(space_main.model.current_team == MatchRules.Team.AWAY, "spacebar ends the turn")
 	space_main.queue_free()
+
+	var undo_main: Node = packed.instantiate()
+	root.add_child(undo_main)
+	undo_main.animate_moves = false
+	undo_main.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	undo_main.handle_cell_clicked(_spot(1, 0))
+	undo_main.handle_cell_clicked(_spot(2, 0))
+	var undo_st: PlayerState = undo_main.model.player_at(MatchRules.CENTER_SPOT)
+	_assert(undo_main.model.ap_spent(undo_st.id) == 4, "two chained moves spend 4 AP before backspace")
+	var backspace := InputEventKey.new()
+	backspace.pressed = true
+	backspace.keycode = KEY_BACKSPACE
+	undo_main._unhandled_input(backspace)
+	_assert(undo_main.model.ap_spent(undo_st.id) == 2, "backspace pops the latest queued step")
+	_assert(undo_main.selected_id == undo_st.id, "backspace keeps the player selected")
+	_assert(undo_main._pending_action == "move", "backspace re-arms move")
+	_assert(
+		undo_main.pieces[undo_st.id].position == undo_main.pitch.grid_to_world(_spot(1, 0)),
+		"preview snaps back to the remaining step"
+	)
+	_assert(undo_main.model.plans_of(undo_st.id).size() == 1, "one queued action remains after the first backspace")
+	undo_main._unhandled_input(backspace)
+	_assert(undo_main.model.plans_of(undo_st.id).is_empty(), "second backspace clears the last action")
+	_assert(
+		undo_main.pieces[undo_st.id].position == undo_main.pitch.grid_to_world(MatchRules.CENTER_SPOT),
+		"preview snaps back to kickoff after undoing every step"
+	)
+	var empty_undo: Dictionary = undo_main.undo_last_action()
+	_assert(not empty_undo.get("ok", false), "backspace with an empty queue is a no-op")
+	_assert(undo_main.selected_id == undo_st.id, "empty undo keeps the selection")
+	undo_main.handle_cell_clicked(_spot(1, 0))
+	undo_main._deselect()
+	_assert(undo_main.selected_id < 0, "deselect before a side-wide backspace")
+	undo_main._unhandled_input(backspace)
+	_assert(undo_main.model.plans_of(undo_st.id).is_empty(), "backspace with no selection pops this side's last action")
+	_assert(undo_main.selected_id == undo_st.id, "side-wide backspace selects the player whose action was cancelled")
+	undo_main.queue_free()
+
+	var undo_other: Node = packed.instantiate()
+	root.add_child(undo_other)
+	undo_other.animate_moves = false
+	undo_other.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	undo_other.handle_cell_clicked(_spot(1, 0))
+	var other_cell := _spot(0, -1)
+	undo_other.handle_cell_clicked(other_cell)
+	var other_step: Dictionary = undo_other.handle_cell_clicked(_spot(1, -1))
+	_assert(other_step.get("action") == "queue", "second player queues a move before selected-player backspace")
+	var first_actor: PlayerState = undo_other.model.player_at(MatchRules.CENTER_SPOT)
+	var second_actor: PlayerState = undo_other.model.player_at(other_cell)
+	undo_other.handle_cell_clicked(_spot(1, 0))
+	_assert(undo_other.selected_id == first_actor.id, "reselect the first actor before backspace")
+	undo_other._unhandled_input(backspace)
+	_assert(undo_other.model.plans_of(first_actor.id).is_empty(), "backspace on the selected player cancels their action")
+	_assert(undo_other.model.plans_of(second_actor.id).size() == 1, "the other player's later action stays queued")
+	undo_other.queue_free()
 
 	var first_turn: Node = packed.instantiate()
 	root.add_child(first_turn)

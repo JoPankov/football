@@ -38,6 +38,21 @@ func event(result: Dictionary) -> void:
 	entries.append(entry)
 
 
+func drop_last_queue(player_id: int) -> bool:
+	for i in range(entries.size() - 1, -1, -1):
+		var entry: Dictionary = entries[i]
+		if str(entry.get("kind", "")) != "event":
+			continue
+		var result: Dictionary = entry.get("result", {})
+		if str(result.get("action", "")) != "queue":
+			continue
+		if int(result.get("player_id", -1)) != player_id:
+			continue
+		entries.remove_at(i)
+		return true
+	return false
+
+
 func as_text(viewer_team: int = VIEWER_ALL) -> String:
 	var lines: PackedStringArray = []
 	for entry in _visible_entries(viewer_team):
@@ -98,6 +113,11 @@ static func format_result(event: Dictionary) -> String:
 	var action: String = event.get("action", "move")
 	if action == "queue":
 		return "PLAN  %s  %s" % [
+			event.get("attacker_label", "player"),
+			event.get("plan_text", event.get("label", "act")),
+		]
+	if action == "pop_plan":
+		return "UNDO  %s  %s" % [
 			event.get("attacker_label", "player"),
 			event.get("plan_text", event.get("label", "act")),
 		]

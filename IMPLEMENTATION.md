@@ -65,7 +65,7 @@ scenes/main.tscn
 | `scenes/main.tscn` | `Main` + `Pitch/Pieces/Ball` + `Camera2D` + `HUD` + `GameMenu` |
 | `scenes/player.tscn` | Hex/shield piece: number + role labels |
 | `scripts/match_rules.gd` | Grid, nets, offside, intercept geometry / reach, 1dSTAT, shot formula, tackle approach angle |
-| `scripts/match_model.gd` | Kickoff, queries, queue, apply move/pass/swap/shoot/contest |
+| `scripts/match_model.gd` | Kickoff, queries, queue, `pop_last_plan`, apply move/pass/swap/shoot/contest |
 | `scripts/turn_resolver.gd` | Simultaneous cycle; phase order; destination clashes |
 | `scripts/player_state.gd` | Id, team, role, pos, facing, printed + live stats, energy |
 | `scripts/ball_state.gd` | `pos` + `carrier_id` (`-1` = loose) |
@@ -184,9 +184,9 @@ Action ids: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI: Fight)
 
 Rules of a queue:
 
-- Many plans per player, capped by leftover AP. `queue_plan` appends.
+- Many plans per player, capped by leftover AP. `queue_plan` appends. `pop_last_plan(player_id)` removes that player’s last plan (or the last plan of `current_team` if `player_id < 0`) and drops that PLAN log line. Remaining plans for that player keep their `ap_index` / `ap_end`.
 - At most `ACTIONS_PER_SIDE` (3) distinct players per team. A player who already has a plan can queue more until they spend 6 AP or queue `done`.
-- `done` costs 0 AP, is planning-only (resolver skips it), and `can_queue` becomes false for that player. They still occupy an acting slot. Clicking them twice clears the plan, including Done.
+- `done` costs 0 AP, is planning-only (resolver skips it), and `can_queue` becomes false for that player. They still occupy an acting slot. Backspace pops Done (or their last action). Clicking them twice clears the plan, including Done.
 - `can_select` / `can_queue` require `player.team == current_team` unless `ignore_team_gate`.
 - `end_planning`: the first lock of a cycle (`awaiting_other_side` is false) flips `current_team` to the other side and returns `{action = "end_planning"}`. The second lock calls `TurnResolver.resolve`. After a Helix kickoff, Helix is first and Aether is second.
 
@@ -340,6 +340,7 @@ HUD during planning: viewer = `model.current_team`. Plan arrows (`pitch.set_plan
 
 - Left click cell → `handle_cell_clicked`.
 - Right click adjacent cell of the selected player → queue `turn` (`handle_cell_right_clicked`). 1 AP up to 90°, 2 AP for 135°/180°. Otherwise cancel pending command, then deselect. Esc: cancel pending command, then deselect, then open pause menu.
+- Backspace: `undo_last_action` → `pop_last_plan` of the selected player if they have a queued action, otherwise the last plan of the acting side. Selects that player and re-arms Move. No-op when the queue is empty.
 - Enter / Space: `end_planning`. Space is taken in `_input` so a focused action button cannot steal it.
 - 1–9 / keypad: Nth button currently shown in `commands_for` (not a fixed action map).
 
@@ -384,6 +385,7 @@ Almost every public function returns `{ok, action, ...}`. The log formatter and 
 | `action` | Meaning |
 |---|---|
 | `queue` | Plan stored; board unchanged |
+| `pop_plan` | Last queued action removed; PLAN log line dropped |
 | `end_planning` | Side locked; other team to move |
 | `resolve` | Cycle done; `events` is the playback list |
 | `move` / `dribble` / `tackle` / `challenge` / `swap` / `pass` / `shoot` / `offside` / `clash` | Applied |

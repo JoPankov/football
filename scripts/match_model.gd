@@ -276,6 +276,46 @@ func clear_plan(player_id: int) -> Dictionary:
 	return {ok = true, action = "clear_plan", player_id = player_id}
 
 
+func pop_last_plan(player_id: int = -1) -> Dictionary:
+	var target_id := player_id
+	var bucket: Array[Dictionary] = plans_for(current_team)
+	if target_id >= 0:
+		var player := player_by_id(target_id)
+		if player == null:
+			return {ok = false, reason = "no_player"}
+		if not ignore_team_gate and player.team != current_team:
+			return {ok = false, reason = "wrong_team"}
+		bucket = plans_for(player.team)
+	var index := -1
+	if target_id < 0:
+		if bucket.is_empty():
+			return {ok = false, reason = "no_plan"}
+		index = bucket.size() - 1
+	else:
+		for i in range(bucket.size() - 1, -1, -1):
+			if int(bucket[i].get("player_id", -1)) == target_id:
+				index = i
+				break
+		if index < 0:
+			return {ok = false, reason = "no_plan"}
+	var plan: Dictionary = bucket[index]
+	bucket.remove_at(index)
+	target_id = int(plan.get("player_id", -1))
+	var actor := player_by_id(target_id)
+	combat_log.drop_last_queue(target_id)
+	return {
+		ok = true,
+		action = "pop_plan",
+		player_id = target_id,
+		team = int(plan.get("team", current_team)),
+		plan = plan,
+		attacker_label = actor.label() if actor != null else "player",
+		label = str(plan.get("label", plan.get("action", "action"))),
+		plan_text = _CombatLog.plan_summary(plan),
+		dest = plan.get("dest", Vector2i.ZERO),
+	}
+
+
 func player_is_done(player_id: int) -> bool:
 	for plan in plans_of(player_id):
 		if str(plan.get("action", "")) == "done":

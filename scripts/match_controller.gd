@@ -74,6 +74,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif _is_end_turn_key(event):
 		end_planning()
 		get_viewport().set_input_as_handled()
+	elif _is_undo_key(event):
+		undo_last_action()
+		get_viewport().set_input_as_handled()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		_try_command_hotkey(event.keycode)
 	elif event is InputEventMouseMotion:
@@ -307,6 +310,36 @@ func _is_end_turn_key(event: InputEvent) -> bool:
 		or event.keycode == KEY_KP_ENTER
 		or event.keycode == KEY_SPACE
 	)
+
+
+func _is_undo_key(event: InputEvent) -> bool:
+	return (
+		event is InputEventKey
+		and event.pressed
+		and not event.echo
+		and event.keycode == KEY_BACKSPACE
+	)
+
+
+func undo_last_action() -> Dictionary:
+	if busy:
+		return {ok = false, reason = "busy"}
+	if vs_ai and model != null and model.current_team == MatchRules.Team.AWAY:
+		return {ok = false, reason = "ai_planning"}
+	_cancel_choice()
+	var player_id := selected_id
+	if player_id < 0 or model.plans_of(player_id).is_empty():
+		player_id = -1
+	var result := model.pop_last_plan(player_id)
+	if not result.ok:
+		return result
+	hud.last_event = result
+	var actor := model.player_by_id(int(result.get("player_id", -1)))
+	if actor != null:
+		_select(actor)
+	else:
+		_deselect()
+	return result
 
 
 func _try_command_hotkey(keycode: int) -> void:

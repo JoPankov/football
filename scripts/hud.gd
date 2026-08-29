@@ -152,27 +152,27 @@ func _hint_for(
 				model.action_cost_for(selected, pending_action, hover_cell),
 				turn_cost,
 			]
-		return "Click to queue %s for %s (%d AP). Right-click an adjacent tile to turn. Esc cancels." % [
+		return "Click to queue %s for %s (%d AP). Right-click an adjacent tile to turn. Esc cancels. Backspace undoes the last action." % [
 			pending_action.to_upper(),
 			selected.label(),
 			model.action_cost_for(selected, pending_action, hover_cell),
 		]
 	if turn_dest:
-		return "Click or right-click to turn %s that way (%d AP). Esc cancels." % [
+		return "Click or right-click to turn %s that way (%d AP). Esc cancels. Backspace undoes the last action." % [
 			selected.label(),
 			turn_cost,
 		]
 	if selected != null and pending_action != "":
-		return "Click a highlighted tile to queue %s for %s (%d/%d AP). Right-click an adjacent tile to turn (1–2 AP). Esc cancels." % [
+		return "Click a highlighted tile to queue %s for %s (%d/%d AP). Right-click an adjacent tile to turn (1–2 AP). Esc cancels. Backspace undoes the last action." % [
 			pending_action.to_upper(),
 			selected.label(),
 			model.ap_remaining(selected.id),
 			MatchRules.PLAYER_ACTION_POINTS,
 		]
 	if selected != null and model.player_is_done(selected.id):
-		return "%s is done this turn. Click them twice to clear their plan." % selected.label()
+		return "%s is done this turn. Backspace undoes Done, or click them twice to clear their plan." % selected.label()
 	if selected != null:
-		return "Pick an action for %s (%d/%d AP), then click a highlighted tile. Right-click an adjacent tile to turn (1 AP up to 90°, 2 AP for 135°/180°). Keys 1–9 select actions. Done parks leftover AP." % [
+		return "Pick an action for %s (%d/%d AP), then click a highlighted tile. Right-click an adjacent tile to turn (1 AP up to 90°, 2 AP for 135°/180°). Keys 1–9 select actions. Backspace undoes the last queued action. Done parks leftover AP." % [
 			selected.label(),
 			model.ap_remaining(selected.id),
 			MatchRules.PLAYER_ACTION_POINTS,
@@ -183,10 +183,10 @@ func _hint_for(
 	if require_end_turn:
 		if holder == null:
 			return "Pick up to %d %s players (%d AP each). Press End Turn to lock in. Hover a player to inspect ACC / DEF / CTR / STA." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
-		return "Pick up to %d %s players (%d AP each). Press End Turn to lock in. Click a planned player twice to clear their actions." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
+		return "Pick up to %d %s players (%d AP each). Press End Turn to lock in. Backspace undoes the last queued action. Click a planned player twice to clear their actions." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
 	if holder == null:
-		return "Pick up to %d %s players (%d AP each). Filling 3 players' AP or marking them Done ends the turn; End Turn finishes early." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
-	return "Pick up to %d %s players (%d AP each). Filling 3 players' AP or marking them Done ends the turn; End Turn finishes early. Click a planned player twice to clear." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
+		return "Pick up to %d %s players (%d AP each). Filling 3 players' AP or marking them Done ends the turn; End Turn finishes early. Backspace undoes the last queued action." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
+	return "Pick up to %d %s players (%d AP each). Filling 3 players' AP or marking them Done ends the turn; End Turn finishes early. Backspace undoes the last queued action. Click a planned player twice to clear." % [MatchRules.ACTIONS_PER_SIDE, acting, ap_each]
 
 
 func _event_line(event: Dictionary) -> String:
