@@ -19,7 +19,7 @@ z_index = 8
 script = ExtResource("3_ball")
 
 [node name="Camera2D" type="Camera2D" parent="."]
-position = Vector2(432, 252)
+position = Vector2(936, 612)
 
 [node name="HUD" type="CanvasLayer" parent="."]
 script = ExtResource("4_hud")

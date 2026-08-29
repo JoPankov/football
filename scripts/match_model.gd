@@ -61,6 +61,13 @@ func setup_kickoff(kicking_team: int = MatchRules.Team.HOME) -> void:
 	_give_ball(kicker)
 	assert(_positions_unique(), "Kickoff spawned two players on the same cell.")
 	assert(not ball.is_loose(), "Kickoff must start with a team in possession.")
+	for player in players:
+		if player.team == kicking_team:
+			continue
+		assert(
+			not MatchRules.in_centre_circle(player.pos),
+			"Receiving player spawned inside the centre circle."
+		)
 
 
 func player_by_id(id: int) -> PlayerState:
@@ -689,18 +696,34 @@ func action_for_command(player: PlayerState, command_id: String, dest: Vector2i)
 	return {}
 
 
-func can_shoot(player: PlayerState) -> bool:
+func can_shoot(player: PlayerState, remaining_ap: int = -1) -> bool:
 	if player == null or not player.has_ball or not _acting_allowed(player):
 		return false
-	return MatchRules.is_in_shooting_zone(player.pos, MatchRules.opponent_goal(player.team))
+	return MatchRules.can_attempt_shot(
+		player.pos,
+		MatchRules.opponent_goal(player.team),
+		player.live_accuracy(),
+		_shot_remaining_ap(player, remaining_ap)
+	)
 
 
 func can_plan_shoot(player: PlayerState) -> bool:
 	if player == null or not planning_has_ball(player) or not _acting_allowed(player):
 		return false
-	return MatchRules.is_in_shooting_zone(
-		_query_pos(player), MatchRules.opponent_goal(player.team)
+	return MatchRules.can_attempt_shot(
+		_query_pos(player),
+		MatchRules.opponent_goal(player.team),
+		player.live_accuracy(),
+		_shot_remaining_ap(player)
 	)
+
+
+func _shot_remaining_ap(player: PlayerState, remaining_ap: int = -1) -> int:
+	if remaining_ap >= 0:
+		return remaining_ap
+	if player == null or ignore_team_gate:
+		return 0
+	return ap_remaining(player.id)
 
 
 func shoot_cells(player: PlayerState) -> Array[Vector2i]:
@@ -724,17 +747,17 @@ func choice_cells(player: PlayerState) -> Array[Vector2i]:
 
 
 func shot_preview(player: PlayerState, remaining_ap: int = -1) -> Dictionary:
-	if remaining_ap < 0:
-		remaining_ap = 0 if ignore_team_gate else ap_remaining(player.id)
+	remaining_ap = _shot_remaining_ap(player, remaining_ap)
 	var goal := MatchRules.opponent_goal(player.team)
 	var geo := MatchRules.shot_geometry(_query_pos(player), goal)
-	var range_f := MatchRules.shot_range_factor(geo.distance)
-	var angle_f := MatchRules.shot_angle_factor(geo.angle)
 	var acc := player.live_accuracy()
-	var acc_term := float(acc) / float(acc + MatchRules.SHOT_ACC_BIAS)
 	var leftover_bonus := MatchRules.shot_ap_bonus(remaining_ap)
 	var leftover_pct := int(round(leftover_bonus * 100.0))
-	var hit := MatchRules.shot_hit_chance(acc, geo.distance, geo.angle, remaining_ap)
+	var sigma_deg := MatchRules.shot_sigma_deg(acc)
+	var s := MatchRules.shot_sigma_rad(acc) * sqrt(2.0)
+	var erf_w := MatchRules.erf_approx(0.5 * float(geo.theta_w) / s)
+	var erf_h := MatchRules.erf_approx(0.5 * float(geo.theta_h) / s)
+	var hit := MatchRules.shot_hit_chance(acc, geo.distance_m, geo.angle, remaining_ap)
 	var keeper := player_at(goal)
 	var keeper_in_net := keeper != null and keeper.team != player.team
 	var save := 0.0
@@ -743,16 +766,19 @@ func shot_preview(player: PlayerState, remaining_ap: int = -1) -> Dictionary:
 	var goal_p := hit * (1.0 - save)
 	var lines: PackedStringArray = []
 	lines.append("SHOOT at %s net" % MatchRules.team_name(MatchRules.opposite_team(player.team)))
-	lines.append("d = %.2f tiles   θ = %.0f°" % [geo.distance, geo.angle_deg])
-	lines.append("range = 1 / (1 + %.2f×(d−1)) = %.2f" % [MatchRules.SHOT_RANGE_K, range_f])
-	lines.append("angle = max(%.2f, cos θ) = %.2f" % [MatchRules.SHOT_ANGLE_FLOOR, angle_f])
+	lines.append(
+		"d = %.2f tiles (%.1f m)   θ = %.0f°" % [geo.distance, geo.distance_m, geo.angle_deg]
+	)
+	lines.append(
+		"mouth = %.2f × %.2f m   θw = %.3f   θh = %.3f"
+		% [MatchRules.SHOT_GOAL_W, MatchRules.SHOT_GOAL_H, geo.theta_w, geo.theta_h]
+	)
+	lines.append("σ = %.1f°  (ACC %d)" % [sigma_deg, acc])
 	lines.append("leftover AP = %d  (+%d%% hit)" % [remaining_ap, leftover_pct])
-	lines.append("hit = ACC/(ACC+%d) × range × angle + leftover" % MatchRules.SHOT_ACC_BIAS)
-	lines.append("    = %d/%d × %.2f × %.2f + %.2f = %d%%" % [
-		acc,
-		acc + MatchRules.SHOT_ACC_BIAS,
-		range_f,
-		angle_f,
+	lines.append("hit = erf(θw / 2σ√2) × erf(θh / 2σ√2) + leftover")
+	lines.append("    = %.2f × %.2f + %.2f = %d%%" % [
+		erf_w,
+		erf_h,
 		leftover_bonus,
 		int(round(hit * 100.0)),
 	])
@@ -764,9 +790,11 @@ func shot_preview(player: PlayerState, remaining_ap: int = -1) -> Dictionary:
 	return {
 		goal = goal,
 		distance = geo.distance,
+		distance_m = geo.distance_m,
 		angle_deg = geo.angle_deg,
-		range_factor = range_f,
-		angle_factor = angle_f,
+		theta_w = geo.theta_w,
+		theta_h = geo.theta_h,
+		sigma_deg = sigma_deg,
 		hit_chance = hit,
 		save_chance = save,
 		goal_chance = goal_p,
@@ -1103,10 +1131,9 @@ func _apply_offside(passer: PlayerState, receiver: PlayerState) -> Dictionary:
 
 func apply_shoot(player_id: int, remaining_ap: int = -1) -> Dictionary:
 	var player := player_by_id(player_id)
-	if not can_shoot(player):
+	remaining_ap = _shot_remaining_ap(player, remaining_ap)
+	if not can_shoot(player, remaining_ap):
 		return {ok = false, reason = "illegal_shot"}
-	if remaining_ap < 0:
-		remaining_ap = 0 if ignore_team_gate else ap_remaining(player_id)
 	var preview := shot_preview(player, remaining_ap)
 	var goal := MatchRules.opponent_goal(player.team)
 	var hit: bool = rng.randf() < float(preview.hit_chance)

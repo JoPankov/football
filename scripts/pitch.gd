@@ -2,7 +2,22 @@ class_name Pitch
 extends Node2D
 
 const LINE := Color("3ecbff")
-const LINE_DIM := Color(0.24, 0.88, 0.63, 0.35)
+const MARK := Color("d4f6ff")
+const MARK_WIDTH := 3.2
+## Visual markings snapped to the 26×17 grid (nearest cell to FIFA).
+## Penalty area 16.5 m ≈ 4 tiles deep, 40.32 m ≈ 11 tiles wide.
+## Goal area 5.5 m ≈ 1 tile deep, 18.32 m ≈ 5 tiles wide.
+## Penalty spot 11 m ≈ centre of the cell 2 in from the goal line.
+## Centre circle / penalty arc 9.15 m ≈ 2.5 tiles (hits cell borders).
+## Corner arc 1 m → 1 tile so it sits on the corner cell's inner borders.
+const MARK_PENALTY_DEPTH := 4
+const MARK_PENALTY_HALF := 5
+const MARK_GOAL_AREA_DEPTH := 1
+const MARK_GOAL_AREA_HALF := 2
+const MARK_PENALTY_SPOT_X := 2
+const MARK_CENTRE_R := MatchRules.CENTRE_CIRCLE_R
+const MARK_CORNER_R := 1.0
+const MARK_SPOT_R := 0.08
 const TILE_A := Color("0b1d1a")
 const TILE_B := Color("0d241c")
 const HOME_THIRD := Color(0.09, 0.28, 0.36, 0.22)
@@ -188,29 +203,81 @@ func _draw_net_tile(cell: Vector2i, fill: Color, line: Color) -> void:
 
 func _draw_markings(tile: float, size: Vector2) -> void:
 	for x in MatchRules.GRID_WIDTH + 1:
-		var alpha := 0.55 if x == 0 or x == MatchRules.GRID_WIDTH or x == MatchRules.GRID_WIDTH / 2 else 0.22
-		draw_line(Vector2(x * tile, 0), Vector2(x * tile, size.y), Color(LINE, alpha), 1.5)
+		var alpha := 0.42 if x == 0 or x == MatchRules.GRID_WIDTH or x == MatchRules.GRID_WIDTH / 2 else 0.14
+		draw_line(Vector2(x * tile, 0), Vector2(x * tile, size.y), Color(LINE, alpha), 1.0)
 	for y in MatchRules.GRID_HEIGHT + 1:
-		var alpha := 0.55 if y == 0 or y == MatchRules.GRID_HEIGHT else 0.18
-		draw_line(Vector2(0, y * tile), Vector2(size.x, y * tile), Color(LINE, alpha), 1.5)
+		var alpha := 0.42 if y == 0 or y == MatchRules.GRID_HEIGHT else 0.12
+		draw_line(Vector2(0, y * tile), Vector2(size.x, y * tile), Color(LINE, alpha), 1.0)
+	_draw_pitch_markings(size)
 
-	var mid_x := size.x * 0.5
-	draw_line(Vector2(mid_x, 0), Vector2(mid_x, size.y), LINE, 2.0)
-	draw_arc(Vector2(mid_x, size.y * 0.5), tile * 1.15, 0.0, TAU, 64, LINE_DIM, 2.0, true)
-	draw_circle(Vector2(mid_x, size.y * 0.5), 4.0, LINE)
 
-	var box_rows := 3.0 if MatchRules.GRID_HEIGHT % 2 == 1 else 4.0
-	var box_h := tile * box_rows
-	var box_y := (size.y - box_h) * 0.5
-	draw_rect(Rect2(0, box_y, tile, box_h), Color.TRANSPARENT, false, 2.0)
-	draw_rect(Rect2(size.x - tile, box_y, tile, box_h), Color.TRANSPARENT, false, 2.0)
+func _cell_xy(x: float, y: float) -> Vector2:
+	return Vector2(x, y) * MatchRules.TILE_SIZE
+
+
+func _spot_px() -> float:
+	return maxf(5.0, MARK_SPOT_R * MatchRules.TILE_SIZE)
+
+
+func _draw_goal_box(goal_x: float, inner_x: float, y0: float, y1: float) -> void:
 	draw_polyline(PackedVector2Array([
-		Vector2(0, box_y), Vector2(tile, box_y), Vector2(tile, box_y + box_h), Vector2(0, box_y + box_h)
-	]), LINE, 2.0)
+		_cell_xy(goal_x, y0),
+		_cell_xy(inner_x, y0),
+		_cell_xy(inner_x, y1),
+		_cell_xy(goal_x, y1),
+	]), MARK, MARK_WIDTH, true)
+
+
+func _draw_goal_mouth(goal_x: float, back_x: float, y0: float, y1: float, color: Color) -> void:
 	draw_polyline(PackedVector2Array([
-		Vector2(size.x, box_y), Vector2(size.x - tile, box_y),
-		Vector2(size.x - tile, box_y + box_h), Vector2(size.x, box_y + box_h)
-	]), Color("ff4d8d"), 2.0)
+		_cell_xy(goal_x, y0),
+		_cell_xy(back_x, y0),
+		_cell_xy(back_x, y1),
+		_cell_xy(goal_x, y1),
+	]), color, MARK_WIDTH + 0.4, true)
+
+
+func _draw_pitch_markings(size: Vector2) -> void:
+	var tile := MatchRules.TILE_SIZE
+	var mid_x := float(MatchRules.HALFWAY_X)
+	var cy := float(MatchRules.CENTER_Y) + 0.5
+	var away_x := float(MatchRules.GRID_WIDTH)
+	var penalty_y0 := float(MatchRules.CENTER_Y - MARK_PENALTY_HALF)
+	var penalty_y1 := float(MatchRules.CENTER_Y + 1 + MARK_PENALTY_HALF)
+	var six_y0 := float(MatchRules.CENTER_Y - MARK_GOAL_AREA_HALF)
+	var six_y1 := float(MatchRules.CENTER_Y + 1 + MARK_GOAL_AREA_HALF)
+	var centre := _cell_xy(mid_x, cy)
+	var radius := MARK_CENTRE_R * tile
+
+	draw_rect(Rect2(Vector2.ZERO, size), MARK, false, MARK_WIDTH)
+	draw_line(_cell_xy(mid_x, 0.0), _cell_xy(mid_x, float(MatchRules.GRID_HEIGHT)), MARK, MARK_WIDTH, true)
+	draw_arc(centre, radius, 0.0, TAU, 96, MARK, MARK_WIDTH, true)
+	draw_circle(centre, _spot_px(), MARK)
+
+	_draw_goal_box(0.0, float(MARK_PENALTY_DEPTH), penalty_y0, penalty_y1)
+	_draw_goal_box(away_x, away_x - float(MARK_PENALTY_DEPTH), penalty_y0, penalty_y1)
+	_draw_goal_box(0.0, float(MARK_GOAL_AREA_DEPTH), six_y0, six_y1)
+	_draw_goal_box(away_x, away_x - float(MARK_GOAL_AREA_DEPTH), six_y0, six_y1)
+
+	var home_spot := grid_to_world(Vector2i(MARK_PENALTY_SPOT_X, MatchRules.CENTER_Y))
+	var away_spot := grid_to_world(Vector2i(MatchRules.GRID_WIDTH - 1 - MARK_PENALTY_SPOT_X, MatchRules.CENTER_Y))
+	draw_circle(home_spot, _spot_px(), MARK)
+	draw_circle(away_spot, _spot_px(), MARK)
+	var spot_to_box := float(MARK_PENALTY_DEPTH) - (float(MARK_PENALTY_SPOT_X) + 0.5)
+	var arc_half := acos(clampf(spot_to_box / MARK_CENTRE_R, -1.0, 1.0))
+	draw_arc(home_spot, radius, -arc_half, arc_half, 32, MARK, MARK_WIDTH, true)
+	draw_arc(away_spot, radius, PI - arc_half, PI + arc_half, 32, MARK, MARK_WIDTH, true)
+
+	var corner_r := MARK_CORNER_R * tile
+	draw_arc(_cell_xy(0.0, 0.0), corner_r, 0.0, PI * 0.5, 16, MARK, MARK_WIDTH, true)
+	draw_arc(_cell_xy(0.0, float(MatchRules.GRID_HEIGHT)), corner_r, -PI * 0.5, 0.0, 16, MARK, MARK_WIDTH, true)
+	draw_arc(_cell_xy(away_x, 0.0), corner_r, PI * 0.5, PI, 16, MARK, MARK_WIDTH, true)
+	draw_arc(_cell_xy(away_x, float(MatchRules.GRID_HEIGHT)), corner_r, PI, PI * 1.5, 16, MARK, MARK_WIDTH, true)
+
+	var net_y0 := float(MatchRules.CENTER_Y)
+	var net_y1 := float(MatchRules.CENTER_Y + 1)
+	_draw_goal_mouth(0.0, -1.0, net_y0, net_y1, LINE)
+	_draw_goal_mouth(away_x, away_x + 1.0, net_y0, net_y1, Color("ff4d8d"))
 
 
 func _draw_interactive(tile: float) -> void:

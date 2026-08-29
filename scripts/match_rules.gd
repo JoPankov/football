@@ -1,12 +1,12 @@
 class_name MatchRules
 extends RefCounted
 
-## Pure, side-effect-free rules for the 26×13 grid.
+## Pure, side-effect-free rules for the 26×17 grid.
 
 enum Team { HOME, AWAY }
 
 const GRID_WIDTH := 26
-const GRID_HEIGHT := 13
+const GRID_HEIGHT := 17
 const MOVE_DISTANCE := 1
 ## Euclidean pass radius in tile lengths, centre to centre. Orthogonal 5 is in; (5,1) is out.
 const PASS_RANGE := 5
@@ -27,15 +27,30 @@ const HALFWAY_X := GRID_WIDTH / 2
 const CENTER_SPOT := Vector2i(HALFWAY_X - 1, CENTER_Y)
 ## Helix's kicking cell: 180° of CENTER_SPOT through the pitch centre.
 const AWAY_SPOT := Vector2i(HALFWAY_X, CENTER_Y)
-## Helix #9 when Aether kicks — one cell off the centre so they cannot contest.
-const AWAY_KICKOFF := Vector2i(HALFWAY_X + 1, CENTER_Y + 1)
+## Helix #9 when Aether kicks — own half, just outside the centre circle.
+const AWAY_KICKOFF := Vector2i(HALFWAY_X + 1, CENTER_Y + 3)
+## Drawn / legal centre circle. 9.15 m ≈ 2.5 tiles; hits cell borders around halfway.
+const CENTRE_CIRCLE_R := 2.5
 const HOME_NET := Vector2i(-1, CENTER_Y)
 const AWAY_NET := Vector2i(GRID_WIDTH, CENTER_Y)
-const SHOT_ACC_BIAS := 1
-const SHOT_RANGE_K := 0.35
-const SHOT_ANGLE_FLOOR := 0.15
+## FIFA pitch in metres. The 26×17 grid maps onto this, so a cell is not 1 m.
+const PITCH_LENGTH_M := 105.0
+const PITCH_WIDTH_M := 68.0
+const TILE_M_X := PITCH_LENGTH_M / GRID_WIDTH
+const TILE_M_Y := PITCH_WIDTH_M / GRID_HEIGHT
+## FIFA goal mouth in metres. Convert tile deltas to metres before using these.
+const SHOT_GOAL_W := 7.32
+const SHOT_GOAL_H := 2.44
+const SHOT_D_MIN := 1.0
+const SHOT_COS_FLOOR := 0.15
+const SHOT_SIGMA_MAX_DEG := 12.0
+const SHOT_SIGMA_MIN_DEG := 1.0
+const SHOT_SIGMA_POWER := 1.2
 ## +3 percentage points of hit chance per leftover AP spent on the shot.
 const SHOT_AP_HIT_BONUS := 0.03
+## Minimum unclamped hit chance to offer a shot. The roll is also clamped here.
+const SHOT_MIN_HIT := 0.05
+const SHOT_MAX_HIT := 0.98
 const STEP_ACTIONS: Array[String] = ["move", "dribble", "tackle", "challenge", "swap"]
 ## Rear pass cone: directly back plus this many degrees to each side.
 const BACK_PASS_HALF_ANGLE_DEG := 43.0
@@ -98,51 +113,110 @@ static func penalty_tiles(goal: Vector2i) -> Array[Vector2i]:
 	return tiles
 
 
-static func is_in_shooting_zone(pos: Vector2i, goal: Vector2i) -> bool:
-	if pos == goal or is_goal_tile(pos) or not in_bounds(pos):
+## True when a shot from `from` at `goal` has at least SHOT_MIN_HIT to hit the net.
+static func can_attempt_shot(
+	from: Vector2i,
+	goal: Vector2i,
+	accuracy: int,
+	remaining_ap: int = 0
+) -> bool:
+	if from == goal or is_goal_tile(from) or not in_bounds(from):
 		return false
-	var box := penalty_tiles(goal)
-	if pos in box:
-		return true
-	for cell in box:
-		if is_adjacent(pos, cell):
-			return true
-	return false
+	var geo := shot_geometry(from, goal)
+	return (
+		shot_raw_hit_chance(accuracy, geo.distance_m, geo.angle, remaining_ap)
+		>= SHOT_MIN_HIT
+	)
+
+
+## Cell delta in metres. Pitch length/width scales differ, so a cell is a rectangle.
+static func cell_delta_metres(from: Vector2i, to: Vector2i) -> Vector2:
+	var delta := tile_center(to) - tile_center(from)
+	return Vector2(delta.x * TILE_M_X, delta.y * TILE_M_Y)
 
 
 static func shot_geometry(from: Vector2i, goal: Vector2i) -> Dictionary:
-	var shot := tile_center(goal) - tile_center(from)
-	var distance := shot.length()
-	var angle := 0.0
-	if distance > 0.0001:
-		var dir := shot / distance
-		var cos_a := clampf(dir.dot(goal_axis(goal)), -1.0, 1.0)
-		angle = acos(cos_a)
-	return {distance = distance, angle = angle, angle_deg = rad_to_deg(angle)}
+	var to_goal := cell_delta_metres(from, goal)
+	var raw_m := to_goal.length()
+	var d := maxf(raw_m, SHOT_D_MIN)
+	var forward := goal_axis(goal)
+	if raw_m > 0.0001:
+		forward = to_goal / raw_m
+	var cos_a := clampf(forward.dot(goal_axis(goal)), -1.0, 1.0)
+	var cos_th := maxf(SHOT_COS_FLOOR, cos_a)
+	var angle := acos(cos_a)
+	var tiles := (tile_center(goal) - tile_center(from)).length()
+	return {
+		distance = tiles,
+		distance_m = raw_m,
+		shot_d = d,
+		angle = angle,
+		angle_deg = rad_to_deg(angle),
+		cos_th = cos_th,
+		theta_w = (SHOT_GOAL_W * cos_th) / d,
+		theta_h = SHOT_GOAL_H / d,
+	}
 
 
-static func shot_range_factor(distance: float) -> float:
-	return 1.0 / (1.0 + SHOT_RANGE_K * maxf(0.0, distance - 1.0))
+## Abramowitz & Stegun 7.1.26. One approximation, used everywhere.
+static func erf_approx(x: float) -> float:
+	var ax := absf(x)
+	var t := 1.0 / (1.0 + 0.3275911 * ax)
+	var y := (
+		1.0
+		- (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592)
+		* t
+		* exp(-ax * ax)
+	)
+	return signf(x) * y
 
 
-static func shot_angle_factor(angle_rad: float) -> float:
-	return maxf(SHOT_ANGLE_FLOOR, cos(angle_rad))
+static func shot_sigma_deg(accuracy: int) -> float:
+	var t := clampf(float(accuracy), 1.0, 100.0) / 100.0
+	return lerpf(SHOT_SIGMA_MAX_DEG, SHOT_SIGMA_MIN_DEG, pow(t, SHOT_SIGMA_POWER))
+
+
+static func shot_sigma_rad(accuracy: int) -> float:
+	return maxf(deg_to_rad(shot_sigma_deg(accuracy)), 1e-4)
 
 
 static func shot_ap_bonus(remaining_ap: int) -> float:
 	return SHOT_AP_HIT_BONUS * float(maxi(0, remaining_ap))
 
 
+## Unclamped P(Gaussian miss lands in the goal rectangle). `distance` is metres. No leftover AP.
+static func shot_base_hit_chance(distance: float, angle_rad: float, accuracy: int) -> float:
+	var d := maxf(distance, SHOT_D_MIN)
+	var cos_th := maxf(SHOT_COS_FLOOR, clampf(cos(angle_rad), -1.0, 1.0))
+	var theta_w := (SHOT_GOAL_W * cos_th) / d
+	var theta_h := SHOT_GOAL_H / d
+	var s := shot_sigma_rad(accuracy) * sqrt(2.0)
+	var half_w := 0.5 * theta_w
+	var half_h := 0.5 * theta_h
+	return erf_approx(half_w / s) * erf_approx(half_h / s)
+
+
+## `distance` is metres, same as `shot_base_hit_chance`.
+static func shot_raw_hit_chance(
+	accuracy: int,
+	distance: float,
+	angle_rad: float,
+	remaining_ap: int = 0
+) -> float:
+	return shot_base_hit_chance(distance, angle_rad, accuracy) + shot_ap_bonus(remaining_ap)
+
+
+## `distance` is metres, same as `shot_base_hit_chance`.
 static func shot_hit_chance(
 	accuracy: int,
 	distance: float,
 	angle_rad: float,
 	remaining_ap: int = 0
 ) -> float:
-	var acc_term := float(accuracy) / float(accuracy + SHOT_ACC_BIAS)
-	var hit := acc_term * shot_range_factor(distance) * shot_angle_factor(angle_rad)
-	hit += shot_ap_bonus(remaining_ap)
-	return clampf(hit, 0.05, 0.98)
+	var base := clampf(
+		shot_base_hit_chance(distance, angle_rad, accuracy), SHOT_MIN_HIT, SHOT_MAX_HIT
+	)
+	return clampf(base + shot_ap_bonus(remaining_ap), SHOT_MIN_HIT, SHOT_MAX_HIT)
 
 
 static func is_diagonal_step(from: Vector2i, to: Vector2i) -> bool:
@@ -206,6 +280,18 @@ static func mirror_cell(pos: Vector2i) -> Vector2i:
 
 static func kickoff_spot(team: int) -> Vector2i:
 	return CENTER_SPOT if team == Team.HOME else AWAY_SPOT
+
+
+## Pitch centre in cell-corner units: halfway border, middle of the centre row.
+static func pitch_centre() -> Vector2:
+	return Vector2(float(HALFWAY_X), float(CENTER_Y) + 0.5)
+
+
+## True when the cell's visual centre sits strictly inside the centre circle.
+## On the circle line is outside (opponents must be at least the radius away).
+static func in_centre_circle(cell: Vector2i) -> bool:
+	var pos := Vector2(cell) + Vector2(0.5, 0.5)
+	return pos.distance_to(pitch_centre()) < CENTRE_CIRCLE_R
 
 
 static func kickoff_facing(team: int) -> Vector2i:

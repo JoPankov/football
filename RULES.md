@@ -4,13 +4,13 @@ This is what the game actually does today.
 
 ## Setup
 
-- Pitch: **26×13** tiles plus **two extra goal tiles**. `x` runs goal to goal (0 = Aether goal line, 25 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing).
-- Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 6)`, Helix net `(26, 6)`. Each net is **one cell**. Keepers start in the net so they do not occupy a pitch tile.
+- Pitch: **26×17** tiles plus **two extra goal tiles**. `x` runs goal to goal (0 = Aether goal line, 25 = Helix goal line). `y` runs touchline to touchline (`y = 0` is the top / Aether’s left wing). The 26×17 cell grid is the FIFA 105×68 m pitch (width kept to the FIFA ratio at length 26).
+- Goal tiles sit **outside** the rectangle, on the old out-line: Aether net `(-1, 8)`, Helix net `(26, 8)`. Each net is **one cell**. Keepers start in the net so they do not occupy a pitch tile.
 - From a net tile the keeper can step to the three adjacent pitch squares in front of goal.
 - Teams: **Aether** (home, cyan, attacks +x) vs **Helix** (away, magenta, attacks −x).
 - **11v11**, 4-4-2 kickoff. Two players never share a tile.
-- Aether **#9 ST** starts on the centre spot `(12, 6)` **with the ball**. Helix does not start in possession.
-- After **Helix** scores, that same Aether kickoff is used again. After **Aether** scores, the whole 4-4-2 is rotated 180° through the pitch centre: Helix **#9 ST** takes `(13, 6)` with the ball, and Aether’s strikers sit one cell off the centre so they cannot contest the first pass.
+- Aether **#9 ST** starts on the centre spot `(12, 8)` **with the ball**. Helix does not start in possession. Helix’s strikers stand in their own half, just outside the centre circle.
+- After **Helix** scores, that same Aether kickoff is used again. After **Aether** scores, the whole 4-4-2 is rotated 180° through the pitch centre: Helix **#9 ST** takes `(13, 8)` with the ball. The receiving team starts in its own half and **outside the centre circle**, so those strikers cannot contest the first pass.
 - **Simultaneous cycles.** The kicking team plans first. Aether plans **up to 3 players** at match start (and after Helix scores); Helix plans first after Aether scores. Each of those players has **6 action points**. The turn auto-ends when all 3 players have spent their AP; **End Turn** can finish early with fewer players or leftover AP. The other side then plans the same way. All queued actions resolve together in **six waves**, one per action point. An action plays in the wave equal to the AP spent when it finishes. Then Aether plans again.
 
 Distance is **Chebyshev**: `max(|dx|, |dy|)`. One tile in any of 8 directions is adjacent.
@@ -195,7 +195,7 @@ The **match log** (right panel) lists every plan, clash, contest roll, pass, int
 
 A teammate is in an **offside position** when all of these are true at the moment the ball is played:
 
-- They are in the **opponent’s half** (Aether: `x ≥ 6`; Helix: `x ≤ 5`). The halfway line is between columns 5 and 6.
+- They are in the **opponent’s half** (Aether: `x ≥ 13`; Helix: `x ≤ 12`). The halfway line is between columns 12 and 13.
 - They are **nearer the opponent goal than the ball** (Aether: larger `x`; Helix: smaller `x`). Level with the ball is onside.
 - **Fewer than two opponents** are as near the opponent goal as they are (same `x` comparison; level counts as covering). The keeper counts.
 
@@ -250,25 +250,24 @@ Hover an adjacent opponent to see `action NAME stat vs stat = N% success`.
 
 Shooting **spends every leftover AP** and **ends that player’s turn**. Each leftover point adds **+3 percentage points** to hit chance: 1 AP left → +3%, 5 AP left → +15%, a first-action shot with all 6 AP → +18%.
 
-You may shoot if you have the ball and stand in the **shooting zone** of the opponent net:
-
-- The **penalty box**: the three pitch tiles adjacent to that goal tile. Aether box `(0, 2) (0, 3) (0, 4)`. Helix box `(11, 2) (11, 3) (11, 4)`.
-- The **ring** around the box: every pitch tile that touches the box, including by a corner.
+You may shoot if you have the ball, you are **not on a goal tile**, and the shot’s **hit chance is at least 5%**. Distance no longer gates the action, but it is scaled to a **105 × 68 m** pitch, so a midfield striker needs leftover AP to clear 5%. Leftover AP is added after the geometry/skill hit.
 
 The goal tile highlights gold. Click it to shoot. If the tile also allows move or dribble, a chooser appears.
 
 Hover the goal to see:
 
 ```
-hit = ACC/(ACC+1) x range x angle + leftover
+d       = cell distance converted to metres (105 m / 26 tiles along the pitch, 68 m / 13 across)
+theta_w = (7.32 x max(0.15, cos theta)) / max(d, 1)
+theta_h = 2.44 / max(d, 1)
+sigma   = lerp(12°, 1°, (ACC/100)^1.2)     ACC clamped 1–100
+hit     = erf(theta_w / (2 sigma √2)) x erf(theta_h / (2 sigma √2)) + leftover
 leftover = 0.03 x remaining AP
-range = 1 / (1 + 0.35 x (d-1))
-angle = max(0.15, cos theta)
 save = P(keeper 1dDEF > shooter 1dACC)   if a keeper is on the goal tile, else 0
 goal = hit x (1 - save)
 ```
 
-`d` is Euclidean distance in tiles from shooter centre to goal centre. `theta` is the angle between the shot and the goal axis (0 degrees = straight in).
+`d` is metres, not tiles. One length-tile is about 4 m; the goal mouth is 7.32 × 2.44 m. `theta` is the angle between the shot and the goal axis (0 degrees = straight in), not the randomized miss. Hit is then clamped to 5–98%.
 
 Resolution:
 

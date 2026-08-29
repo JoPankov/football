@@ -13,6 +13,8 @@ func _run() -> void:
 	var main: Node = packed.instantiate()
 	root.add_child(main)
 	await process_frame
+	if main.has_method("close_menu"):
+		main.close_menu()
 	await process_frame
 	await process_frame
 	_shot(out_dir.path_join("01_kickoff.png"))

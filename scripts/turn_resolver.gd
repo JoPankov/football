@@ -455,9 +455,10 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 				return _cancel(model, plan, "pass no longer legal")
 			result = model.apply_pass_to(player.id, dest)
 		"shoot":
-			if not model.can_shoot(player):
+			var leftover := int(plan.get("ap_left", 0))
+			if not model.can_shoot(player, leftover):
 				return _cancel(model, plan, "shot no longer legal")
-			result = model.apply_shoot(player.id, int(plan.get("ap_left", 0)))
+			result = model.apply_shoot(player.id, leftover)
 		"turn":
 			var dest: Vector2i = plan.get("dest", player.pos)
 			result = model.apply_turn(player.id, dest)

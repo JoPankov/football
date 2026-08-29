@@ -1,6 +1,6 @@
 # Sci-Fi Football — implementation
 
-Player-facing rules: [`RULES.md`](RULES.md). This file is for people (and later coding sessions) changing the game. **Trust this file and the tests over `RULES.md` for geometry and tie-breaks** — a few player-doc numbers have drifted (see [Known RULES.md drift](#known-rulesmd-drift)).
+Player-facing rules: [`RULES.md`](RULES.md). This file is for people (and later coding sessions) changing the game. **Trust this file and the tests over `RULES.md` if they disagree.**
 
 Godot **4.3**. Main scene `res://scenes/main.tscn`. No autoloads; global types are `class_name` scripts.
 
@@ -73,7 +73,7 @@ scenes/main.tscn
 | `scripts/combat_log.gd` | Sequential log; plan lines hidden from the other team |
 | `scripts/ai_coach.gd` | Greedy Helix: score legal actions, queue up to 3 |
 | `scripts/match_controller.gd` | Scene root: input, highlights, resolve playback, modes |
-| `scripts/pitch.gd` | Tile board, nets, highlights, plan arrows, pass lane |
+| `scripts/pitch.gd` | Tile board, cell-snapped pitch markings, nets, highlights, plan arrows, pass lane |
 | `scripts/player_piece.gd` | Piece look: hex (outfield), shield (GK), energy bar, facing chevron, gold ring |
 | `scripts/ball_piece.gd` | Small gold disc; slightly smaller when carried |
 | `scripts/hud.gd` | Built in code: banner, inspector, action bar, log, forecast |
@@ -82,7 +82,7 @@ scenes/main.tscn
 | `tests/run_tests.gd` | Headless suite — the regression net |
 | `tests/capture_preview.gd` | Optional PNGs of kickoff / selection |
 
-HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markings are `_draw()` on `Pitch`.
+HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markings are `_draw()` on `Pitch` (cell grid plus cell-snapped pitch markings: halfway on the column-13 border, centre circle radius 2.5 tiles, penalty area 4×11 cells, goal area 1×5 cells, penalty spots on cell centres, penalty / corner arcs, goal mouths matching the net tile).
 
 ---
 
@@ -90,10 +90,10 @@ HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markin
 
 Constants live on `MatchRules`.
 
-- Pitch: **26×13**. `x` is goal-to-goal. `y` is touchline-to-touchline.
+- Pitch: **26×17**. `x` is goal-to-goal. `y` is touchline-to-touchline. That cell count is the FIFA 105×68 m ratio at length 26.
 - `x = 0` is Aether’s goal line (left). `x = 25` is Helix’s (right).
 - `y = 0` is the **top** of the screen = Aether’s left wing when attacking +x.
-- Extra **goal tiles** sit off the rectangle: Aether net `(-1, 6)`, Helix net `(26, 6)`. Each net is one cell.
+- Extra **goal tiles** sit off the rectangle: Aether net `(-1, 8)`, Helix net `(26, 8)`. Each net is one cell.
 - `in_bounds` = pitch tile **or** a net. Cells like `(-1, 0)` are dead.
 - Distance is **Chebyshev** `max(|dx|, |dy|)`. A move is exactly 1 (8 directions).
 - Pass range is **Euclidean**: `MatchRules.in_pass_range` is cell-centre distance `<= PASS_RANGE` (5 tile lengths). The highlight is a circle, not a Chebyshev square.
@@ -113,10 +113,12 @@ Halfway: integer `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. H
 
 Penalty “box” = the three **pitch** tiles adjacent to that net:
 
-- Aether: `(0, 5) (0, 6) (0, 7)`
-- Helix: `(25, 5) (25, 6) (25, 7)`
+- Aether: `(0, 7) (0, 8) (0, 9)`
+- Helix: `(25, 7) (25, 8) (25, 9)`
 
-Shooting zone = box plus every pitch tile Chebyshev-adjacent to any box tile (the “ring”). You cannot shoot from the net itself.
+Shooting is legal from any in-bounds **pitch** tile whose unclamped hit chance is **≥ 5%** (`MatchRules.can_attempt_shot` / `SHOT_MIN_HIT`). Leftover AP counts. You cannot shoot from a net tile.
+
+Hit chance is a 2-D Gaussian aimed at goal centre. Tile deltas convert to metres first (`TILE_M_X = 105/26`, `TILE_M_Y = 68/17`; a cell is not 1 m). Then `θw = (GOAL_W × max(COS_FLOOR, cos θ)) / max(d_m, D_MIN)`, `θh = GOAL_H / max(d_m, D_MIN)` (FIFA 7.32 × 2.44 **metres**), spray `σ = lerp(SIGMA_MAX_DEG, SIGMA_MIN_DEG, (ACC/100)^SIGMA_POWER)`, then `erf(θw / 2σ√2) × erf(θh / 2σ√2)`. Clamp that base to 5–98%, then add leftover AP (`+3pp` each), clamp again. `shot_base_hit_chance` / `shot_hit_chance` take metres. Constants live on `MatchRules`.
 
 ---
 
@@ -126,20 +128,20 @@ Shooting zone = box plus every pitch tile Chebyshev-adjacent to any box tile (th
 
 Player ids are 0..21 in formation order (Aether 0–10, Helix 11–21). Lowest id wins some same-team ties.
 
-`Formation` stores Aether’s kicking 4-4-2 (`_home`) and Helix’s receiving 4-4-2 (`_away`). When Helix kicks, both arrays are rotated 180° with `MatchRules.mirror_cell` (`x' = 25-x`, `y' = 12-y`).
+`Formation` stores Aether’s kicking 4-4-2 (`_home`) and Helix’s receiving 4-4-2 (`_away`). When Helix kicks, both arrays are rotated 180° with `MatchRules.mirror_cell` (`x' = 25-x`, `y' = 16-y`).
 
 | | Aether kicking | Helix kicking |
 |---|---|---|
 | Attack | +x | −x |
-| Net | `(-1, 6)` | `(26, 6)` |
-| Kicking #9 ST | `(12, 6)` `CENTER_SPOT` | `(13, 6)` `AWAY_SPOT` |
-| Kicking other ST | `(12, 5)` | `(13, 7)` |
-| Receiving #9 ST | Aether is kicking | `(11, 5)` (mirror of `AWAY_KICKOFF`) |
-| Receiving other ST | `(14, 5)` / `(14, 7)` `AWAY_KICKOFF` | `(11, 7)` |
+| Net | `(-1, 8)` | `(26, 8)` |
+| Kicking #9 ST | `(12, 8)` `CENTER_SPOT` | `(13, 8)` `AWAY_SPOT` |
+| Kicking other ST | `(12, 7)` | `(13, 9)` |
+| Receiving #9 ST | `(14, 11)` `AWAY_KICKOFF` | `(11, 5)` (mirror of `AWAY_KICKOFF`) |
+| Receiving other ST | `(14, 5)` | `(11, 11)` |
 
 Default kickoff: Aether #9 has the ball. After a goal, `_award_goal` calls `setup_kickoff(opposite_team(scorer))` so the **conceding** side starts with the ball and `current_team`.
 
-Two players never share a cell. `setup_kickoff` asserts uniqueness and that the ball is held.
+Two players never share a cell. `setup_kickoff` asserts uniqueness, that the ball is held, and that no receiving player starts inside the centre circle (`MatchRules.in_centre_circle`, radius `CENTRE_CIRCLE_R` = 2.5 tiles, same as the drawn marking). On the circle line is outside.
 
 Role stats: `Formation.base_stats`. Printed ACC/DEF/CTR/STA. Every role has **STA 10**. ST 20/10/15; LCM/RCM and LB/RB 10/15/15; LM/RM 15/10/10; LCB/RCB and GK 10/20/20. Energy pool = `STA * 10` (100 at kickoff), starts full. Live stats:
 
@@ -230,7 +232,7 @@ Pass: `apply_pass_to`. Intercepts first (see below), then offside, then give or 
 
 Swap: adjacent teammate only. Carrier keeps the ball and it follows them.
 
-Shoot: `apply_shoot(player_id, remaining_ap)`. Hit roll against `shot_hit_chance` plus **+3 percentage points per leftover AP** (clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter). The shot spends every leftover AP and ends that player’s planning. Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff).
+Shoot: `apply_shoot(player_id, remaining_ap)`. Hit roll against `shot_hit_chance` (Gaussian/erf base plus **+3 percentage points per leftover AP**, clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter). The shot spends every leftover AP and ends that player’s planning. Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff).
 
 ### Dice
 
@@ -427,18 +429,6 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 - Substitutions, stamina recovery, injuries.
 - Network play. Hotseat is same-machine; vs-AI is local greedy Helix.
 - Aether AI. Vs-AI human is Aether.
-
----
-
-## Known RULES.md drift
-
-Fix the player doc if you touch these; until then, **code + tests win**:
-
-| Topic | RULES.md | Code / tests |
-|---|---|---|
-| Opponent’s half | Aether `x ≥ 6`, Helix `x ≤ 5` | Aether `x >= 13`, Helix `x < 13` |
-| Helix penalty box | `(11, 2..4)` | `(17, 3) (17, 4) (17, 5)` |
-| Aether penalty box | `(0, 2..4)` | `(0, 3) (0, 4) (0, 5)` |
 
 ---
 

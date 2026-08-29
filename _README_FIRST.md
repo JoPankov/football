@@ -5,7 +5,7 @@ This is the onboarding note for a new coding session. It is **not** the rules bi
 | File | Audience | Use it for |
 |---|---|---|
 | **This file** | Agents and new sessions | What the game is, how the repo is layered, how to run it, how to add a feature, what not to break |
-| [`RULES.md`](RULES.md) | Players | How a match feels to play. Geometry numbers here have drifted; do not copy them into code |
+| [`RULES.md`](RULES.md) | Players | How a match feels to play. Geometry must match `MatchRules` |
 | [`IMPLEMENTATION.md`](IMPLEMENTATION.md) | People changing the game | File map, phase order, result dictionaries, invariants, where to edit |
 
 **Truth order when they disagree:** `scripts/` + `tests/run_tests.gd` > `IMPLEMENTATION.md` > `RULES.md`.
@@ -44,7 +44,7 @@ A feature is not done when the code runs. The same change must include a test an
 
 Skip a file only when that audience cannot be affected. A HUD colour tweak does not need `RULES.md`. A new contest type needs all three.
 
-If you implement something listed under “not implemented”, delete that item from every doc that lists it. If you fix a number already in IMPLEMENTATION’s [Known RULES.md drift](IMPLEMENTATION.md#known-rulesmd-drift) table, delete that row — do not add to the table instead of updating `RULES.md`.
+If you implement something listed under “not implemented”, delete that item from every doc that lists it. If `RULES.md` is wrong, fix it in the same change — do not leave a drift note instead of updating the player doc.
 
 Truth order is unchanged: `scripts/` + tests > `IMPLEMENTATION.md` > `RULES.md`. The point of this checklist is to stop that order from being necessary.
 
@@ -81,7 +81,7 @@ Two sides:
 - **Aether** — home, cyan, attacks **+x** (left → right). Human always plays Aether.
 - **Helix** — away, magenta, attacks **−x**. Either a second hotseat player or a local greedy AI (`AiCoach`).
 
-Pitch: **26×13** tiles plus **two extra goal tiles** outside the rectangle: Aether net `(-1, 6)`, Helix net `(26, 6)`. Keepers start in the net. Distance is **Chebyshev** (`max(|dx|, |dy|)`). Facing is one of the 8 directions.
+Pitch: **26×17** tiles plus **two extra goal tiles** outside the rectangle: Aether net `(-1, 8)`, Helix net `(26, 8)`. Keepers start in the net. Distance is **Chebyshev** (`max(|dx|, |dy|)`). Facing is one of the 8 directions.
 
 Each cycle:
 
@@ -138,18 +138,18 @@ Action ids in code: `move`, `turn`, `pass`, `dribble`, `tackle`, `challenge` (UI
 
 ## Geometry agents get wrong
 
-Constants live on `MatchRules`. Do not hardcode 12-wide / 9-tall leftovers from older commits.
+Constants live on `MatchRules`. Pitch is **26×17**; do not hardcode 13-row / 9-tall leftovers from older commits.
 
 - `x = 0` is Aether’s goal line (left of screen). `x = 25` is Helix’s. `y = 0` is the **top** touchline = Aether’s left wing.
 - Nets are playable (`in_bounds`). Cells like `(-1, 0)` are dead. From a net the keeper has **3** steps onto the pitch (forward + both diagonals).
-- Halfway is `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. Helix’s is `x < 13`. `RULES.md` still says `x ≥ 6` / `x ≤ 5` — that is wrong.
-- Penalty box = the three **pitch** tiles adjacent to that net: Aether `(0, 5) (0, 6) (0, 7)`, Helix `(25, 5) (25, 6) (25, 7)`. Shooting zone = box plus every pitch tile Chebyshev-adjacent to any box tile. You cannot shoot from the net itself.
+- Halfway is `GRID_WIDTH / 2 = 13`. Aether’s opponent half is `x >= 13`. Helix’s is `x < 13`.
+- Penalty box = the three **pitch** tiles adjacent to that net: Aether `(0, 7) (0, 8) (0, 9)`, Helix `(25, 7) (25, 8) (25, 9)`. Shooting is allowed from any pitch tile whose unclamped hit chance is **≥ 5%** (`MatchRules.can_attempt_shot`). Hit is a 2-D Gaussian in the FIFA goal mouth (7.32 × 2.44 **m**). Convert tile deltas with `TILE_M_X` / `TILE_M_Y` (105×68 m pitch on the 26×17 grid) before that math — do not treat 1 tile as 1 m. Leftover AP adds after. You cannot shoot from a net tile.
 - Move = 1 tile into the **3-cell cone** (facing ± 45°). Turn faces 45° or 90° either side (not 180°; that takes two turns). Pass range = Euclidean radius 5 tile lengths (cell centre to cell centre), not into the rear cone except adjacent cells.
-- Kickoff: Aether #9 ST on `CENTER_SPOT` `(12, 6)` with the ball. Helix #9 on `AWAY_KICKOFF` `(14, 7)` when receiving. When Helix kicks, that 4-4-2 is rotated 180° (`AWAY_SPOT` `(13, 6)` with the ball). Two players never share a cell.
+- Kickoff: Aether #9 ST on `CENTER_SPOT` `(12, 8)` with the ball. Helix #9 on `AWAY_KICKOFF` `(14, 11)` when receiving, outside the centre circle. When Helix kicks, that 4-4-2 is rotated 180° (`AWAY_SPOT` `(13, 8)` with the ball). The receiving team starts in its own half and outside the centre circle. Two players never share a cell.
 - Intercept and shot math use **tile units**, not pixels. `MatchRules.tile_center(cell)` is `Vector2(cell)`. `TILE_SIZE = 72` is drawing only.
 - Live stats, not printed stats, go to dice and HUD percents. Empty energy **halves** ACC/DEF/CTR; it does not zero them.
 
-`IMPLEMENTATION.md`’s “Known RULES.md drift” table itself still has some pre-26×13 numbers. When in doubt, read `MatchRules` and the tests.
+When in doubt, read `MatchRules` and the tests.
 
 ---
 
@@ -172,7 +172,7 @@ Constants live on `MatchRules`. Do not hardcode 12-wide / 9-tall leftovers from 
 | `tests/run_tests.gd` | The regression net. Extend this file; do not start a second suite |
 | `tests/capture_preview.gd` | Manual screenshots, not part of the suite |
 
-HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markings are `_draw()` on `Pitch`.
+HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markings are `_draw()` on `Pitch` (FIFA-style lines snapped to cell borders; spots sit on cell centres).
 
 ---
 

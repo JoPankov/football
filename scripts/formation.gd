@@ -1,10 +1,11 @@
 class_name Formation
 extends RefCounted
 
-## 4-4-2 kickoff on the 26×13 grid. Home attacks +x, away attacks −x.
+## 4-4-2 kickoff on the 26×17 grid. Home attacks +x, away attacks −x.
 ## y=0 is the top touchline (home's left wing).
 ## Forwards and central mids sit 3 Chebyshev tiles apart around halfway.
-## The receiving strikers start one cell off the centre so they cannot contest the first pass.
+## Receiving strikers stay in their own half, just outside the centre circle,
+## so they cannot contest the first pass.
 ## When Helix kicks, both shapes are rotated 180° through the pitch centre.
 ## The extra length sits behind the back four; full-backs stay on the touchlines.
 
@@ -57,7 +58,7 @@ static func _away() -> Array[Dictionary]:
 		_slot(7, "RCM", Vector2i(last - 8, cy - 1)),
 		_slot(8, "LCM", Vector2i(last - 8, cy + 1)),
 		_slot(11, "LM", Vector2i(last - 9, MatchRules.GRID_HEIGHT - 1)),
-		_slot(10, "ST", Vector2i(MatchRules.HALFWAY_X + 1, cy - 1)),
+		_slot(10, "ST", Vector2i(MatchRules.HALFWAY_X + 1, cy - 3)),
 		_slot(9, "ST", MatchRules.AWAY_KICKOFF),
 	]
 

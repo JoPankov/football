@@ -12,6 +12,7 @@ func _init() -> void:
 func _run() -> void:
 	print("=== Sci-Fi Football tests ===")
 	_test_bounds()
+	_test_pitch_markings()
 	_test_adjacency()
 	_test_move_destinations()
 	_test_facing()
@@ -65,17 +66,60 @@ func _spot(dx: int = 0, dy: int = 0) -> Vector2i:
 
 func _test_bounds() -> void:
 	print("-- bounds")
+	_assert(MatchRules.GRID_WIDTH == 26 and MatchRules.GRID_HEIGHT == 17, "pitch is 26×17")
+	_assert(MatchRules.CENTER_Y == 8, "centre row is 8 on the 17-cell width")
+	_assert(MatchRules.HOME_NET == Vector2i(-1, 8), "aether net sits on the centre row")
+	_assert(MatchRules.AWAY_NET == Vector2i(26, 8), "helix net sits on the centre row")
 	_assert(MatchRules.in_bounds(Vector2i(0, 0)), "origin in bounds")
-	_assert(MatchRules.in_bounds(Vector2i(25, 12)), "far corner in bounds")
+	_assert(MatchRules.in_bounds(Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.GRID_HEIGHT - 1)), "far corner in bounds")
 	_assert(MatchRules.in_bounds(MatchRules.HOME_NET), "aether net is playable")
 	_assert(MatchRules.in_bounds(MatchRules.AWAY_NET), "helix net is playable")
 	_assert(not MatchRules.in_bounds(Vector2i(-1, 0)), "negative x beside the net is out")
 	_assert(not MatchRules.in_bounds(Vector2i(26, 0)), "x=26 beside the net is out")
 	_assert(not MatchRules.in_bounds(Vector2i(-1, 2)), "net-adjacent off-pitch is out")
-	_assert(not MatchRules.in_bounds(Vector2i(0, 13)), "y=13 out")
+	_assert(not MatchRules.in_bounds(Vector2i(0, MatchRules.GRID_HEIGHT)), "past the far touchline is out")
 	var net_steps := MatchRules.move_destinations(MatchRules.HOME_NET, {})
 	_assert(net_steps.size() == 3, "keeper in the net has 3 steps onto the pitch")
 	_assert(Vector2i(0, MatchRules.CENTER_Y) in net_steps, "net opens onto the old goal-line tile")
+
+
+func _test_pitch_markings() -> void:
+	print("-- pitch markings")
+	var cy := MatchRules.CENTER_Y
+	var penalty_y0 := cy - Pitch.MARK_PENALTY_HALF
+	var penalty_y1 := cy + 1 + Pitch.MARK_PENALTY_HALF
+	var six_y0 := cy - Pitch.MARK_GOAL_AREA_HALF
+	var six_y1 := cy + 1 + Pitch.MARK_GOAL_AREA_HALF
+	var home_spot := Vector2i(Pitch.MARK_PENALTY_SPOT_X, cy)
+	var away_spot := Vector2i(MatchRules.GRID_WIDTH - 1 - Pitch.MARK_PENALTY_SPOT_X, cy)
+	var spot_to_box := float(Pitch.MARK_PENALTY_DEPTH) - (float(Pitch.MARK_PENALTY_SPOT_X) + 0.5)
+	_assert(Pitch.MARK_PENALTY_DEPTH == 4, "penalty box is 4 cells deep")
+	_assert(penalty_y1 - penalty_y0 == 11, "penalty box is 11 cells wide")
+	_assert(six_y1 - six_y0 == 5, "goal area is 5 cells wide")
+	_assert(Pitch.MARK_GOAL_AREA_DEPTH < Pitch.MARK_PENALTY_SPOT_X, "six-yard line is in front of the penalty spot")
+	_assert(Pitch.MARK_PENALTY_SPOT_X < Pitch.MARK_PENALTY_DEPTH, "penalty spot sits inside the penalty box")
+	_assert(home_spot == Vector2i(2, 8), "home penalty spot is the centre of (2, 8)")
+	_assert(away_spot == Vector2i(23, 8), "away penalty spot is the centre of (23, 8)")
+	_assert(penalty_y0 == 3 and penalty_y1 == 14, "penalty box lines sit on cell borders y=3 and y=14")
+	_assert(six_y0 == 6 and six_y1 == 11, "goal-area lines sit on cell borders y=6 and y=11")
+	_assert(spot_to_box > 0.0 and spot_to_box < Pitch.MARK_CENTRE_R, "penalty arc reaches past the box line")
+	_assert(is_equal_approx(Pitch.MARK_CENTRE_R, 2.5), "centre circle radius hits cell borders around halfway")
+	_assert(
+		is_equal_approx(Pitch.MARK_CENTRE_R, MatchRules.CENTRE_CIRCLE_R),
+		"drawn centre circle matches the kickoff radius"
+	)
+	_assert(MatchRules.in_centre_circle(MatchRules.CENTER_SPOT), "aether's centre spot is inside the circle")
+	_assert(MatchRules.in_centre_circle(MatchRules.AWAY_SPOT), "helix's centre spot is inside the circle")
+	_assert(
+		MatchRules.in_centre_circle(Vector2i(MatchRules.HALFWAY_X + 1, MatchRules.CENTER_Y + 1)),
+		"the old receiving cell next to halfway is inside the circle"
+	)
+	_assert(
+		not MatchRules.in_centre_circle(Vector2i(MatchRules.HALFWAY_X + 2, MatchRules.CENTER_Y)),
+		"on the circle line is not inside"
+	)
+	_assert(not MatchRules.in_centre_circle(MatchRules.AWAY_KICKOFF), "receiving #9 starts outside the circle")
+	_assert(MatchRules.mirror_cell(home_spot) == away_spot, "penalty spots mirror through the pitch centre")
 
 
 func _test_adjacency() -> void:
@@ -402,13 +446,28 @@ func _test_kickoff() -> void:
 	_assert(helix_st != null and helix_st.role == "ST", "helix #9 starts on the away kickoff cell")
 	_assert(helix_st.facing == Vector2i(-1, 0), "helix faces -x at kickoff")
 	_assert(not MatchRules.is_adjacent(home_st.pos, helix_st.pos), "helix #9 cannot contest the first kickoff pass")
-	_assert(MatchRules.chebyshev(home_st.pos, helix_st.pos) == 2, "helix #9 sits one cell off the centre")
-	var helix_other := model.player_at(_spot(2, -1))
-	_assert(helix_other != null and helix_other.role == "ST" and helix_other.team == MatchRules.Team.AWAY, "helix #10 also drops a cell toward their net")
+	_assert(not MatchRules.in_centre_circle(helix_st.pos), "helix #9 starts outside the centre circle")
+	var helix_other := model.player_at(_spot(2, -3))
+	_assert(helix_other != null and helix_other.role == "ST" and helix_other.team == MatchRules.Team.AWAY, "helix #10 splits wide of the centre circle")
 	_assert(not MatchRules.is_adjacent(home_st.pos, helix_other.pos), "helix #10 cannot contest kickoff")
+	_assert(not MatchRules.in_centre_circle(helix_other.pos), "helix #10 starts outside the centre circle")
+	var helix_in_circle := 0
+	var helix_in_aether_half := 0
+	for player in model.players:
+		if player.team != MatchRules.Team.AWAY:
+			continue
+		if MatchRules.in_centre_circle(player.pos):
+			helix_in_circle += 1
+		if MatchRules.is_opponent_half(player.pos, player.team):
+			helix_in_aether_half += 1
+	_assert(helix_in_circle == 0, "no helix player starts in the centre circle")
+	_assert(helix_in_aether_half == 0, "helix starts in its own half")
 	var helix_cm := model.player_at(Vector2i(MatchRules.GRID_WIDTH - 9, MatchRules.CENTER_Y - 1))
 	_assert(helix_cm != null and helix_cm.role == "RCM", "helix CMs sit one cell closer to their net")
-	_assert(MatchRules.chebyshev(helix_st.pos, helix_cm.pos) == 3, "helix striker to CM is 3 Chebyshev tiles")
+	_assert(MatchRules.chebyshev(helix_other.pos, helix_cm.pos) == 3, "helix #10 to RCM is 3 Chebyshev tiles")
+	var helix_lcm := model.player_at(Vector2i(MatchRules.GRID_WIDTH - 9, MatchRules.CENTER_Y + 1))
+	_assert(helix_lcm != null and helix_lcm.role == "LCM", "helix LCM mirrors RCM")
+	_assert(MatchRules.chebyshev(helix_st.pos, helix_lcm.pos) == 3, "helix #9 to LCM is 3 Chebyshev tiles")
 
 
 func _test_helix_kickoff() -> void:
@@ -431,6 +490,17 @@ func _test_helix_kickoff() -> void:
 	var aether_near := helix_kick.player_at(MatchRules.mirror_cell(MatchRules.AWAY_KICKOFF))
 	_assert(aether_near != null and aether_near.team == MatchRules.Team.HOME and aether_near.role == "ST", "aether #9 sits in the mirrored receiving cell")
 	_assert(not MatchRules.is_adjacent(helix_taker.pos, aether_near.pos), "aether strikers cannot contest helix's first pass")
+	var aether_in_circle := 0
+	var aether_in_helix_half := 0
+	for player in helix_kick.players:
+		if player.team != MatchRules.Team.HOME:
+			continue
+		if MatchRules.in_centre_circle(player.pos):
+			aether_in_circle += 1
+		if MatchRules.is_opponent_half(player.pos, player.team):
+			aether_in_helix_half += 1
+	_assert(aether_in_circle == 0, "no aether player starts in the centre circle on a helix kickoff")
+	_assert(aether_in_helix_half == 0, "aether starts in its own half on a helix kickoff")
 	var locked := helix_kick.end_planning()
 	_assert(locked.get("action") == "end_planning", "helix lock does not resolve the cycle")
 	_assert(helix_kick.current_team == MatchRules.Team.HOME, "aether plans second on a helix kickoff")
@@ -643,7 +713,7 @@ func _test_square_fight() -> void:
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var home := model.player_at(_spot(0, -1))
-	var away := model.player_at(_spot(2, -1))
+	var away := model.player_at(MatchRules.AWAY_KICKOFF)
 	away.pos = _spot(1, -1)
 	_assert(not home.has_ball and not away.has_ball, "off-ball challenge starts without possession")
 	model.scripted_attacker_wins = true
@@ -990,6 +1060,8 @@ func _test_intercepts() -> void:
 	model.setup_kickoff()
 	var st := model.player_at(MatchRules.CENTER_SPOT)
 	var lane := _spot(3, 0)
+	model.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 1)
+	model.player_at(_spot(2, -3)).pos = _spot(2, -1)
 	var threats := model.interceptors_for_pass(st, lane)
 	_assert(threats.size() >= 2, "a lane through midfield has interceptors")
 	for threat in threats:
@@ -1319,6 +1391,7 @@ func _test_planning_and_resolve() -> void:
 	var square_mid := square.player_at(_spot(0, -1))
 	var square_st := square.player_at(MatchRules.CENTER_SPOT)
 	var square_away := square.player_at(MatchRules.AWAY_KICKOFF)
+	square_away.pos = _spot(2, 1)
 	square_away.facing = Vector2i(0, -1)
 	square.scripted_attacker_wins = true
 	_fill_plans(square, [
@@ -1345,7 +1418,7 @@ func _test_planning_and_resolve() -> void:
 	var square_result := square.end_planning()
 	_assert(square_result.action == "resolve", "off-ball arrival contest resolved")
 	_assert(square_mid.pos == _spot(1, 0), "lower-id mover won the CTR arrival fight")
-	_assert(square_away.pos == MatchRules.AWAY_KICKOFF, "CTR arrival loser stayed put")
+	_assert(square_away.pos == _spot(2, 1), "CTR arrival loser stayed put")
 	_assert(square.combat_log.as_text().contains("SQUARE FIGHT"), "log records the off-ball arrival as a square fight")
 
 	var interrupt := MatchModel.new()
@@ -1430,7 +1503,7 @@ func _test_planning_and_resolve() -> void:
 	_assert(feed.planning_has_ball(feed_mate), "queued pass lets the receiver plan with the ball")
 	_assert(not feed.planning_has_ball(feed_st), "passer no longer has planning possession")
 	_assert(feed.can_plan_pass_to_cell(feed_mate, _spot(0, -3)), "receiver can queue a follow-up pass")
-	var feed_helix := feed.player_at(_spot(2, -1))
+	var feed_helix := feed.player_at(MatchRules.AWAY_KICKOFF)
 	feed_helix.pos = _spot(1, -1)
 	var feed_acts := feed.actions_for(feed_mate, _spot(1, -1))
 	var feed_ids: Array = []
@@ -1443,6 +1516,7 @@ func _test_planning_and_resolve() -> void:
 	pickup.scripted_first_intercept_wins = false
 	var pickup_st := pickup.player_at(MatchRules.CENTER_SPOT)
 	var pickup_mate := pickup.player_at(_spot(0, -1))
+	pickup.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 1)
 	pickup.apply_pass_to(pickup_st.id, _spot(1, 0))
 	_assert(pickup.ball.is_loose() and pickup.ball.pos == _spot(1, 0), "setup leaves the ball loose on an adjacent tile")
 	_assert(not pickup.planning_has_ball(pickup_st), "a player next to a loose ball does not have it yet")
@@ -1493,7 +1567,7 @@ func _test_planning_and_resolve() -> void:
 	fed.scripted_attacker_wins = true
 	var fed_st := fed.player_at(MatchRules.CENTER_SPOT)
 	var fed_mate := fed.player_at(_spot(0, -1))
-	fed.player_at(_spot(2, -1)).pos = _spot(1, -1)
+	fed.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(1, -1)
 	_fill_plans(fed, [
 		{
 			player_id = fed_st.id,
@@ -1520,7 +1594,7 @@ func _test_planning_and_resolve() -> void:
 	cut.scripted_first_intercept_wins = true
 	var cut_st := cut.player_at(MatchRules.CENTER_SPOT)
 	var cut_mate := cut.player_at(_spot(0, -1))
-	cut.player_at(_spot(2, -1)).pos = _spot(1, -1)
+	cut.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(1, -1)
 	_fill_plans(cut, [
 		{
 			player_id = cut_st.id,
@@ -1657,6 +1731,7 @@ func _test_planning_and_resolve() -> void:
 	_assert(early.home_plans.size() == 1, "aether's single plan is kept")
 	_assert(early_st.pos == MatchRules.CENTER_SPOT, "premature end does not resolve yet")
 	var early_helix := early.player_at(MatchRules.AWAY_KICKOFF)
+	early_helix.pos = _spot(2, 0)
 	early.queue_plan(early_helix.id, {id = "move", dest = _spot(1, 1), label = "Move"})
 	var early_resolve := early.end_planning()
 	_assert(early_resolve.ok and early_resolve.action == "resolve", "helix can also end early")
@@ -1732,39 +1807,106 @@ func _test_shooting() -> void:
 	print("-- shooting")
 	var box := MatchRules.penalty_tiles(MatchRules.AWAY_NET)
 	var six := Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
+	var ring := Vector2i(MatchRules.GRID_WIDTH - 2, MatchRules.CENTER_Y - 2)
+	var further := Vector2i(MatchRules.GRID_WIDTH - 3, MatchRules.CENTER_Y)
+	var far_post := Vector2i(MatchRules.GRID_WIDTH - 1, 0)
 	_assert(box.size() == 3, "penalty box is the three tiles on the goal line")
 	_assert(six in box, "centre goal-line tile is in the box")
-	_assert(MatchRules.is_in_shooting_zone(six, MatchRules.AWAY_NET), "box is a shooting zone")
-	_assert(MatchRules.is_in_shooting_zone(Vector2i(MatchRules.GRID_WIDTH - 2, MatchRules.CENTER_Y - 2), MatchRules.AWAY_NET), "corner-touching ring can shoot")
-	_assert(not MatchRules.is_in_shooting_zone(Vector2i(MatchRules.GRID_WIDTH - 3, MatchRules.CENTER_Y), MatchRules.AWAY_NET), "one tile further is too far")
-	_assert(not MatchRules.is_in_shooting_zone(MatchRules.CENTER_SPOT, MatchRules.AWAY_NET), "midfield cannot shoot")
+	_assert(MatchRules.can_attempt_shot(six, MatchRules.AWAY_NET, 13), "box shot is above 5% hit")
+	_assert(MatchRules.can_attempt_shot(ring, MatchRules.AWAY_NET, 13), "corner-touching ring can shoot")
+	_assert(MatchRules.can_attempt_shot(further, MatchRules.AWAY_NET, 13), "tiles past the old ring can shoot if hit is 5%+")
+	_assert(
+		not MatchRules.can_attempt_shot(MatchRules.CENTER_SPOT, MatchRules.AWAY_NET, 20, 0),
+		"midfield striker is under 5% hit with no leftover AP"
+	)
+	_assert(
+		MatchRules.can_attempt_shot(MatchRules.CENTER_SPOT, MatchRules.AWAY_NET, 20, 6),
+		"leftover AP can lift a midfield shot over 5%"
+	)
+	_assert(
+		not MatchRules.can_attempt_shot(MatchRules.AWAY_NET, MatchRules.AWAY_NET, 20, 6),
+		"cannot shoot from the opponent net"
+	)
+	_assert(
+		not MatchRules.can_attempt_shot(MatchRules.HOME_NET, MatchRules.AWAY_NET, 20, 6),
+		"cannot shoot from own net"
+	)
+	_assert(
+		not MatchRules.can_attempt_shot(far_post, MatchRules.AWAY_NET, 1, 0),
+		"1 ACC far-post shot is under 5% hit with no leftover AP"
+	)
 
 	var close := MatchRules.shot_geometry(six, MatchRules.AWAY_NET)
 	var deep := MatchRules.shot_geometry(Vector2i(MatchRules.GRID_WIDTH - 2, MatchRules.CENTER_Y), MatchRules.AWAY_NET)
 	var wide := MatchRules.shot_geometry(Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y - 2), MatchRules.AWAY_NET)
 	_assert(close.distance < deep.distance, "the six-yard tile is closer than the ring")
+	_assert(is_equal_approx(close.distance_m, MatchRules.TILE_M_X), "one length-tile is TILE_M_X metres")
+	_assert(close.distance_m > 3.5 and close.distance_m < 4.5, "goal-line tile is about 4 m from the net")
 	_assert(close.angle_deg < 1.0, "shot from centre is straight on")
 	_assert(wide.angle_deg > close.angle_deg, "shot from the corner is angled")
-	var hit_close := MatchRules.shot_hit_chance(13, close.distance, close.angle)
-	var hit_deep := MatchRules.shot_hit_chance(13, deep.distance, deep.angle)
-	var hit_wide := MatchRules.shot_hit_chance(13, wide.distance, wide.angle)
-	_assert(hit_close > hit_deep, "closer shots hit more often")
-	_assert(hit_close > hit_wide, "straighter shots hit more often")
-	var hit_close_5 := MatchRules.shot_hit_chance(13, close.distance, close.angle, 5)
 	_assert(
-		is_equal_approx(hit_close_5, clampf(hit_close + 0.15, 0.05, 0.98)),
+		is_equal_approx(MatchRules.TILE_M_X, MatchRules.PITCH_LENGTH_M / MatchRules.GRID_WIDTH),
+		"length scale is FIFA pitch / grid width"
+	)
+	_assert(
+		is_equal_approx(MatchRules.TILE_M_Y, MatchRules.PITCH_WIDTH_M / MatchRules.GRID_HEIGHT),
+		"width scale is FIFA pitch / grid height"
+	)
+
+	var tap := MatchRules.shot_hit_chance(20, MatchRules.TILE_M_X, 0.0)
+	_assert(tap > 0.85, "one-tile tap-in at ACC 20 is a high-percentage shot")
+	var midfield := MatchRules.shot_base_hit_chance(14.0 * MatchRules.TILE_M_X, 0.0, 20)
+	_assert(tap > midfield * 5.0, "midfield is much harder than a tap-in once metres are scaled")
+	var pen_50 := MatchRules.shot_base_hit_chance(11.0, 0.0, 50)
+	_assert(pen_50 > 0.60 and pen_50 < 0.63, "penalty ACC 50 square-on is ~61%")
+	var pen_100 := MatchRules.shot_base_hit_chance(11.0, 0.0, 100)
+	_assert(pen_100 > pen_50 + 0.20, "penalty ACC 100 is clearly higher than ACC 50")
+	_assert(pen_100 > 0.90, "penalty ACC 100 is a high-percentage shot")
+	var long_50 := MatchRules.shot_base_hit_chance(25.0, deg_to_rad(40.0), 50)
+	var long_90 := MatchRules.shot_base_hit_chance(25.0, deg_to_rad(40.0), 90)
+	_assert(long_90 > long_50 + 0.30, "from 25 m at 40°, ACC 90 beats ACC 50 by a lot")
+	var side_on := MatchRules.shot_base_hit_chance(11.0, deg_to_rad(90.0), 50)
+	_assert(side_on > 0.0, "θ → 90° still has a non-zero hit")
+	_assert(side_on < pen_50, "side-on penalty is worse than square-on")
+	_assert(
+		is_equal_approx(
+			MatchRules.shot_base_hit_chance(0.5, 0.0, 50),
+			MatchRules.shot_base_hit_chance(1.0, 0.0, 50)
+		),
+		"d < 1 m is treated as d = 1 m"
+	)
+	var closer := MatchRules.shot_hit_chance(50, 11.0, 0.0)
+	var farther := MatchRules.shot_hit_chance(50, 25.0, 0.0)
+	_assert(closer > farther, "closer shots hit more often")
+	var square := MatchRules.shot_hit_chance(50, 25.0, 0.0)
+	var angled := MatchRules.shot_hit_chance(50, 25.0, deg_to_rad(40.0))
+	_assert(square > angled, "straighter shots hit more often")
+	var pen_hit := MatchRules.shot_hit_chance(50, 11.0, 0.0)
+	var pen_hit_5 := MatchRules.shot_hit_chance(50, 11.0, 0.0, 5)
+	_assert(
+		is_equal_approx(
+			pen_hit_5,
+			clampf(pen_hit + 0.15, MatchRules.SHOT_MIN_HIT, MatchRules.SHOT_MAX_HIT)
+		),
 		"5 leftover AP add 15 percentage points of hit"
 	)
-	var hit_1 := MatchRules.shot_hit_chance(13, close.distance, close.angle, 1)
+	var pen_hit_1 := MatchRules.shot_hit_chance(50, 11.0, 0.0, 1)
 	_assert(
-		is_equal_approx(hit_1, clampf(hit_close + 0.03, 0.05, 0.98)),
+		is_equal_approx(
+			pen_hit_1,
+			clampf(pen_hit + 0.03, MatchRules.SHOT_MIN_HIT, MatchRules.SHOT_MAX_HIT)
+		),
 		"1 leftover AP adds 3 percentage points of hit"
 	)
 
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var st := model.player_at(MatchRules.CENTER_SPOT)
-	_assert(not model.can_shoot(st), "cannot shoot from kickoff")
+	_assert(model.can_shoot(st), "can shoot from kickoff when hit chance is at least 5%")
+	var kickoff_cmds: Array = []
+	for cmd in model.commands_for(st):
+		kickoff_cmds.append(cmd.id)
+	_assert("shoot" in kickoff_cmds, "kickoff carrier is offered shoot")
 	st.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
 	model.ball.pos = st.pos
 	_assert(model.can_shoot(st), "can shoot from the penalty box")
@@ -1774,7 +1916,7 @@ func _test_shooting() -> void:
 		ids.append(act.id)
 	_assert("shoot" in ids, "clicking the net offers shoot")
 	var preview := model.shot_preview(st)
-	_assert(preview.text.contains("hit = ACC/(ACC+"), "preview shows the hit formula")
+	_assert(preview.text.contains("hit = erf("), "preview shows the hit formula")
 	_assert(preview.text.contains("leftover AP"), "preview shows leftover AP bonus")
 	_assert(preview.text.contains("goal = hit"), "preview shows the goal product")
 	_assert(int(preview.get("remaining_ap", -1)) == 6, "unspent shooter previews a 6 AP shot")
@@ -1799,6 +1941,32 @@ func _test_shooting() -> void:
 	_assert(not missed.goal and not missed.hit, "scripted miss does not score")
 	_assert(miss_model.home_score == 0, "score unchanged on a miss")
 	_assert(miss_model.ball.is_loose() and miss_model.ball.pos == MatchRules.AWAY_NET, "missed shot is loose in the net")
+
+	var gate := MatchModel.new()
+	gate.setup_kickoff()
+	var weak := gate.player_at(MatchRules.CENTER_SPOT)
+	weak.accuracy = 1
+	weak.pos = far_post
+	gate.ball.pos = weak.pos
+	_assert(not gate.can_shoot(weak, 0), "model withholds a sub-5% far-post shot")
+	_assert(gate.can_shoot(weak), "unspent AP is the leftover used for the 5% gate")
+	var gate_cmds: Array = []
+	for cmd in gate.commands_for(weak):
+		gate_cmds.append(cmd.id)
+	_assert("shoot" in gate_cmds, "action bar lists shoot when hit is 5%+")
+	var far_preview := gate.shot_preview(weak, 0)
+	var far_preview_1 := gate.shot_preview(weak, 1)
+	_assert(
+		is_equal_approx(
+			float(far_preview_1.hit_chance),
+			clampf(
+				float(far_preview.hit_chance) + 0.03,
+				MatchRules.SHOT_MIN_HIT,
+				MatchRules.SHOT_MAX_HIT
+			)
+		),
+		"leftover AP bonus still applies on top of the Gaussian base hit"
+	)
 
 
 func _test_controller_click_flow() -> void:
@@ -1895,6 +2063,7 @@ func _test_controller_click_flow() -> void:
 	pickup_ui.animate_moves = false
 	pickup_ui.model.scripted_first_intercept_wins = false
 	var ui_st: PlayerState = pickup_ui.model.player_at(MatchRules.CENTER_SPOT)
+	pickup_ui.model.player_at(MatchRules.AWAY_KICKOFF).pos = _spot(2, 1)
 	pickup_ui.model.apply_pass_to(ui_st.id, _spot(1, 0))
 	pickup_ui._refresh()
 	pickup_ui.handle_cell_clicked(MatchRules.CENTER_SPOT)

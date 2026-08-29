@@ -643,9 +643,10 @@ func _show_forecast(
 
 
 func _shot_forecast_text(preview: Dictionary) -> String:
-	return "%s\nd = %.2f tiles   θ = %.0f°   leftover AP %d (+%d%%)   hit %d%%   save %d%%" % [
+	return "%s\nd = %.2f tiles (%.1f m)   θ = %.0f°   leftover AP %d (+%d%%)   hit %d%%   save %d%%" % [
 		str(preview.get("header", "shoot")),
 		float(preview.get("distance", 0.0)),
+		float(preview.get("distance_m", 0.0)),
 		float(preview.get("angle_deg", 0.0)),
 		int(preview.get("remaining_ap", 0)),
 		int(round(float(preview.get("leftover_bonus", 0.0)) * 100.0)),
