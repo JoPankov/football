@@ -721,7 +721,7 @@ func would_collect_offside(player: PlayerState, dest: Vector2i) -> bool:
 
 
 func _cell_is_offside_first_touch(player: PlayerState, cell: Vector2i) -> bool:
-	if is_offside_marked(player) and ball.is_loose() and ball.pos == cell:
+	if is_offside_marked(player) and ball.is_collectable() and ball.pos == cell:
 		return true
 	for plan in plans_for(current_team):
 		if str(plan.get("action", "")) != "pass":
@@ -1179,16 +1179,22 @@ func apply_turn(player_id: int, dest: Vector2i) -> Dictionary:
 
 ## Opponents whose intercept circle touches passer→dest. Shots reuse this with dest = opponent net.
 ## The occupant of dest never intercepts (pass receiver, or the keeper standing in the net).
+## `from_point` overrides the segment start. `include_start` lets a player standing on
+## the current ball tile contest after the ball has already left the passer.
 func interceptors_for_pass(
 	passer: PlayerState,
 	dest: Vector2i,
-	accuracy: int = -1
+	accuracy: int = -1,
+	from_point = null,
+	include_start: bool = false
 ) -> Array[Dictionary]:
 	var found: Array[Dictionary] = []
 	if passer == null:
 		return found
 	var acc := passer.live_accuracy() if accuracy < 0 else accuracy
 	var start := MatchRules.tile_center(_query_pos(passer))
+	if from_point is Vector2:
+		start = from_point
 	var finish := MatchRules.tile_center(dest)
 	var receiver := player_at(dest)
 	for player in players:
@@ -1199,7 +1205,11 @@ func interceptors_for_pass(
 		if player.team == passer.team:
 			continue
 		var hit := MatchRules.segment_intersects_circle(
-			start, finish, MatchRules.tile_center(player.pos), MatchRules.INTERCEPT_RADIUS
+			start,
+			finish,
+			MatchRules.tile_center(player.pos),
+			MatchRules.INTERCEPT_RADIUS,
+			include_start
 		)
 		if not hit.hits:
 			continue
@@ -1296,47 +1306,125 @@ func apply_pass(from_id: int, to_id: int) -> Dictionary:
 	return apply_pass_to(from_id, target.pos)
 
 
-func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
+func apply_pass_to(from_id: int, dest: Vector2i, instant: bool = true) -> Dictionary:
+	var launched := _launch_flight(from_id, dest, "pass")
+	if not launched.get("ok", false):
+		return launched
+	if instant:
+		return drain_flight()
+	return launched
+
+
+func _launch_flight(
+	from_id: int,
+	dest: Vector2i,
+	action: String,
+	remaining_ap: int = -1
+) -> Dictionary:
 	var passer := player_by_id(from_id)
-	if not can_pass_to_cell(passer, dest):
+	if action == "shoot":
+		remaining_ap = _shot_remaining_ap(passer, remaining_ap)
+		if not can_shoot(passer, remaining_ap):
+			return {ok = false, reason = "illegal_shot"}
+	elif not can_pass_to_cell(passer, dest):
 		return {ok = false, reason = "illegal_pass"}
 	var origin := passer.pos
-	var intercept := _resolve_pass_intercepts(passer, dest)
-	if intercept.get("intercepted", false):
-		var thief: PlayerState = intercept.player
-		var landing: Vector2i = intercept.landing
-		var from_tile := thief.pos
-		thief.relocate(landing)
-		_give_ball(thief)
-		return _finish_action(passer, {
-			ok = true,
-			action = "pass",
-			intercepted = true,
-			player_id = from_id,
-			receiver_id = thief.id,
-			interceptor_id = thief.id,
-			dest = landing,
-			interceptor_from = from_tile,
-			origin = origin,
-			gained_possession = false,
-			lost_possession = true,
-			attacker_label = passer.label(),
-			defender_label = thief.label(),
-			attacker_stat_name = "ACC",
-			defender_stat_name = "DEF",
-			attacker_stat = passer.live_accuracy(),
-			defender_stat = thief.live_defense(),
-			attacker_dice = intercept.attacker_dice,
-			defender_dice = intercept.defender_dice,
-			attacker_total = intercept.attacker_total,
-			defender_total = intercept.defender_total,
-		})
+	var acc := passer.live_accuracy()
+	if action == "shoot":
+		acc = MatchRules.shot_accuracy(acc, remaining_ap)
+	_release_ball(origin)
+	ball.in_flight = true
+	ball.flight_from = origin
+	ball.flight_to = dest
+	ball.flight_pos = MatchRules.tile_center(origin)
+	ball.flight_passer_id = from_id
+	ball.flight_accuracy = acc
+	ball.flight_action = action
+	ball.flight_remaining_ap = remaining_ap
+	if action == "pass":
+		_mark_offside_from_pass(passer)
+	var occupant := player_at(dest)
+	var receiver_label := "open square"
+	if occupant != null:
+		receiver_label = occupant.label()
+	elif action == "shoot":
+		receiver_label = "net"
+	return {
+		ok = true,
+		action = action,
+		in_flight = true,
+		intercepted = false,
+		player_id = from_id,
+		receiver_id = occupant.id if occupant != null else -1,
+		dest = dest,
+		origin = origin,
+		gained_possession = false,
+		lost_possession = true,
+		attacker_label = passer.label(),
+		defender_label = receiver_label,
+		remaining_ap = remaining_ap,
+	}
 
-	_mark_offside_from_pass(passer)
+
+## Advance an in-flight pass or shot by `distance` tile lengths. Empty dict if
+## the ball is not flying, or it only moved without arriving or being cut out.
+func tick_flight(distance: float) -> Dictionary:
+	if not ball.in_flight:
+		return {}
+	var passer := player_by_id(ball.flight_passer_id)
+	var dest: Vector2i = ball.flight_to
+	var finish := MatchRules.tile_center(dest)
+	var start: Vector2 = ball.flight_pos
+	var remaining := start.distance_to(finish)
+	if remaining <= 0.0001:
+		return _complete_flight()
+	var step := minf(distance, remaining)
+	var next := finish
+	if remaining > 0.0001:
+		next = start + (finish - start) * (step / remaining)
+	var left_passer := start.distance_to(MatchRules.tile_center(ball.flight_from)) > 0.0001
+	var intercept := _resolve_pass_intercepts(
+		passer, dest, ball.flight_accuracy, start, next, left_passer
+	)
+	if intercept.get("intercepted", false):
+		return _apply_flight_intercept(passer, intercept)
+	ball.flight_pos = next
+	ball.pos = MatchRules.nearest_tile(next)
+	if next.distance_to(finish) <= 0.0001:
+		return _complete_flight()
+	return {}
+
+
+func drain_flight() -> Dictionary:
+	var last := {}
+	while ball.in_flight:
+		var event := tick_flight(1000.0)
+		if not event.is_empty():
+			last = event
+	return last if not last.is_empty() else {ok = false, reason = "no_flight"}
+
+
+func _complete_flight() -> Dictionary:
+	if not ball.in_flight:
+		return {}
+	var action := ball.flight_action
+	var dest: Vector2i = ball.flight_to
+	var origin: Vector2i = ball.flight_from
+	var passer := player_by_id(ball.flight_passer_id)
+	var remaining_ap := ball.flight_remaining_ap
+	var acc := ball.flight_accuracy
+	ball.clear_flight()
+	if action == "shoot":
+		return _complete_shot_flight(passer, dest, origin, remaining_ap, acc)
+	return _complete_pass_flight(passer, dest, origin)
+
+
+func _complete_pass_flight(
+	passer: PlayerState, dest: Vector2i, origin: Vector2i
+) -> Dictionary:
 	var occupant := player_at(dest)
 	if occupant != null and is_offside_marked(occupant):
 		return _finish_action(passer, _apply_offside(passer, occupant))
-
 	var receiver_id := -1
 	var receiver_label := "open square"
 	if occupant != null:
@@ -1348,27 +1436,98 @@ func apply_pass_to(from_id: int, dest: Vector2i) -> Dictionary:
 	return _finish_action(passer, {
 		ok = true,
 		action = "pass",
+		in_flight = false,
 		intercepted = false,
-		player_id = from_id,
+		player_id = passer.id if passer != null else -1,
 		receiver_id = receiver_id,
 		dest = dest,
 		origin = origin,
 		gained_possession = false,
 		lost_possession = occupant == null,
-		attacker_label = passer.label(),
+		attacker_label = passer.label() if passer != null else "passer",
 		defender_label = receiver_label,
 	})
+
+
+func _apply_flight_intercept(passer: PlayerState, intercept: Dictionary) -> Dictionary:
+	var thief: PlayerState = intercept.player
+	var landing: Vector2i = intercept.landing
+	var from_tile := thief.pos
+	var origin: Vector2i = ball.flight_from
+	var action := ball.flight_action
+	var remaining_ap := ball.flight_remaining_ap
+	var acc := ball.flight_accuracy
+	thief.relocate(landing)
+	_give_ball(thief)
+	var result := {
+		ok = true,
+		action = action,
+		in_flight = false,
+		intercepted = true,
+		player_id = passer.id if passer != null else ball.flight_passer_id,
+		receiver_id = thief.id,
+		interceptor_id = thief.id,
+		dest = landing,
+		interceptor_from = from_tile,
+		origin = origin,
+		gained_possession = false,
+		lost_possession = true,
+		attacker_label = passer.label() if passer != null else "passer",
+		defender_label = thief.label(),
+		attacker_stat_name = "ACC",
+		defender_stat_name = "DEF",
+		attacker_stat = acc,
+		defender_stat = thief.live_defense(),
+		attacker_dice = intercept.attacker_dice,
+		defender_dice = intercept.defender_dice,
+		attacker_total = intercept.attacker_total,
+		defender_total = intercept.defender_total,
+		remaining_ap = remaining_ap,
+	}
+	if action == "shoot":
+		result.hit = false
+		result.saved = false
+		result.goal = false
+		result.reset = false
+		result.home_score = home_score
+		result.away_score = away_score
+	return _finish_action(passer, result)
 
 
 func _resolve_pass_intercepts(
 	passer: PlayerState,
 	dest: Vector2i,
-	accuracy: int = -1
+	accuracy: int = -1,
+	from_point = null,
+	to_point = null,
+	include_start: bool = false
 ) -> Dictionary:
-	var threats := interceptors_for_pass(passer, dest, accuracy)
+	var threats := interceptors_for_pass(
+		passer, dest, accuracy, from_point, include_start
+	)
+	if to_point is Vector2 and from_point is Vector2:
+		var sub: Array[Dictionary] = []
+		for threat in threats:
+			var hit := MatchRules.segment_intersects_circle(
+				from_point,
+				to_point,
+				MatchRules.tile_center(threat.player.pos),
+				MatchRules.INTERCEPT_RADIUS,
+				include_start
+			)
+			if hit.hits:
+				var copy: Dictionary = threat.duplicate()
+				copy.t = hit.t
+				copy.closest = hit.closest
+				copy.dist = hit.dist
+				sub.append(copy)
+		sub.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.t < b.t)
+		threats = sub
 	if threats.is_empty():
 		return {intercepted = false}
-	var acc := passer.live_accuracy() if accuracy < 0 else accuracy
+	var acc := accuracy
+	if acc < 0:
+		acc = passer.live_accuracy() if passer != null else 1
 	if scripted_first_intercept_wins != null:
 		if bool(scripted_first_intercept_wins):
 			var first: Dictionary = threats[0]
@@ -1502,62 +1661,37 @@ func _offside_name_list(group: Array[PlayerState]) -> String:
 	return "%s, or %s" % [", ".join(parts), group[group.size() - 1].label()]
 
 
-func apply_shoot(player_id: int, remaining_ap: int = -1) -> Dictionary:
+func apply_shoot(player_id: int, remaining_ap: int = -1, instant: bool = true) -> Dictionary:
 	var player := player_by_id(player_id)
 	remaining_ap = _shot_remaining_ap(player, remaining_ap)
-	if not can_shoot(player, remaining_ap):
-		return {ok = false, reason = "illegal_shot"}
-	var goal := MatchRules.opponent_goal(player.team)
-	var acc := MatchRules.shot_accuracy(player.live_accuracy(), remaining_ap)
-	var intercept := _resolve_pass_intercepts(player, goal, acc)
-	if intercept.get("intercepted", false):
-		var thief: PlayerState = intercept.player
-		var landing: Vector2i = intercept.landing
-		var from_tile := thief.pos
-		thief.relocate(landing)
-		_give_ball(thief)
-		return _finish_action(player, {
-			ok = true,
-			action = "shoot",
-			intercepted = true,
-			player_id = player_id,
-			receiver_id = thief.id,
-			interceptor_id = thief.id,
-			dest = landing,
-			interceptor_from = from_tile,
-			origin = player.pos,
-			hit = false,
-			saved = false,
-			goal = false,
-			reset = false,
-			gained_possession = false,
-			lost_possession = true,
-			home_score = home_score,
-			away_score = away_score,
-			attacker_label = player.label(),
-			defender_label = thief.label(),
-			attacker_stat_name = "ACC",
-			defender_stat_name = "DEF",
-			attacker_stat = acc,
-			defender_stat = thief.live_defense(),
-			attacker_dice = intercept.attacker_dice,
-			defender_dice = intercept.defender_dice,
-			attacker_total = intercept.attacker_total,
-			defender_total = intercept.defender_total,
-			remaining_ap = remaining_ap,
-		})
-	var preview := shot_preview(player, remaining_ap)
-	var hit: bool = rng.randf() < float(preview.hit_chance)
+	var goal := MatchRules.opponent_goal(player.team) if player != null else MatchRules.AWAY_NET
+	var launched := _launch_flight(player_id, goal, "shoot", remaining_ap)
+	if not launched.get("ok", false):
+		return launched
+	if instant:
+		return drain_flight()
+	return launched
+
+
+func _complete_shot_flight(
+	player: PlayerState,
+	goal: Vector2i,
+	origin: Vector2i,
+	remaining_ap: int,
+	acc: int
+) -> Dictionary:
+	var preview := shot_preview(player, remaining_ap) if player != null else {}
+	var hit: bool = rng.randf() < float(preview.get("hit_chance", 0.0))
 	var saved: bool = false
 	if scripted_shot_outcome == "miss":
 		hit = false
 	elif scripted_shot_outcome == "save":
 		hit = true
-		saved = preview.keeper_in_net
+		saved = bool(preview.get("keeper_in_net", false))
 	elif scripted_shot_outcome == "goal":
 		hit = true
 		saved = false
-	elif hit and preview.keeper_in_net:
+	elif hit and bool(preview.get("keeper_in_net", false)):
 		var keeper := player_at(goal)
 		var roll := MatchRules.resolve_contest(
 			acc,
@@ -1574,19 +1708,20 @@ func apply_shoot(player_id: int, remaining_ap: int = -1) -> Dictionary:
 	var result := {
 		ok = true,
 		action = "shoot",
-		player_id = player_id,
+		in_flight = false,
+		player_id = player.id if player != null else -1,
 		dest = goal,
-		origin = player.pos,
+		origin = origin,
 		hit = hit,
 		saved = saved,
 		goal = false,
 		reset = false,
 		home_score = home_score,
 		away_score = away_score,
-		attacker_label = player.label(),
-		header = preview.header,
+		attacker_label = player.label() if player != null else "shooter",
+		header = preview.get("header", ""),
 		remaining_ap = remaining_ap,
-		leftover_bonus = preview.leftover_bonus,
+		leftover_bonus = preview.get("leftover_bonus", 0.0),
 	}
 	if not hit:
 		_release_ball(goal)
@@ -1598,9 +1733,10 @@ func apply_shoot(player_id: int, remaining_ap: int = -1) -> Dictionary:
 		else:
 			_release_ball(goal)
 		return _finish_action(player, result)
-	player.spend_energy()
+	if player != null:
+		player.spend_energy()
 	result.goal = true
-	_award_goal(player.team)
+	_award_goal(player.team if player != null else MatchRules.Team.HOME)
 	result.reset = true
 	result.home_score = home_score
 	result.away_score = away_score
@@ -1625,7 +1761,7 @@ func apply_move(player_id: int, dest: Vector2i) -> Dictionary:
 	var gained := false
 	if player.has_ball:
 		ball.pos = dest
-	elif ball.is_loose() and ball.pos == dest:
+	elif ball.is_collectable() and ball.pos == dest:
 		var flagged := _take_loose_ball(player)
 		if not flagged.is_empty():
 			return _finish_action(player, flagged)
@@ -1671,7 +1807,7 @@ func apply_sprint(player_id: int, dest: Vector2i) -> Dictionary:
 	var gained := false
 	if player.has_ball:
 		ball.pos = dest
-	elif ball.is_loose() and (ball.pos == dest or ball.pos == through):
+	elif ball.is_collectable() and (ball.pos == dest or ball.pos == through):
 		var flagged := _take_loose_ball(player)
 		if not flagged.is_empty():
 			return _finish_action(player, flagged, energy)
@@ -1723,6 +1859,12 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		defender_stat = occupant.live_control()
 		attacker_name = "DEF"
 		defender_name = "CTR"
+	var tackle_dir := {}
+	if is_tackle:
+		tackle_dir = MatchRules.tackle_direction(occupant.facing, player.pos, dest)
+		defender_stat = MatchRules.tackle_angle_stat(
+			defender_stat, float(tackle_dir.bonus)
+		)
 	var holder := carrier()
 	var possession_team := holder.team if holder != null else -1
 	var ties_to_atk := false
@@ -1733,11 +1875,6 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 		MatchRules.apply_scripted_winner(roll, bool(scripted_attacker_wins))
 	elif scripted_contest_tie:
 		MatchRules.apply_scripted_tie(roll)
-	var tackle_dir := {}
-	if is_tackle:
-		tackle_dir = MatchRules.tackle_direction(occupant.facing, player.pos, dest)
-		if scripted_attacker_wins == null and not scripted_contest_tie:
-			MatchRules.apply_tackle_direction_penalty(roll, float(tackle_dir.penalty), rng)
 
 	var result := {
 		ok = true,
@@ -1765,8 +1902,9 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 	}
 	if not tackle_dir.is_empty():
 		result.angle_deg = tackle_dir.angle_deg
-		result.angle_penalty = tackle_dir.penalty
+		result.angle_bonus = tackle_dir.bonus
 		result.angle_label = tackle_dir.label
+	var energy := MatchRules.action_energy_cost(action)
 
 	if roll.attacker_won:
 		if is_tackle:
@@ -1793,14 +1931,14 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 	result.carried = player.has_ball
 
 	if _carrier_in_opponent_net(player):
-		player.spend_energy()
+		player.spend_energy(energy)
 		_award_goal(player.team)
 		result.goal = true
 		result.reset = true
 		result.home_score = home_score
 		result.away_score = away_score
 		return result
-	return _finish_action(player, result)
+	return _finish_action(player, result, energy)
 
 
 func _finish_action(
@@ -1842,6 +1980,7 @@ func _give_ball(player: PlayerState) -> void:
 	player.has_ball = true
 	ball.carrier_id = player.id
 	ball.pos = player.pos
+	ball.clear_flight()
 
 
 func _release_ball(pos: Vector2i) -> void:
@@ -1850,6 +1989,7 @@ func _release_ball(pos: Vector2i) -> void:
 		previous.has_ball = false
 	ball.carrier_id = -1
 	ball.pos = pos
+	ball.clear_flight()
 
 
 ## Scatter the live ball to one cell of the 3×3 around its current tile.

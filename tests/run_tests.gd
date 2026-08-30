@@ -38,6 +38,7 @@ func _run() -> void:
 	_test_contest_preview()
 	_test_pass()
 	_test_intercepts()
+	_test_resolution_intercepts()
 	_test_swap_and_choice()
 	_test_offside()
 	_test_shooting()
@@ -236,6 +237,9 @@ func _test_action_points() -> void:
 		"diagonal sprint costs 5 energy"
 	)
 	_assert(MatchRules.action_energy_cost("move") == 1, "a walk still costs 1 energy")
+	_assert(MatchRules.action_energy_cost("dribble") == 5, "a dribble costs 5 energy")
+	_assert(MatchRules.action_energy_cost("tackle") == 5, "a tackle costs 5 energy")
+	_assert(MatchRules.action_energy_cost("challenge") == 5, "a square fight costs 5 energy")
 	_assert(MatchRules.action_ap_cost("pass", Vector2i(5, 5), Vector2i(7, 5), 6) == 1, "pass costs 1 AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 5) == 5, "shot spends leftover AP")
 	_assert(MatchRules.action_ap_cost("shoot", Vector2i(5, 5), MatchRules.AWAY_NET, 1) == 1, "shot with 1 AP spends that point")
@@ -1026,6 +1030,8 @@ func _test_dribble_win() -> void:
 	var away := model.player_at(MatchRules.AWAY_KICKOFF)
 	away.pos = _spot(1, 1)
 	model.scripted_attacker_wins = true
+	var energy_before := st.energy
+	var occupant_energy := away.energy
 	var result := model.apply_move(st.id, away.pos)
 	_assert(result.action == "dribble", "on-ball step onto opponent is a dribble")
 	_assert(result.attacker_stat_name == "CTR" and result.defender_stat_name == "DEF", "dribble is CTR vs DEF")
@@ -1034,6 +1040,8 @@ func _test_dribble_win() -> void:
 	_assert(away.pos == MatchRules.CENTER_SPOT, "beaten defender was shoved back")
 	_assert(st.has_ball and not away.has_ball, "dribbler kept the ball")
 	_assert(model.ball.pos == st.pos, "ball followed the successful dribble")
+	_assert(st.energy == energy_before - 5, "a resolved dribble costs 5 energy")
+	_assert(away.energy == occupant_energy, "the shoved defender does not spend energy")
 
 
 func _test_dribble_loss() -> void:
@@ -1135,23 +1143,29 @@ func _test_square_fight() -> void:
 	away.pos = _spot(1, -1)
 	_assert(not home.has_ball and not away.has_ball, "off-ball challenge starts without possession")
 	model.scripted_attacker_wins = true
+	var home_energy := home.energy
+	var away_energy := away.energy
 	var win := model.apply_move(home.id, away.pos)
 	_assert(win.action == "challenge", "off-ball step onto opponent is a square fight")
 	_assert(win.attacker_stat_name == "CTR" and win.defender_stat_name == "CTR", "square fight is CTR vs CTR")
 	_assert(home.pos == _spot(1, -1), "winner took the square")
 	_assert(away.pos == _spot(0, -1), "loser was shoved to the origin")
 	_assert(not home.has_ball and not away.has_ball, "no ball changed hands")
+	_assert(home.energy == home_energy - 5, "a resolved square fight costs 5 energy")
+	_assert(away.energy == away_energy, "the shoved defender does not spend energy")
 
 	model.scripted_attacker_wins = false
 	model.ignore_team_gate = true
 	var origin := away.pos
 	var dest := home.pos
 	away.facing = MatchRules.step_direction(origin, dest)
+	var lose_energy := away.energy
 	var lose := model.apply_move(away.id, dest)
 	_assert(lose.action == "challenge", "second contest is still a square fight")
 	_assert(not lose.contest_won, "scripted fight failed")
 	_assert(away.pos == origin, "failed challenger stayed put")
 	_assert(home.pos == dest, "occupant kept the square")
+	_assert(away.energy == lose_energy - 5, "a lost square fight still costs 5 energy")
 
 
 func _test_challenge_takes_ball() -> void:
@@ -1165,6 +1179,8 @@ func _test_challenge_takes_ball() -> void:
 	away.pos = _spot(1, 1)
 	model.scripted_attacker_wins = true
 	model.ignore_team_gate = true
+	var energy_before := away.energy
+	var carrier_energy := st.energy
 	var result := model.apply_move(away.id, MatchRules.CENTER_SPOT)
 	_assert(result.get("action") == "tackle", "off-ball step onto the carrier is a tackle")
 	_assert(result.get("attacker_stat_name") == "DEF" and result.get("defender_stat_name") == "CTR", "tackle is DEF vs CTR")
@@ -1179,6 +1195,8 @@ func _test_challenge_takes_ball() -> void:
 		away.facing == MatchRules.step_direction(st.pos, away.pos),
 		"tackle winner turns their back to the player they stole from"
 	)
+	_assert(away.energy == energy_before - 5, "a resolved tackle costs 5 energy")
+	_assert(st.energy == carrier_energy, "the tackled carrier does not spend energy")
 
 
 func _test_tackle_direction() -> void:
@@ -1191,38 +1209,17 @@ func _test_tackle_direction() -> void:
 	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(-1, 1), origin) == 135, "rear-diagonal is 135°")
 	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(-1, 0), origin) == 180, "cell behind is a back tackle")
 	_assert(MatchRules.tackle_approach_angle_deg(east, origin + Vector2i(-1, -1), origin) == 135, "the other rear-diagonal is also 135°")
-	_assert(MatchRules.tackle_angle_penalty(0) == 0.0, "front tackle has no penalty")
-	_assert(MatchRules.tackle_angle_penalty(45) == -0.15, "45° costs 15 percentage points")
-	_assert(MatchRules.tackle_angle_penalty(90) == -0.30, "side costs 30 percentage points")
-	_assert(MatchRules.tackle_angle_penalty(135) == -0.50, "135° costs 50 percentage points")
-	_assert(MatchRules.tackle_angle_penalty(180) == -0.85, "back tackle costs 85 percentage points")
+	_assert(MatchRules.tackle_angle_bonus(0) == 0.0, "front tackle has no CTR bonus")
+	_assert(MatchRules.tackle_angle_bonus(45) == 0.25, "45° is a 25% CTR bonus")
+	_assert(MatchRules.tackle_angle_bonus(90) == 0.50, "side is a 50% CTR bonus")
+	_assert(MatchRules.tackle_angle_bonus(135) == 0.75, "135° is a 75% CTR bonus")
+	_assert(MatchRules.tackle_angle_bonus(180) == 1.0, "back tackle doubles CTR")
+	_assert(MatchRules.tackle_angle_stat(10, 0.0) == 10, "front throw keeps live CTR")
+	_assert(MatchRules.tackle_angle_stat(10, 0.5) == 15, "side throw is live CTR × 1.5")
+	_assert(MatchRules.tackle_angle_stat(10, 1.0) == 20, "back throw is live CTR × 2")
+	_assert(MatchRules.tackle_angle_stat(15, 0.5) == 23, "side CTR 15 rounds 22.5 up to 23")
 	_assert(MatchRules.tackle_angle_label(90) == "side", "90° is labelled side")
 	_assert(MatchRules.tackle_angle_label(180) == "back", "180° is labelled back")
-	var even := MatchRules.contest_win_chance(9, 9, false)
-	_assert(
-		absi(MatchRules.apply_tackle_angle_chance(even, -0.30) - clampf(even - 0.30, 0.0, 1.0)) < 0.0001,
-		"side penalty subtracts 30 percentage points from success"
-	)
-	_assert(MatchRules.apply_tackle_angle_chance(even, -0.85) == 0.0, "back penalty can clamp success to 0")
-
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 1
-	var lost_back := {
-		attacker_won = true,
-		tied = false,
-		attacker_stat = 9,
-		defender_stat = 9,
-	}
-	MatchRules.apply_tackle_direction_penalty(lost_back, -0.85, rng)
-	_assert(not bool(lost_back.attacker_won), "a 0% back tackle drops a dice win")
-	var kept_front := {
-		attacker_won = true,
-		tied = false,
-		attacker_stat = 9,
-		defender_stat = 9,
-	}
-	MatchRules.apply_tackle_direction_penalty(kept_front, 0.0, rng)
-	_assert(bool(kept_front.attacker_won), "front tackles do not drop a dice win")
 
 	var model := MatchModel.new()
 	model.setup_kickoff()
@@ -1231,40 +1228,54 @@ func _test_tackle_direction() -> void:
 	_assert(cb != null and cb.role == "RCB" and cb.team == MatchRules.Team.AWAY, "helix centre back is the high-DEF tackler")
 	st.facing = Vector2i(1, 0)
 	cb.pos = _spot(1, 0)
-	var base := MatchRules.contest_win_chance(cb.live_defense(), st.live_control(), false)
+	var ctr := st.live_control()
+	var base := MatchRules.contest_win_chance(cb.live_defense(), ctr, false)
 	var front := MatchRules.contest_preview(cb, st)
 	_assert(front.action == "tackle" and int(front.angle_deg) == 0, "preview from ahead is a front tackle")
+	_assert(int(front.defender_stat) == ctr, "front throw uses unboosted CTR")
 	_assert(absi(float(front.chance) - base) < 0.0001, "front preview chance matches DEF vs CTR")
-	_assert(not front.text.contains("front"), "front preview omits a 0% penalty suffix")
+	_assert(not front.text.contains("front"), "front preview omits a 0% bonus suffix")
 	cb.pos = _spot(1, 1)
 	var diag := MatchRules.contest_preview(cb, st)
+	var diag_ctr := MatchRules.tackle_angle_stat(ctr, 0.25)
 	_assert(int(diag.angle_deg) == 45, "forward-diagonal preview is 45°")
+	_assert(int(diag.defender_stat) == diag_ctr, "45° throw uses CTR × 1.25")
 	_assert(
-		absi(float(diag.chance) - MatchRules.apply_tackle_angle_chance(base, -0.15)) < 0.0001,
-		"45° preview subtracts 15 percentage points"
+		absi(float(diag.chance) - MatchRules.contest_win_chance(cb.live_defense(), diag_ctr, false)) < 0.0001,
+		"45° preview is DEF vs boosted CTR"
 	)
-	_assert(diag.text.contains("45° -15%"), "45° preview names the penalty")
+	_assert(diag.text.contains("45° +25%"), "45° preview names the CTR bonus")
 	cb.pos = _spot(0, 1)
 	var side := MatchRules.contest_preview(cb, st)
+	var side_ctr := MatchRules.tackle_angle_stat(ctr, 0.5)
 	_assert(int(side.angle_deg) == 90 and side.angle_label == "side", "preview from the wing is a side tackle")
+	_assert(int(side.defender_stat) == side_ctr, "side throw uses CTR × 1.5")
 	_assert(
-		absi(float(side.chance) - MatchRules.apply_tackle_angle_chance(base, -0.30)) < 0.0001,
-		"side preview subtracts 30 percentage points"
+		absi(float(side.chance) - MatchRules.contest_win_chance(cb.live_defense(), side_ctr, false)) < 0.0001,
+		"side preview is DEF vs boosted CTR"
 	)
-	_assert(side.text.contains("side -30%"), "side preview names the penalty")
+	_assert(side.text.contains("side +50%"), "side preview names the CTR bonus")
 	cb.pos = _spot(-1, 1)
 	var rear_diag := MatchRules.contest_preview(cb, st)
+	var rear_ctr := MatchRules.tackle_angle_stat(ctr, 0.75)
 	_assert(int(rear_diag.angle_deg) == 135, "rear-diagonal preview is 135°")
+	_assert(int(rear_diag.defender_stat) == rear_ctr, "135° throw uses CTR × 1.75")
 	_assert(
-		absi(float(rear_diag.chance) - MatchRules.apply_tackle_angle_chance(base, -0.50)) < 0.0001,
-		"135° preview subtracts 50 percentage points"
+		absi(float(rear_diag.chance) - MatchRules.contest_win_chance(cb.live_defense(), rear_ctr, false)) < 0.0001,
+		"135° preview is DEF vs boosted CTR"
 	)
 	cb.pos = _spot(-1, 0)
 	var back := MatchRules.contest_preview(cb, st)
+	var back_ctr := MatchRules.tackle_angle_stat(ctr, 1.0)
 	_assert(int(back.angle_deg) == 180 and back.angle_label == "back", "preview from behind is a back tackle")
-	_assert(absi(float(back.chance) - 0.0) < 0.0001, "back preview is clamped to 0% with these stats")
-	_assert(back.text.contains("back -85%"), "back preview names the penalty")
-	_assert(back.percent == 0, "HUD percent is 0 for an impossible back tackle")
+	_assert(int(back.defender_stat) == back_ctr, "back throw doubles CTR")
+	_assert(back_ctr == ctr * 2, "back CTR bonus is exactly 2× at these stats")
+	_assert(
+		absi(float(back.chance) - MatchRules.contest_win_chance(cb.live_defense(), back_ctr, false)) < 0.0001,
+		"back preview is DEF vs doubled CTR"
+	)
+	_assert(back.text.contains("back +100%"), "back preview names the doubled CTR")
+	_assert(float(back.chance) < float(front.chance), "a back tackle is harder than a front tackle")
 
 	var steal := MatchModel.new()
 	steal.setup_kickoff()
@@ -1303,7 +1314,8 @@ func _test_tackle_direction() -> void:
 	_assert(not poke.get("contest_won", true), "failed back tackle does not steal")
 	_assert(back_st.has_ball and back_st.pos == MatchRules.CENTER_SPOT, "carrier keeps the ball on a failed back tackle")
 	_assert(back_cb.pos == _spot(-1, 0), "failed back tackler stays put")
-	_assert(CombatLog.format_result(poke).contains("back -85%"), "log names the back-tackle penalty")
+	_assert(int(poke.get("defender_stat", 0)) == back_st.live_control() * 2, "resolved back tackle rolls doubled CTR")
+	_assert(CombatLog.format_result(poke).contains("back +100%"), "log names the back-tackle CTR bonus")
 
 
 func _test_contest_preview() -> void:
@@ -1564,6 +1576,133 @@ func _test_intercepts() -> void:
 	_assert(off_player.id != on_player.id, "on-lane and off-lane placements are different players")
 	for threat in placed:
 		_assert(threat.player.id != off_player.id, "1 tile off an axis-aligned pass does not intercept")
+
+
+func _park_away_field(model: MatchModel, except_id: int = -1) -> void:
+	var park_y := 0
+	for player in model.players:
+		if player.team != MatchRules.Team.AWAY or player.role == "GK":
+			continue
+		if player.id == except_id:
+			continue
+		player.pos = Vector2i(MatchRules.GRID_WIDTH - 1, park_y)
+		park_y += 1
+
+
+func _test_resolution_intercepts() -> void:
+	print("-- resolution intercepts")
+
+	var same := MatchModel.new()
+	same.setup_kickoff()
+	same.scripted_first_intercept_wins = true
+	var same_st := same.player_at(MatchRules.CENTER_SPOT)
+	var same_cut := same.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(same, same_cut.id)
+	same_cut.pos = _spot(2, 1)
+	same_cut.facing = Vector2i(0, -1)
+	_assert(
+		same.interceptors_for_pass(same_st, _spot(4, 0)).is_empty(),
+		"before the step, the helix player is off the pass lane"
+	)
+	var same_mate := same.player_at(_spot(0, -1))
+	var same_lcm := same.player_at(_spot(-3, -1))
+	_fill_plans(same, [
+		{player_id = same_st.id, id = "turn", dest = _spot(1, -1), label = "Turn"},
+		{
+			player_id = same_st.id,
+			id = "pass",
+			dest = _spot(4, 0),
+			target_id = -1,
+			label = "Pass",
+		},
+		{player_id = same_mate.id, id = "done", dest = same_mate.pos, label = "Done"},
+		{player_id = same_lcm.id, id = "done", dest = same_lcm.pos, label = "Done"},
+	])
+	same.end_planning()
+	_fill_plans(same, [{
+		player_id = same_cut.id,
+		id = "move",
+		dest = _spot(2, 0),
+		label = "Move",
+	}])
+	var same_result := same.end_planning()
+	_assert(same_result.action == "resolve", "same-wave step onto the lane resolved")
+	_assert(same_cut.has_ball, "player who stepped onto the lane in the pass wave intercepted")
+	_assert(not same_st.has_ball, "passer lost the intercepted ball")
+	_assert(same.combat_log.as_text().contains("INTERCEPT"), "resolution log records the intercept throw")
+	_assert(same.combat_log.as_text().contains("Wave 2"), "the intercept used live positions after the wave-2 step")
+
+	var earlier := MatchModel.new()
+	earlier.setup_kickoff()
+	earlier.scripted_first_intercept_wins = true
+	var earlier_st := earlier.player_at(MatchRules.CENTER_SPOT)
+	var earlier_cut := earlier.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(earlier, earlier_cut.id)
+	earlier_cut.pos = _spot(2, 1)
+	earlier_cut.facing = Vector2i(0, -1)
+	var earlier_mate := earlier.player_at(_spot(0, -1))
+	var earlier_lcm := earlier.player_at(_spot(-3, -1))
+	_fill_plans(earlier, [
+		{player_id = earlier_st.id, id = "turn", dest = _spot(1, -1), label = "Turn"},
+		{player_id = earlier_st.id, id = "turn", dest = _spot(1, 0), label = "Turn"},
+		{
+			player_id = earlier_st.id,
+			id = "pass",
+			dest = _spot(4, 0),
+			target_id = -1,
+			label = "Pass",
+		},
+		{player_id = earlier_mate.id, id = "done", dest = earlier_mate.pos, label = "Done"},
+		{player_id = earlier_lcm.id, id = "done", dest = earlier_lcm.pos, label = "Done"},
+	])
+	earlier.end_planning()
+	_fill_plans(earlier, [{
+		player_id = earlier_cut.id,
+		id = "move",
+		dest = _spot(2, 0),
+		label = "Move",
+	}])
+	var earlier_result := earlier.end_planning()
+	_assert(earlier_result.action == "resolve", "earlier-wave step onto the lane then a pass resolved")
+	_assert(earlier_cut.has_ball, "player already on the lane when the pass flew intercepted")
+	_assert(not earlier_st.has_ball, "passer lost the ball to the earlier-wave interceptor")
+	_assert(earlier.combat_log.as_text().contains("INTERCEPT"), "earlier-wave intercept is logged")
+	_assert(earlier.combat_log.as_text().contains("Wave 3"), "the pass flew in wave 3 after the wave-2 step")
+
+	var late := MatchModel.new()
+	late.setup_kickoff()
+	late.scripted_first_intercept_wins = true
+	var late_st := late.player_at(MatchRules.CENTER_SPOT)
+	var late_cut := late.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(late, late_cut.id)
+	late_cut.pos = _spot(2, 1)
+	late_cut.facing = Vector2i(0, -1)
+	var late_mate := late.player_at(_spot(0, -1))
+	var late_lcm := late.player_at(_spot(-3, -1))
+	_fill_plans(late, [
+		{
+			player_id = late_st.id,
+			id = "pass",
+			dest = _spot(4, 0),
+			target_id = -1,
+			label = "Pass",
+		},
+		{player_id = late_mate.id, id = "done", dest = late_mate.pos, label = "Done"},
+		{player_id = late_lcm.id, id = "done", dest = late_lcm.pos, label = "Done"},
+	])
+	late.end_planning()
+	_fill_plans(late, [{
+		player_id = late_cut.id,
+		id = "move",
+		dest = _spot(2, 0),
+		label = "Move",
+	}])
+	var late_result := late.end_planning()
+	_assert(late_result.action == "resolve", "later-wave step after a full-flight pass resolved")
+	_assert(not late_cut.has_ball, "a later-wave step is too late once the pass has flown")
+	_assert(late.ball.is_loose() and late.ball.pos == _spot(4, 0), "the pass landed on the target in the pass wave")
+	_assert(late_cut.pos == _spot(2, 0), "the late player still completed their step")
+	_assert(not late.combat_log.as_text().contains("INTERCEPT"), "no intercept throw after the ball had gone")
 
 
 func _test_swap_and_choice() -> void:

@@ -5,7 +5,9 @@ extends RefCounted
 ## Each player has 6 AP. Waves are AP slots 1..6: an action plays in the wave
 ## equal to the cumulative AP spent when it completes. A 2-AP first step plays
 ## in wave 2; a later 2-AP step on the same player plays in wave 4.
-## Inside a wave: turns, tackles, passes/shots, dribbles, square fights, destination contests, moves/sprints/swaps.
+## Inside a wave: turns, tackles, pass/shot launch, dribbles, square fights,
+## destination contests, moves/sprints/swaps, then the ball flies the rest of
+## the way. Intercepts use live positions after this wave's steps.
 
 
 static func resolve(model: MatchModel) -> Dictionary:
@@ -22,6 +24,7 @@ static func resolve(model: MatchModel) -> Dictionary:
 	model.ignore_team_gate = true
 	var events: Array[Dictionary] = []
 	var all_plans := _copy_plans(plans)
+	var deferred: Array[Dictionary] = []
 	var reset := false
 
 	for wave in range(1, MatchRules.PLAYER_ACTION_POINTS + 1):
@@ -31,23 +34,29 @@ static func resolve(model: MatchModel) -> Dictionary:
 		for plan in all_plans:
 			if int(plan.get("ap_end", 0)) == wave:
 				remaining.append(plan)
-		if remaining.is_empty():
+		for plan in deferred:
+			remaining.append(plan)
+		deferred.clear()
+		if remaining.is_empty() and not model.ball.in_flight:
 			continue
 		if wave > 1:
 			model.combat_log.note("Wave %d" % wave)
-		reset = _run_phase(model, remaining, events, ["turn"], "Turns")
+		if not remaining.is_empty():
+			reset = _run_phase(model, remaining, events, ["turn"], "Turns")
+			if not reset:
+				reset = _run_phase(model, remaining, events, ["tackle"], "Tackles")
+			if not reset:
+				reset = _run_ball_phase(model, remaining, events)
+			if not reset:
+				reset = _run_phase(model, remaining, events, ["dribble"], "Dribbles")
+			if not reset:
+				reset = _run_phase(model, remaining, events, ["challenge"], "Square fights")
+			if not reset:
+				reset = _resolve_destination_clashes(model, remaining, events)
+			if not reset:
+				reset = _run_phase(model, remaining, events, ["move", "sprint", "swap"], "Movement")
 		if not reset:
-			reset = _run_phase(model, remaining, events, ["tackle"], "Tackles")
-		if not reset:
-			reset = _run_ball_phase(model, remaining, events)
-		if not reset:
-			reset = _run_phase(model, remaining, events, ["dribble"], "Dribbles")
-		if not reset:
-			reset = _run_phase(model, remaining, events, ["challenge"], "Square fights")
-		if not reset:
-			reset = _resolve_destination_clashes(model, remaining, events)
-		if not reset:
-			reset = _run_phase(model, remaining, events, ["move", "sprint", "swap"], "Movement")
+			reset = _resolve_flights(model, remaining, events)
 		if reset:
 			for leftover in remaining:
 				events.append(_cancel(model, leftover, "play stopped — goal"))
@@ -56,7 +65,16 @@ static func resolve(model: MatchModel) -> Dictionary:
 					events.append(_cancel(model, plan, "play stopped — goal"))
 			break
 		for leftover in remaining:
+			if str(leftover.get("action", "")) in ["pass", "shoot"] and model.ball.in_flight:
+				deferred.append(leftover)
+				continue
 			events.append(_cancel(model, leftover, "could not be completed"))
+
+	if not reset:
+		reset = _finish_flights(model, deferred, events)
+	for leftover in deferred:
+		var reason := "play stopped — goal" if reset else "could not be completed"
+		events.append(_cancel(model, leftover, reason))
 
 	if not reset:
 		model.current_team = MatchRules.Team.HOME
@@ -124,13 +142,86 @@ static func _run_ball_phase(
 	model.combat_log.note("Ball")
 	while not batch.is_empty():
 		var plan := _next_ball_plan(model, batch)
+		var holder := model.carrier()
+		if model.ball.in_flight and (holder == null or int(plan.get("player_id", -1)) != holder.id):
+			break
 		_drop_plan(remaining, int(plan.player_id), int(plan.get("ap_index", 0)))
 		_drop_plan(batch, int(plan.player_id), int(plan.get("ap_index", 0)))
 		var result := _apply_plan(model, plan)
 		events.append(result)
 		if result.get("reset", false):
 			return true
+		if result.get("in_flight", false):
+			break
 	return false
+
+
+static func _resolve_flights(
+	model: MatchModel,
+	remaining: Array[Dictionary],
+	events: Array[Dictionary]
+) -> bool:
+	while true:
+		if model.ball.in_flight:
+			var flown := model.drain_flight()
+			if _emit_flight(model, events, flown):
+				return true
+		var plan := _ready_ball_plan(model, remaining)
+		if plan.is_empty():
+			return false
+		_drop_plan(remaining, int(plan.player_id), int(plan.get("ap_index", 0)))
+		var result := _apply_plan(model, plan)
+		events.append(result)
+		if result.get("reset", false):
+			return true
+	return false
+
+
+static func _finish_flights(
+	model: MatchModel,
+	deferred: Array[Dictionary],
+	events: Array[Dictionary]
+) -> bool:
+	while true:
+		if model.ball.in_flight:
+			var flown := model.drain_flight()
+			if _emit_flight(model, events, flown):
+				return true
+		var plan := _ready_ball_plan(model, deferred)
+		if plan.is_empty():
+			return false
+		_drop_plan(deferred, int(plan.player_id), int(plan.get("ap_index", 0)))
+		var result := _apply_plan(model, plan)
+		events.append(result)
+		if result.get("reset", false):
+			return true
+	return false
+
+
+static func _ready_ball_plan(model: MatchModel, remaining: Array[Dictionary]) -> Dictionary:
+	var batch: Array[Dictionary] = []
+	for plan in remaining:
+		if str(plan.get("action", "")) in ["pass", "shoot"]:
+			batch.append(plan)
+	if batch.is_empty():
+		return {}
+	var holder := model.carrier()
+	if holder == null:
+		return {}
+	for plan in batch:
+		if int(plan.get("player_id", -1)) == holder.id:
+			return plan
+	return {}
+
+
+static func _emit_flight(
+	model: MatchModel, events: Array[Dictionary], result: Dictionary
+) -> bool:
+	if result.is_empty() or not result.get("ok", false):
+		return false
+	events.append(result)
+	model.combat_log.event(result)
+	return result.get("reset", false)
 
 
 static func _next_ball_plan(model: MatchModel, batch: Array[Dictionary]) -> Dictionary:
@@ -252,6 +343,12 @@ static func _arrival_pair(
 		defender = player_a
 		attacker_stat = player_b.live_control()
 		defender_stat = player_a.live_control()
+	var tackle_dir := {}
+	if action == "tackle":
+		tackle_dir = MatchRules.tackle_direction(carrier.facing, attacker.pos, dest)
+		defender_stat = MatchRules.tackle_angle_stat(
+			defender_stat, float(tackle_dir.bonus)
+		)
 	var holder := model.carrier()
 	var possession_team := holder.team if holder != null else -1
 	var ties_to_atk := false
@@ -262,11 +359,6 @@ static func _arrival_pair(
 		MatchRules.apply_scripted_winner(roll, bool(model.scripted_attacker_wins))
 	elif model.scripted_contest_tie:
 		MatchRules.apply_scripted_tie(roll)
-	var tackle_dir := {}
-	if action == "tackle":
-		tackle_dir = MatchRules.tackle_direction(carrier.facing, attacker.pos, dest)
-		if model.scripted_attacker_wins == null and not model.scripted_contest_tie:
-			MatchRules.apply_tackle_direction_penalty(roll, float(tackle_dir.penalty), model.rng)
 	var tied := action in ["tackle", "dribble"] and bool(roll.get("tied", false))
 	var winner_player := attacker if roll.attacker_won else defender
 	var contest := {
@@ -292,7 +384,7 @@ static func _arrival_pair(
 	}
 	if not tackle_dir.is_empty():
 		contest.angle_deg = tackle_dir.angle_deg
-		contest.angle_penalty = tackle_dir.penalty
+		contest.angle_bonus = tackle_dir.bonus
 		contest.angle_label = tackle_dir.label
 	if tied:
 		var bounce_cell := model._bounce_ball()
@@ -463,12 +555,12 @@ static func _apply_plan(model: MatchModel, plan: Dictionary) -> Dictionary:
 				dest = target.pos
 			if not model.can_pass_to_cell(player, dest):
 				return _cancel(model, plan, "pass no longer legal")
-			result = model.apply_pass_to(player.id, dest)
+			result = model.apply_pass_to(player.id, dest, false)
 		"shoot":
 			var leftover := int(plan.get("ap_left", 0))
 			if not model.can_shoot(player, leftover):
 				return _cancel(model, plan, "shot no longer legal")
-			result = model.apply_shoot(player.id, leftover)
+			result = model.apply_shoot(player.id, leftover, false)
 		"turn":
 			var dest: Vector2i = plan.get("dest", player.pos)
 			result = model.apply_turn(player.id, dest)

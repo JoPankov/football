@@ -21,6 +21,8 @@ const SPRINT_AP_COST := 2
 const SPRINT_DIAG_AP_COST := 3
 const SPRINT_ENERGY_COST := 3
 const SPRINT_DIAG_ENERGY_COST := 5
+## Dribble, tackle, and square fight each cost 5 energy.
+const CONTEST_ENERGY_COST := 5
 ## One AP turns up to this many 45° ring steps (90°). 135° and 180° cost 2 AP.
 const TURN_STEPS_PER_AP := 2
 ## Move highlights may start with one turn of at most this many AP.
@@ -65,13 +67,9 @@ const SHOT_MAX_HIT := 0.98
 const STEP_ACTIONS: Array[String] = ["move", "dribble", "tackle", "challenge", "swap"]
 ## Rear pass cone: directly back plus this many degrees to each side.
 const BACK_PASS_HALF_ANGLE_DEG := 43.0
-## Tackle success penalty by approach angle vs the carrier's facing.
-## Front is 0°; back is 180°. Values are percentage points on the dice chance.
-const TACKLE_FRONT_PENALTY := 0.0
-const TACKLE_45_PENALTY := -0.15
-const TACKLE_SIDE_PENALTY := -0.30
-const TACKLE_135_PENALTY := -0.50
-const TACKLE_BACK_PENALTY := -0.85
+## Carrier CTR bonus on a tackle, per 45° off their facing.
+## Front is 0° (×1); side 90° is +50%; back 180° doubles CTR.
+const TACKLE_ANGLE_BONUS_PER_45 := 0.25
 
 ## 1dSTAT faces are 1..stat. Live stats are already at least 1.
 
@@ -307,6 +305,8 @@ static func action_energy_cost(
 		return 0
 	if action_id == "sprint":
 		return sprint_energy_cost(from, to)
+	if action_id in ["dribble", "tackle", "challenge"]:
+		return CONTEST_ENERGY_COST
 	return ACTION_ENERGY_COST
 
 
@@ -841,20 +841,14 @@ static func tackle_approach_angle_deg(
 	return clampi(snapped_deg, 0, 180)
 
 
-static func tackle_angle_penalty(angle_deg: int) -> float:
-	match angle_deg:
-		0:
-			return TACKLE_FRONT_PENALTY
-		45:
-			return TACKLE_45_PENALTY
-		90:
-			return TACKLE_SIDE_PENALTY
-		135:
-			return TACKLE_135_PENALTY
-		180:
-			return TACKLE_BACK_PENALTY
-		_:
-			return TACKLE_FRONT_PENALTY
+static func tackle_angle_bonus(angle_deg: int) -> float:
+	var steps := clampi(int(round(float(maxi(angle_deg, 0)) / 45.0)), 0, 4)
+	return TACKLE_ANGLE_BONUS_PER_45 * float(steps)
+
+
+## Live CTR used on the tackle throw after the approach-angle bonus.
+static func tackle_angle_stat(stat: int, bonus: float) -> int:
+	return maxi(1, int(floor(float(maxi(stat, 1)) * (1.0 + bonus) + 0.5)))
 
 
 static func tackle_angle_label(angle_deg: int) -> String:
@@ -879,43 +873,12 @@ static func tackle_direction(
 	from_cell: Vector2i
 ) -> Dictionary:
 	var angle_deg := tackle_approach_angle_deg(carrier_facing, tackler_pos, from_cell)
-	var penalty := tackle_angle_penalty(angle_deg)
+	var bonus := tackle_angle_bonus(angle_deg)
 	return {
 		angle_deg = angle_deg,
-		penalty = penalty,
+		bonus = bonus,
 		label = tackle_angle_label(angle_deg),
 	}
-
-
-static func apply_tackle_angle_chance(base_chance: float, penalty: float) -> float:
-	return clampf(base_chance + penalty, 0.0, 1.0)
-
-
-## After a 1dSTAT win, drop some successes so overall P(win) matches the angled chance.
-## Ties are left alone. A 0% final chance converts every dice win into a loss.
-static func apply_tackle_direction_penalty(
-	roll: Dictionary,
-	penalty: float,
-	rng: RandomNumberGenerator
-) -> void:
-	if penalty >= 0.0:
-		return
-	if not bool(roll.get("attacker_won", false)) or bool(roll.get("tied", false)):
-		return
-	var base := contest_win_chance(
-		int(roll.get("attacker_stat", 1)),
-		int(roll.get("defender_stat", 1)),
-		false
-	)
-	var final_chance := apply_tackle_angle_chance(base, penalty)
-	if final_chance <= 0.0:
-		roll.attacker_won = false
-		return
-	if base <= 0.0:
-		return
-	var keep := final_chance / base
-	if rng.randf() >= keep:
-		roll.attacker_won = false
 
 
 ## Chance the attacker wins a 1dSTAT vs 1dSTAT contest.
@@ -970,22 +933,22 @@ static func contest_preview(
 		ties_to_atk = false
 	else:
 		ties_to_atk = attacker_wins_ties(mover, occupant, possession_team)
-	var chance := contest_win_chance(atk, deff, ties_to_atk)
 	var angle_deg := 0
-	var angle_penalty := 0.0
+	var angle_bonus := 0.0
 	var angle_label := "front"
 	if action == "tackle":
 		var direction := tackle_direction(occupant.facing, mover.pos, occupant.pos)
 		angle_deg = int(direction.angle_deg)
-		angle_penalty = float(direction.penalty)
+		angle_bonus = float(direction.bonus)
 		angle_label = str(direction.label)
-		chance = apply_tackle_angle_chance(chance, angle_penalty)
+		deff = tackle_angle_stat(deff, angle_bonus)
+	var chance := contest_win_chance(atk, deff, ties_to_atk)
 	var pct := int(round(chance * 100.0))
 	var text := "%s %s %d %s vs %d %s = %d%% success" % [
 		verb, occupant.label(), atk, atk_name, deff, def_name, pct
 	]
-	if action == "tackle" and angle_penalty < 0.0:
-		text += " (%s %d%%)" % [angle_label, int(round(angle_penalty * 100.0))]
+	if action == "tackle" and angle_bonus > 0.0:
+		text += " (%s +%d%%)" % [angle_label, int(round(angle_bonus * 100.0))]
 	return {
 		action = action,
 		verb = verb,
@@ -996,7 +959,7 @@ static func contest_preview(
 		chance = chance,
 		percent = pct,
 		angle_deg = angle_deg,
-		angle_penalty = angle_penalty,
+		angle_bonus = angle_bonus,
 		angle_label = angle_label,
 		text = text,
 	}
@@ -1021,10 +984,13 @@ static func closest_on_segment(a: Vector2, b: Vector2, p: Vector2) -> Dictionary
 	return {t = t, closest = closest, dist = p.distance_to(closest)}
 
 
-## True when the pass segment comes within radius of p, not counting the start point.
-static func segment_intersects_circle(a: Vector2, b: Vector2, p: Vector2, radius: float) -> Dictionary:
+## True when the pass segment comes within radius of p, not counting the start point
+## unless `include_start` (after the ball has already left the passer).
+static func segment_intersects_circle(
+	a: Vector2, b: Vector2, p: Vector2, radius: float, include_start: bool = false
+) -> Dictionary:
 	var hit := closest_on_segment(a, b, p)
-	var along_lane: bool = hit.t > 0.0001
+	var along_lane: bool = hit.t > 0.0001 or include_start
 	hit.hits = along_lane and hit.dist <= radius + 0.0001
 	return hit
 

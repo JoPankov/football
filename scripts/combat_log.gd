@@ -136,6 +136,8 @@ static func format_result(event: Dictionary) -> String:
 			cell_text(event.get("dest", Vector2i.ZERO)),
 			event.get("winner_label", "winner"),
 		]
+	if event.get("in_flight", false):
+		return ""
 	if event.get("intercepted", false):
 		return "INTERCEPT  %s %s %s  vs  %s %s %s" % [
 			event.get("attacker_label", "passer"),
@@ -210,11 +212,11 @@ static func format_result(event: Dictionary) -> String:
 	if event.get("bounced", false):
 		line += "  →  %s" % cell_text(event.get("bounce_cell", event.get("dest", Vector2i.ZERO)))
 	if action == "tackle" and event.has("angle_label"):
-		var penalty := float(event.get("angle_penalty", 0.0))
-		if penalty < 0.0:
-			line += "  (%s %d%%)" % [
+		var bonus := float(event.get("angle_bonus", 0.0))
+		if bonus > 0.0:
+			line += "  (%s +%d%%)" % [
 				event.get("angle_label", "angle"),
-				int(round(penalty * 100.0)),
+				int(round(bonus * 100.0)),
 			]
 		else:
 			line += "  (%s)" % event.get("angle_label", "front")

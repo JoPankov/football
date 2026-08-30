@@ -43,7 +43,7 @@ Kickoff values by role:
 ### Energy
 
 - Max energy is **STA × 10**. Players start each kickoff full.
-- Each resolved action (move, turn, swap, pass, dribble, tackle, square fight, shot) costs **1 energy**. **Sprint** costs **3 energy** straight or **5 energy** diagonally. Cancelled actions do not.
+- Each resolved action (move, turn, swap, pass, shot) costs **1 energy**. **Sprint** costs **3 energy** straight or **5 energy** diagonally. **Dribble**, **tackle**, and **square fight** each cost **5 energy**. Cancelled actions do not.
 - Live ACC / DEF / CTR scale with remaining energy: full energy is 100% of the printed stat; **empty energy halves them**. In between, the drop is linear. The inspector shows `ACC 10 (13)` when fatigue has reduced the live value.
 
 ## How to take a turn
@@ -121,7 +121,7 @@ Highlights (after you pick an action):
 
 ### Dribble
 
-- Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
+- Costs **2 AP** straight or **3 AP** diagonally, same as a walk, and **5 energy**.
 - Carrier steps onto an opponent in the **move cone**.
 - Roll: your **CTR** vs their **DEF**.
 - You win: you take the square, they are shoved back to where you came from, you keep the ball.
@@ -130,28 +130,28 @@ Highlights (after you pick an action):
 
 ### Tackle
 
-- Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
+- Costs **2 AP** straight or **3 AP** diagonally, same as a walk, and **5 energy**.
 - Player **without** the ball steps onto the **carrier** in the **move cone**.
 - Roll: your **DEF** vs their **CTR**.
 - Approach angle is measured from the **carrier’s facing** to the cell you are coming from (the square you occupy, or the meeting square on an arrival tackle). Front is head-on; back is from behind.
-- That angle subtracts percentage points from tackle success (clamped at 0%):
+- That angle **boosts the carrier’s CTR** for the throw — **+25% per 45°**. The boosted CTR is what they roll. Front is unchanged; from behind their CTR is doubled:
 
-| Approach | Penalty |
+| Approach | Carrier CTR |
 |---|---|
-| Front (0°) | none |
-| 45° | −15% |
-| Side (90°) | −30% |
-| 135° | −50% |
-| Back (180°) | −85% |
+| Front (0°) | ×1 |
+| 45° | ×1.25 |
+| Side (90°) | ×1.5 |
+| 135° | ×1.75 |
+| Back (180°) | ×2 |
 
-- Hover a tackle to see the penalised chance, e.g. `tackle NAME 13 DEF vs 9 CTR = 32% success (side -30%)`.
+- Hover a tackle to see the boosted CTR and the chance, e.g. `tackle NAME 13 DEF vs 14 CTR = 32% success (side +50%)`.
 - You win: you steal the ball and turn your back to the player you stole from. Both players stay on their tiles.
 - You lose: nothing changes.
-- A **tie**: both stay put and the ball bounces the same way as a tied dribble. The approach penalty does not turn a bounce into a win or a loss.
+- A **tie**: both stay put and the ball bounces the same way as a tied dribble. The facing bonus does not turn a bounce into a win or a loss.
 
 ### Square fight
 
-- Costs **2 AP** straight or **3 AP** diagonally, same as a walk.
+- Costs **2 AP** straight or **3 AP** diagonally, same as a walk, and **5 energy**.
 - Player without the ball steps onto an opponent in the **move cone** who also does not have the ball.
 - Roll: **CTR vs CTR**.
 - You win: you swap onto that square. No ball changes hands.
@@ -188,7 +188,7 @@ Example: Aether queues a 2-AP step then another 2-AP step. Helix queues a 3-AP s
 Inside a wave:
 
 1. **Tackles**
-2. **Passes and shots** — the ball travels next, following the current carrier so a pass can feed another pass or a shot. A pass to a teammate who also queued a move arrives first; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
+2. **Passes and shots launch** — the ball leaves the carrier. A pass can still feed another pass or a shot once it arrives. A pass to a teammate who also queued a move arrives first if it gets there this wave; they then move with the ball. A pass to an empty square lands there loose; a player who then steps onto that square collects it.
 3. **Dribbles**
 4. **Square fights**
 5. **Destination contests** — if two or more remaining **moves or sprints** target the same empty square:
@@ -197,6 +197,7 @@ Inside a wave:
    - **Same team:** **1dCTR**; a tie goes to the player with the ball if one has it, otherwise the lower-id player (first claimer).
    Losers stay put.
 6. **Moves, sprints, and swaps**
+7. **The ball flies** — the **whole remaining pass or shot** along the line. Intercepts are rolled against whoever is standing in range after players have taken this wave’s steps. A player who moved onto the lane in an earlier wave, or in this wave before the ball flew, gets the intercept throw. A player who arrives in a later wave is too late.
 
 So if Aether tackles the Helix carrier and that carrier also queued a pass, the tackle is resolved first. If the tackle wins the ball, the pass is cancelled and the log says why.
 
@@ -237,6 +238,7 @@ When the carrier is selected and you hover a legal **pass** tile, or hover the o
 - Opponents whose **0.7-tile radius** circle the line **crosses or touches** can intercept.
 - Standing only next to the passer (not along the lane) does not count. An adjacent orthogonal cell is 1 tile off, so it does not intercept an axis-aligned pass.
 - Teammates and the intended receiver never intercept. On a shot, a keeper standing **in the net** is that occupant — they do not intercept; they save if the ball arrives.
+- Resolution uses **live positions**. When the pass or shot is performed, the ball flies the **whole way** in that wave. A player who was off the line when the pass was queued still gets a throw if they have stepped into range **before** that flight — in an earlier wave, or in the same wave before the ball flies. Too late if they arrive after.
 
 Each interceptor is an **ACC vs DEF** contest (passer’s ACC, interceptor’s DEF), checked in order along the pass or shot. Ties go to the **passer / shooter**. Standing off the line then cuts intercept chance: `reach = 1 / (1 + dist)`, so 0.7 tiles off keeps about **59%**. They must win the dice **and** make the reach.
 
@@ -292,7 +294,7 @@ goal = through x hit x (1 - save)
 
 Resolution:
 
-1. Intercepts, same as a pass. First interceptor who wins the dice and makes the reach takes the ball on the cut-off tile. The shot never reaches the net.
+1. Intercepts, same as a pass, along the whole shot. First interceptor who wins the dice and makes the reach takes the ball on the cut-off tile. The shot never reaches the net.
 2. If it is not intercepted, roll hit against `hit`.
 3. If it hits and a keeper is in the net, they try a save (shooter **1dACC** vs keeper **1dDEF**; ties to the shooter).
 4. Goal: score +1, kickoff reset, the team that conceded starts with the ball and plans first. Helix’s restart uses the mirrored 4-4-2.

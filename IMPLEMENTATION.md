@@ -39,7 +39,7 @@ scenes/main.tscn
     MatchModel                              authoritative state
       MatchRules                            pure constants + math
       Formation                             kickoff slots + role stats
-      PlayerState / BallState               data
+      PlayerState / BallState               data (`in_flight` while a pass/shot travels)
       CombatLog                             text + fog-of-war
       TurnResolver                          cycle phases
       AiCoach                               greedy one-side planner
@@ -65,7 +65,7 @@ scenes/main.tscn
 | `project.godot` | Name, 1280×720 maximized, main scene, Forward Plus, dark clear color |
 | `scenes/main.tscn` | `Main` + `Pitch/Pieces/Ball` + `Camera2D` + `HUD` + `GameMenu` |
 | `scenes/player.tscn` | Hex/shield piece: number + role labels |
-| `scripts/match_rules.gd` | Grid, nets, offside, intercept geometry / reach, 1dSTAT, shot formula, tackle approach angle |
+| `scripts/match_rules.gd` | Grid, nets, offside, intercept geometry / reach, 1dSTAT, shot formula, tackle approach CTR bonus |
 | `scripts/match_model.gd` | Kickoff, queries, queue, `pop_last_plan`, apply move/pass/swap/shoot/contest, `clone()` |
 | `scripts/turn_resolver.gd` | Simultaneous cycle; phase order; destination clashes |
 | `scripts/player_state.gd` | Id, team, role, pos, facing, printed + live stats, energy; `clone()` |
@@ -155,7 +155,7 @@ factor = 0.5 + 0.5 * (energy / max_energy)
 live   = max(1, round(printed * factor))
 ```
 
-Empty energy **halves** the printed number (rounded), it does not zero it. Each **resolved** action costs 1 energy (`_finish_action` / a few goal paths), except **sprint** which costs 3 orthogonal or 5 diagonally (`sprint_energy_cost`). Cancelled actions do not spend. A kickoff rebuild refills everyone.
+Empty energy **halves** the printed number (rounded), it does not zero it. Each **resolved** action costs 1 energy (`_finish_action` / a few goal paths), except **sprint** which costs 3 orthogonal or 5 diagonally (`sprint_energy_cost`) and **dribble / tackle / square fight** which cost 5 (`CONTEST_ENERGY_COST`). Cancelled actions do not spend. A kickoff rebuild refills everyone.
 
 ---
 
@@ -229,17 +229,17 @@ The resolver never implements dribble/tackle itself. It calls model methods. **S
 | no | yes | `tackle` | mover DEF vs occupant CTR |
 | no | no | `challenge` | CTR vs CTR |
 
-Win: dribble and square fight swap onto the square (loser shoved to origin). Dribble win keeps the ball. Tackle win steals in place — both stay put, the ball moves to the tackler, and the winner **faces away** from the player they stole from (`_face_away_from`). Dribble loss: stay put, occupant steals the ball. Tackle/fight loss: nothing changes. Dribble or tackle **numeric tie**: both stay put and the ball bounces to a random in-bounds cell of the 3×3 around its current tile (`MatchRules.bounce_cells`), including staying put. Occupied landings give that player the ball; empty landings leave it loose. Square-fight ties still use `attacker_wins_ties`.
+Win: dribble and square fight swap onto the square (loser shoved to origin). Dribble win keeps the ball. Tackle win steals in place — both stay put, the ball moves to the tackler, and the winner **faces away** from the player they stole from (`_face_away_from`). Dribble loss: stay put, occupant steals the ball. Tackle/fight loss: nothing changes. Dribble or tackle **numeric tie**: both stay put and the ball bounces to a random in-bounds cell of the 3×3 around its current tile (`MatchRules.bounce_cells`), including staying put. Occupied landings give that player the ball; empty landings leave it loose. Square-fight ties still use `attacker_wins_ties`. Each of these contests costs 5 energy on the acting player.
 
-Tackle success is the 1dDEF vs 1dCTR chance minus an **approach-angle penalty** (`MatchRules.tackle_direction`): 0° front 0, 45° −15pp, 90° side −30pp, 135° −50pp, 180° back −85pp, clamped at 0%. Angle is carrier facing vs the vector from the contested cell to the tackler. Dice still roll; a win can be dropped so overall P(win) matches the penalised chance. Numeric ties still bounce. Scripted contest outcomes skip the extra drop. HUD `contest_preview` shows the penalised percent.
+Tackle success is 1dDEF vs the carrier’s **angled CTR**. Approach angle (`MatchRules.tackle_direction`) is carrier facing vs the vector from the contested cell to the tackler. The carrier’s live CTR is multiplied by `1 + 0.25 × (angle / 45°)` (`MatchRules.tackle_angle_stat`): 0° front ×1, 45° ×1.25, 90° side ×1.5, 135° ×1.75, 180° back ×2. That boosted face is what both the dice and `contest_win_chance` use. Numeric ties still bounce. HUD `contest_preview` shows the boosted CTR and the chance.
 
-Pass: `apply_pass_to`. Intercepts first (see below), then snapshot teammates in an offside position into `offside_marked_ids`, then offside if the occupant is marked, else give or drop. Passer does not move. A later collect by a marked player (`apply_move` / `apply_sprint` onto the loose ball) is also offside. Anyone else receiving the ball (`_give_ball`) clears the marks.
+Pass: `apply_pass_to(from_id, dest, instant=true)`. `_launch_flight` releases the ball and snapshots offside marks. Instant (tests) then `drain_flight()`. Resolver passes `instant=false` and drains after that wave’s movement. Intercepts are `_resolve_pass_intercepts` on the remaining lane against live positions; a steal `_give_ball`s the interceptor and clears marks. Arrival: offside if the occupant is marked, else give or drop. Passer does not move. A later collect by a marked player (`apply_move` / `apply_sprint` onto a **collectable** loose ball, not an in-flight one) is also offside. Anyone else receiving the ball (`_give_ball`) clears the marks.
 
 Sprint: `apply_sprint`. Two tiles straight ahead of facing. Through tile and dest must be empty. Carries or collects the ball (dest or through). Costs 3 energy straight or 5 diagonally. Opponent net with the ball is a goal, same as a walk-in.
 
 Swap: adjacent teammate only. Carrier keeps the ball and it follows them.
 
-Shoot: `apply_shoot(player_id, remaining_ap)`. Intercepts first (`_resolve_pass_intercepts` on shooter → opponent net, same as a pass; the keeper in the net is the dest occupant so they do not intercept). If stolen, interceptor cuts to the landing and takes the ball (`intercepted`, no hit roll). Else hit roll against `shot_hit_chance` (Gaussian/erf with **+5% ACC per leftover AP**, clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter; ACC includes leftover). The shot spends every leftover AP and ends that player’s planning. Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff). `shot_preview.goal_chance` is `through × hit × (1 − save)`. Hovering the net with Shoot selected draws the pass lane and intercept circles.
+Shoot: `apply_shoot(player_id, remaining_ap, instant=true)`. Same launch/drain path as a pass with dest = opponent net (the keeper in the net is the dest occupant so they do not intercept). If stolen, interceptor cuts to the landing and takes the ball (`intercepted`, no hit roll). Else on arrival: hit roll against `shot_hit_chance` (Gaussian/erf with **+5% ACC per leftover AP**, clamped 5–98%), then optional keeper save (shooter 1dACC vs keeper 1dDEF, ties to shooter; ACC includes leftover). The shot spends every leftover AP and ends that player’s planning. Miss → loose on the goal tile. Save → keeper has the ball. Goal → `_award_goal` (rebuilds kickoff). `shot_preview.goal_chance` is `through × hit × (1 − save)`. Hovering the net with Shoot selected draws the pass lane and intercept circles.
 
 ### Dice
 
@@ -252,7 +252,7 @@ Dribble and tackle **numeric ties bounce** the ball (`tied` on the roll, `bounce
 - Same team, nobody has it → attacker (first claimer in clash code).
 - Opposite, nobody has it → the side whose team currently possesses, else occupant.
 
-`contest_win_chance` enumerates the `atk * def` outcomes so HUD percents match the dice, including the tie rule. Tackle previews then subtract `MatchRules.tackle_angle_penalty` (percentage points by approach vs the carrier’s facing).
+`contest_win_chance` enumerates the `atk * def` outcomes so HUD percents match the dice, including the tie rule. Tackle previews feed the carrier’s angled CTR (`MatchRules.tackle_angle_stat`) into that same formula.
 
 ### Scripted outcomes (tests only)
 
@@ -270,19 +270,20 @@ Do not use these from game code.
 
 ## TurnResolver — cycle phases
 
-`TurnResolver.resolve(model)` copies `home_plans + away_plans` into `remaining`, logs `── Resolve cycle N ──`, sets `ignore_team_gate`, then loops **six AP waves** (`ap_end` 1..6). An action plays in the wave equal to the cumulative AP spent when it completes. A 2-AP first step is wave 2; a 3-AP first step is wave 3; a second 2-AP step on the same player is wave 4. Empty waves are skipped. A 1-AP pass as a first action therefore happens in wave 1, **before** anyone’s 2-AP tackle.
+`TurnResolver.resolve(model)` copies `home_plans + away_plans` into `remaining`, logs `── Resolve cycle N ──`, sets `ignore_team_gate`, then loops **six AP waves** (`ap_end` 1..6). An action plays in the wave equal to the cumulative AP spent when it completes. A 2-AP first step is wave 2; a 3-AP first step is wave 3; a second 2-AP step on the same player is wave 4. Empty waves are skipped. A 1-AP pass as a first action therefore **launches** in wave 1, **before** anyone’s 2-AP tackle; it then flies the **whole remaining path** after that wave’s movement.
 
 Inside a wave:
 
 1. **Tackles** (`tackle`) — lowest `player_id` first inside a phase.
-2. **Ball** (`pass`, `shoot`) — not id order. Always play the **current carrier’s** pass/shot next, so a pass can feed another pass or a shot. If the carrier has no ball action left, lowest id in the leftover batch.
+2. **Ball** (`pass`, `shoot`) — not id order. Always play the **current carrier’s** pass/shot next, so a pass can feed another pass or a shot once the ball arrives. Launch only (`apply_pass_to` / `apply_shoot` with `instant = false`); the ball is `BallState.in_flight`. If the ball is still flying, other pass/shot plans wait. If it is not, applying them cancels `"lost the ball"` / the plan’s `expects_reason`.
 3. **Dribbles**
 4. **Square fights** (`challenge`)
 5. **Destination contests** — remaining **moves and sprints** that share a dest:
    - Same team: 1dCTR, tie via `attacker_wins_ties` (ball / lower id). Losers cancelled `"lost the square fight"`. Winner stays in `remaining` for the move phase.
-   - Opposite, one has the ball: treat as **tackle** (DEF vs CTR, same approach-angle penalty as a step-on tackle, measured from the meeting square). Winner may steal and then faces away from the old carrier. A numeric tie bounces the ball and both stay put.
+   - Opposite, one has the ball: treat as **tackle** (DEF vs CTR, same approach-angle CTR bonus as a step-on tackle, measured from the meeting square). Winner may steal and then faces away from the old carrier. A numeric tie bounces the ball and both stay put.
    - Opposite, neither has the ball: CTR vs CTR square fight. Winner also collects a loose ball on that tile if `apply_move` runs onto it.
 6. **Moves, sprints, and swaps**
+7. **Flight** — `drain_flight()` the whole remaining path. Intercepts use the remaining lane against **live** `player.pos` after movement. `scripted_first_intercept_wins` applies to whoever is on that lane. Follow-up pass/shot plans of the new carrier play immediately in this same flight step (and also drain). After wave 6, `drain_flight()` is a safety net if anything is still in the air.
 
 A result with `reset == true` (goal) **stops the cycle**. Leftover plans are cancelled `"play stopped — goal"`. Kickoff already ran inside `_award_goal`.
 
@@ -300,6 +301,8 @@ Pass destinations stored as a teammate `target_id` are resolved to that player�
 
 Computed in **tile space**. Segment = passer / shooter tile centre → target tile centre. Shots reuse `interceptors_for_pass` / `_resolve_pass_intercepts` with dest = opponent net. An opponent intercepts if their 0.7-tile-radius circle touches the segment at `t > 0` (standing only next to the passer does not count; an adjacent orthogonal cell is 1.0 away and is out). Teammates and the intended receiver never intercept. A keeper standing in the net is that dest occupant, so they save rather than intercept.
 
+Direct `apply_pass_to` / `apply_shoot` **drain** the whole path immediately (tests). `TurnResolver` launches (`instant = false`), then `drain_flight()` after that wave’s movement. A player who was off the lane when the pass was queued intercepts if they are in range when it flies — they stepped there in an earlier wave, or in this wave before flight. Too late if they arrive after the pass wave.
+
 Order: increasing `t` along the lane. Each is passer **live ACC** vs interceptor **live DEF**, ties to the **passer** (ball team). Intercept chance is then multiplied by `reach = 1 / (1 + INTERCEPT_DIST_K * dist)` (`INTERCEPT_DIST_K = 1`, so 0.7 tiles off keeps `1/1.7`). First failure steals — interceptor must win the dice and pass the reach roll.
 
 Landing: snap the closest point on the segment to a tile; if occupied, search nearby free tiles. Interceptor leaves their old cell empty.
@@ -312,7 +315,7 @@ Landing: snap the closest point on the segment to a tile; if occupied, search ne
 
 Position check (`MatchRules.is_offside_position`): in opponent’s half, strictly nearer the opponent goal than the **ball/passer** cell, and fewer than two opponents as near that goal as the player (level counts as covering). Keeper counts. Level with the ball is onside.
 
-A **completed, non-intercepted pass** snapshots every teammate in an offside position (`offside_marked_ids`, `offside_passer_id`). Offside is called if a marked player is the next to play the ball: they occupy the pass dest, or they collect the loose ball later (`_take_loose_ball`). An onside teammate, opponent, interceptor, or the passer touching it first clears the marks (`_give_ball`). Kickoff clears them. Carrying, swapping, and collecting while unmarked are never offside. Intercept happens **before** the snapshot; a stolen pass is not flagged.
+A pass **launch** snapshots every teammate in an offside position (`offside_marked_ids`, `offside_passer_id`). Offside is called if a marked player is the next to play the ball: they occupy the pass dest, or they collect the loose ball later (`_take_loose_ball`). An onside teammate, opponent, interceptor, or the passer touching it first clears the marks (`_give_ball`). Kickoff clears them. Carrying, swapping, and collecting while unmarked are never offside. An intercept `_give_ball` clears the marks, so a stolen pass is not flagged.
 
 `planning_carrier` does not hand the ball to an offside receiver or a marked collector, so they cannot queue follow-up pass/shoot/dribble.
 
@@ -378,7 +381,7 @@ Copied:
 - `current_team`, `awaiting_other_side`, `turn_index`, `home_score`, `away_score`, `ignore_team_gate`
 - `scripted_attacker_wins`, `scripted_contest_tie`, `scripted_bounce_cell`, `scripted_first_intercept_wins`, `scripted_shot_outcome`
 - every `PlayerState` field listed on that type (new RefCounted per player)
-- `BallState.pos` / `carrier_id` (new RefCounted)
+- `BallState.pos` / `carrier_id` / `in_flight` and the flight fields (new RefCounted)
 - `home_plans` / `away_plans` via `duplicate(true)`
 - RNG `seed` **and** `state` (set seed first, then state)
 - `offside_marked_ids` / `offside_passer_id`
@@ -450,7 +453,7 @@ Almost every public function returns `{ok, action, ...}`. The log formatter and 
 | `move` / `sprint` / `dribble` / `tackle` / `challenge` / `swap` / `pass` / `shoot` / `offside` / `clash` | Applied |
 | `cancelled` | Plan dropped; `reason` / `reason_text` |
 
-Useful flags: `contest_won`, `contest_tied`, `bounced`, `bounce_cell`, `gained_possession`, `lost_possession`, `intercepted`, `goal`, `reset`, `hit`, `saved`, `expects_ball` (on the plan, not the event), `displaced_id` (shove/swap partner), `player_id` / `defender_id` / `receiver_id`. Tackles also carry `angle_deg` / `angle_penalty` / `angle_label`. A steal may set `facing` on the winner’s result so playback does not use the step direction.
+Useful flags: `contest_won`, `contest_tied`, `bounced`, `bounce_cell`, `gained_possession`, `lost_possession`, `intercepted`, `goal`, `reset`, `hit`, `saved`, `expects_ball` (on the plan, not the event), `displaced_id` (shove/swap partner), `player_id` / `defender_id` / `receiver_id`. Tackles also carry `angle_deg` / `angle_bonus` / `angle_label`. A steal may set `facing` on the winner’s result so playback does not use the step direction.
 
 If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._apply_plan` + phase lists, `CombatLog.format_result`, controller `_present_result` / highlights, `AiCoach._score`, and tests. `sprint` is a 2-tile facing-only step: queue as one plan, resolve in the movement phase, clash with moves that share its dest.
 
@@ -462,7 +465,7 @@ If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._ap
 
 `tests/run_tests.gd` extends `SceneTree`, `call_deferred("_run")`, `quit(0|1)`.
 
-It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside (including delayed first-touch after a through ball)/shoot (including shot intercepts), full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan, `MatchModel.clone` isolation, independent both-sides fill, seeded `play_match`, AI vs AI watch.
+It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside (including delayed first-touch after a through ball)/shoot (including shot intercepts), full-flight intercepts against live positions (same-wave and earlier-wave steps onto the lane; later-wave arrivals too late), full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan, `MatchModel.clone` isolation, independent both-sides fill, seeded `play_match`, AI vs AI watch.
 
 Controller tests instantiate `main.tscn`, set `animate_moves = false`, and often `queue_free()` the instance. They reach into HUD private fields (`_end_turn`, `_forecast`) — ugly but load-bearing.
 
@@ -501,7 +504,7 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 
 | You want to… | Start here |
 |---|---|
-| Change grid size, pass range, energy, AP pool, move costs, sprint costs, turn costs, shot curve, intercept radius / reach, tackle angle penalties | `MatchRules` constants + tests |
+| Change grid size, pass range, energy, AP pool, move costs, sprint costs, turn costs, shot curve, intercept radius / reach, tackle angle CTR bonus | `MatchRules` constants + tests |
 | Change kickoff shape or role stats | `Formation` |
 | Change when an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` |
 | Change what an action **does** | `MatchModel.apply_*` |

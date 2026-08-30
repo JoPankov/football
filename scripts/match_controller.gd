@@ -585,6 +585,9 @@ func _present_result(result: Dictionary) -> bool:
 		return await _anim_wait(0.08)
 	if action == "clash":
 		return await _anim_wait(0.18)
+	if result.get("in_flight", false):
+		pitch.ball_piece.set_carried(false)
+		return await _anim_wait(0.08)
 	var piece: PlayerPiece = pieces.get(result.get("player_id", -1))
 	if piece == null:
 		return true
