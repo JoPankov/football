@@ -227,6 +227,10 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 
 	var selected := _selected_player()
 	var occupant := _occupant_for_click(cell)
+	if selected != null and _pending_action != "":
+		var command := model.action_for_command(selected, _pending_action, cell)
+		if not command.is_empty():
+			return perform_action(command)
 	if (
 		selected != null
 		and _pending_action == "move"
@@ -236,10 +240,6 @@ func handle_cell_clicked(cell: Vector2i) -> Dictionary:
 	):
 		_select(occupant)
 		return {ok = true, action = "select", player_id = occupant.id}
-	if selected != null and _pending_action != "":
-		var command := model.action_for_command(selected, _pending_action, cell)
-		if not command.is_empty():
-			return perform_action(command)
 	if selected != null and _is_selected_cell(selected, cell):
 		if _pending_action != "":
 			_cancel_command()
@@ -817,6 +817,10 @@ func _refresh() -> void:
 					if model.would_collect_offside(selected, cell):
 						if cell not in offsides:
 							offsides.append(cell)
+						continue
+					var standing := model.player_at(cell)
+					if standing != null and standing.id != selected.id:
+						contests.append(cell)
 					else:
 						moves.append(cell)
 			"turn":

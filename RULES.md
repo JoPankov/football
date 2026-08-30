@@ -9,7 +9,7 @@ This is what the game actually does today.
 - From a net tile the keeper can step to the three adjacent pitch squares in front of goal.
 - Teams: **Aether** (home, cyan, attacks +x) vs **Helix** (away, magenta, attacks −x).
 - Title screen: **NEW HOTSEAT**, **NEW VS AI**, **NEW AI vs AI**, and Exit.
-- **11v11**, 4-4-2 kickoff. Two players never share a tile.
+- **11v11**, 4-4-2 kickoff. Two players never share a tile after a cycle resolves. You may still **plan** a walk or a pass onto a square someone occupies — if they are still there when it happens, they fight for the square or collect the pass.
 - Aether **#9 ST** starts on the centre spot `(12, 8)` **with the ball**. Helix does not start in possession. Helix’s strikers stand in their own half, just outside the centre circle.
 - After **Helix** scores, that same Aether kickoff is used again. After **Aether** scores, the whole 4-4-2 is rotated 180° through the pitch centre: Helix **#9 ST** takes `(13, 8)` with the ball. The receiving team starts in its own half and **outside the centre circle**, so those strikers cannot contest the first pass.
 - **Simultaneous cycles.** The kicking team plans first. Aether plans **up to 3 players** at match start (and after Helix scores); Helix plans first after Aether scores. Each of those players has **6 action points**. The turn auto-ends when all 3 players have spent their AP; **End Turn** can finish early with fewer players or leftover AP. The other side then plans the same way. All queued actions resolve together in **six waves**, one per action point. An action plays in the wave equal to the AP spent when it finishes. Then Aether plans again.
@@ -50,7 +50,7 @@ Kickoff values by role:
 
 1. Click any player on the team that is planning.
 2. Choose an action from the bottom bar (or press **1–9**): Move, Sprint, Turn, Pass, Dribble, Tackle, Fight, Swap, Shoot, Done. Only actions that player can currently take are listed. **Move** is selected as soon as you click a player, and it stays selected after a walk so you can chain more steps.
-3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps. With Move selected, every empty tile that player can still reach with leftover AP is highlighted — including tiles that need a 1-AP or 2-AP turn first, then a walk. Click a far tile to queue the turn (if needed) and the whole walk at once.
+3. Click a highlighted tile. That **queues** the action — nothing moves yet. The player stays selected if they still have AP, so you can chain more steps. With Move selected, every tile that player can still reach with leftover AP is highlighted — including occupied squares and tiles that need a 1-AP or 2-AP turn first, then a walk. Click a far tile to queue the turn (if needed) and the whole walk at once. Occupied tiles on that path are amber: if that player is still there at resolve, it becomes a fight for the square.
 4. Repeat for up to **3 different players**, **6 AP** each. Gold pips around a piece show leftover AP after that player has spent at least one point. A gold ring marks a planned player; arrows show their queued steps.
 5. Filling **all 6 AP on 3 players**, or marking those players **Done**, ends the turn automatically. **Done** parks leftover AP and a mint check shows they are finished. Click **End Turn** (or press Enter / Space) to finish with fewer players or unused AP.
 6. After Helix’s turn ends, all queued actions resolve in **six AP waves**. A 2-AP first step plays in wave 2; a later 2-AP step on the same player plays in wave 4. The match log lists every public event and roll.
@@ -64,8 +64,8 @@ Highlights (after you pick an action):
 
 - **Green** — walk or sprint there
 - **White** — turn to face that square (no step)
-- **Amber** — contest an opponent on that square
-- **Blue** — pass there
+- **Amber** — contest that square (an explicit dribble / tackle / fight, or a walk onto someone who is standing there now)
+- **Blue** — pass there (empty, teammate, or an opponent standing on the square)
 - **Red** — pass to an offside teammate, a player flagged from the last pass, or a collect that would be offside
 - **Purple** — swap with that teammate
 - **Gold** — shoot at the opponent net
@@ -75,10 +75,10 @@ Highlights (after you pick an action):
 ### Move
 
 - Costs **2 AP** straight (orthogonal) or **3 AP** diagonally. Each step is 1 tile into the **3-cell cone**: the square you face, plus 45° either side.
-- Green highlights every empty tile you can still reach by chaining those steps with leftover AP, including after a single turn at the start (1 AP up to 90°, 2 AP for 135°/180°). Clicking a far tile queues that turn if needed, then each step on the cheapest walk (Backspace still undoes one step). Turns are not inserted mid-walk — only before the first step.
+- Green highlights every empty tile you can still reach by chaining those steps with leftover AP, including after a single turn at the start (1 AP up to 90°, 2 AP for 135°/180°). Occupied tiles on that same reach are **amber**. Clicking a far tile queues that turn if needed, then each step on the cheapest walk (Backspace still undoes one step). Turns are not inserted mid-walk — only before the first step.
 - You cannot queue a step you cannot afford. With 2 AP left you can still walk straight, but not diagonally.
-- Empty tiles only (or an opponent tile, which is a contest instead).
-- Cannot walk onto a teammate. Use **swap** for that. Occupied tiles also block a longer walk through them.
+- Occupied tiles are legal dests. If that player has left by the time the step resolves, you just walk in. If they are still there, it is a **fight for the square**: dribble if you have the ball and they are an opponent, tackle if they have the ball, otherwise CTR vs CTR (including onto a teammate). Hover shows `If they stay: …`.
+- A **teammate** still blocks a **longer** walk through that square — you can land on them, but the path cannot continue past them in the same click. Use **swap** if you want to trade places without rolling. An **opponent** is treated as empty for the highlight: you can click a tile behind them and queue the walk through their square. If they are still there when a step resolves, that step is a fight as usual.
 - If you have the ball, it comes with you.
 - If the ball is loose on the destination, you take it.
 - After you queue a move onto a loose ball, you can plan as if you already have it (pass, shoot, dribble). If you do not actually collect it — for example someone else wins that square — those ball actions are ignored.
@@ -88,7 +88,7 @@ Highlights (after you pick an action):
 
 - Costs **2 AP** and **3 energy** straight (orthogonal), or **3 AP** and **5 energy** diagonally.
 - Two tiles **straight ahead** only — the exact direction the player is facing, not the 3-cell move cone.
-- Both the through tile and the landing must be empty and in bounds. You cannot sprint onto or through a player.
+- The through tile must be empty and in bounds. You cannot sprint **through** a player. An occupied landing is legal — amber, same as a walk onto someone. If they are still there at resolve, it is a fight for the square (dribble / tackle / CTR vs CTR). If they have left, it is a normal sprint.
 - You cannot queue a sprint you cannot afford. With 2 AP left you can still sprint straight, but not diagonally. With 1 AP left you cannot sprint.
 - If you have the ball, it comes with you. A loose ball on the landing **or** the through tile is collected and carried to the landing.
 - After you queue a sprint onto a loose ball, you can plan as if you already have it. If you do not actually collect it, those ball actions are ignored.
@@ -152,27 +152,27 @@ Highlights (after you pick an action):
 ### Square fight
 
 - Costs **2 AP** straight or **3 AP** diagonally, same as a walk, and **5 energy**.
-- Player without the ball steps onto an opponent in the **move cone** who also does not have the ball.
-- Roll: **CTR vs CTR**.
-- You win: you swap onto that square. No ball changes hands.
+- Choose **Fight** to step onto an opponent in the **move cone** who also does not have the ball, or queue a **Move** onto anyone still standing on the dest (teammate or opponent). A queued Move that finds the square empty is just a walk.
+- Roll: **CTR vs CTR**. Same team is always a square fight, even if one of you has the ball — the carrier keeps it and carries it to their new tile.
+- You win: you swap onto that square. No steal.
 - You lose: nothing changes.
 
 ### Pass
 
 - Costs **1 AP**.
 - Only the player with the ball.
-- Range: a **circle** of radius **5 tile lengths** (cell centre to cell centre). Orthogonal 5 is in; diagonal 4 is out. To a **teammate** or an **empty square**.
+- Range: a **circle** of radius **5 tile lengths** (cell centre to cell centre). Orthogonal 5 is in; diagonal 4 is out. To a **teammate**, an **empty square**, or a square someone else is standing on (including an opponent).
 - Cannot pass into the **rear cone**: directly back and **43°** to each side. **Adjacent** tiles are excepted — you may still pass to a neighbouring cell even if it is behind you.
 - You stay put. The ball travels to the target.
-- Empty square: the ball becomes **loose** there. You cannot lay the ball into an empty net.
-- Teammate: they receive it and become the carrier. This includes the keeper standing in the net.
+- Empty square: the ball becomes **loose** there. You cannot lay the ball into an empty net, and you cannot pass into the opponent net (that is a shot).
+- Whoever is standing on the dest when the ball arrives collects it — teammate, opponent, or the keeper in your own net. If they have left, it lands loose.
 - Adjacent empty square can be a **Move** or a **Pass** — pick the action first, then the tile.
 - Two tiles **straight ahead** can be a **Sprint** or a **Pass**.
-- Adjacent teammate can be a **Pass** or a **Swap** — pick the action first, then the teammate.
+- Adjacent teammate can be a **Move**, a **Pass**, or a **Swap** — pick the action first, then the tile. With Move selected, clicking them queues a walk onto their square (a fight if they stay), not a new selection.
 - Pass still uses the 5-tile-length circle once Pass is selected.
 - A pass to a teammate in an **offside position** is still legal. If it is not intercepted, that teammate receiving it is offside (see below). Empty-square passes are not immediately offside, but they still flag teammates who are offside when the ball is played.
 - After you queue a pass to an **onside** teammate, that teammate can plan as if they already have the ball (pass on, shoot, dribble). If the incoming pass is intercepted, offside, or cancelled, those ball actions do not play.
-- After you queue a pass onto an empty square, an **onside** teammate who then queues a step onto that square can plan as if they will collect it. A teammate who was offside when you passed cannot. If they never get the ball, those follow-up actions are ignored.
+- After you queue a pass onto an empty square — or onto an opponent — an **onside** teammate who then queues a step onto that square can plan as if they will collect it. A teammate who was offside when you passed cannot. Passing to an opponent’s square does not let you chain; they collect it if they stay. If the planned collector never gets the ball, those follow-up actions are ignored.
 
 ## Simultaneous resolution
 
@@ -196,7 +196,7 @@ Inside a wave:
    - **Opposite teams, neither has the ball:** a **CTR vs CTR** square fight. Winner takes the square (and collects a loose ball there).
    - **Same team:** **1dCTR**; a tie goes to the player with the ball if one has it, otherwise the lower-id player (first claimer).
    Losers stay put.
-6. **Moves, sprints, and swaps**
+6. **Moves, sprints, and swaps** — a move onto a square that is still occupied is a fight for that square (dribble / tackle / square fight, same as stepping on them). Loser stays; winner takes the dest except a won tackle steals in place.
 7. **The ball flies** — the **whole remaining pass or shot** along the line. Intercepts are rolled against whoever is standing in range after players have taken this wave’s steps. A player who moved onto the lane in an earlier wave, or in this wave before the ball flew, gets the intercept throw. A player who arrives in a later wave is too late.
 
 So if Aether tackles the Helix carrier and that carrier also queued a pass, the tackle is resolved first. If the tackle wins the ball, the pass is cancelled and the log says why.

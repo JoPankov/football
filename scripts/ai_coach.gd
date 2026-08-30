@@ -116,6 +116,9 @@ func _score(model: MatchModel, player: PlayerState, action: Dictionary, claimed:
 
 
 func _score_pass(model: MatchModel, player: PlayerState, action: Dictionary, dest: Vector2i) -> float:
+	var occupant := model.player_at(dest)
+	if occupant != null and occupant.team != player.team:
+		return -80.0
 	var preview := model.pass_preview(player, dest)
 	var through := float(preview.get("total", 1.0))
 	var gain := _forward_gain(player.team, player.pos, dest)
@@ -143,6 +146,11 @@ func _score_move(model: MatchModel, player: PlayerState, dest: Vector2i) -> floa
 	var team := player.team
 	if model.planning_has_ball(player) and dest == MatchRules.opponent_goal(team):
 		return 900.0
+	var occupant := model.player_at(dest)
+	if occupant != null:
+		if occupant.team == team:
+			return 0.4
+		return _score_contest(model, player, dest, 8.0, 0.0)
 	var value := 5.0 * _forward_gain(team, player.pos, dest)
 	if model.planning_has_ball(player):
 		value += 18.0 * _forward_gain(team, player.pos, dest)

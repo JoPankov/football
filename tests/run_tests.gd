@@ -356,9 +356,25 @@ func _test_action_points() -> void:
 	wall.setup_kickoff()
 	var wall_runner := wall.player_at(MatchRules.CENTER_SPOT)
 	wall.player_at(_spot(0, -1)).pos = _spot(1, 0)
-	_assert(_spot(1, 0) not in wall.command_dests(wall_runner, "move"), "an occupied tile is not a walk dest")
-	_assert(_spot(2, 0) not in wall.command_dests(wall_runner, "move"), "a teammate on the first step blocks the straight path")
+	_assert(_spot(1, 0) in wall.command_dests(wall_runner, "move"), "an occupied tile is a walk dest")
+	_assert(_spot(2, 0) not in wall.command_dests(wall_runner, "move"), "a teammate on the first step still cuts the straight path")
 	_assert(_spot(1, -1) in wall.command_dests(wall_runner, "move"), "the forward-diagonal around the blocker stays open")
+	var through_opp := MatchModel.new()
+	through_opp.setup_kickoff()
+	var through_runner := through_opp.player_at(MatchRules.CENTER_SPOT)
+	var through_away := through_opp.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(through_opp, through_away.id)
+	through_away.pos = _spot(1, 0)
+	_assert(_spot(1, 0) in through_opp.command_dests(through_runner, "move"), "an occupied opponent tile is a walk dest")
+	_assert(_spot(2, 0) in through_opp.command_dests(through_runner, "move"), "an opponent does not cut the walk")
+	_assert(_spot(3, 0) in through_opp.command_dests(through_runner, "move"), "the walk continues past an opponent")
+	var through_q := through_opp.queue_plan(through_runner.id, {id = "move", dest = _spot(2, 0), label = "Move"})
+	_assert(through_q.ok, "clicking past an opponent queues the walk")
+	var through_plans := through_opp.plans_of(through_runner.id)
+	_assert(through_plans.size() == 2, "the walk through an opponent is two queued moves")
+	_assert(through_plans[0].get("dest") == _spot(1, 0), "first step lands on the opponent")
+	_assert(through_plans[1].get("dest") == _spot(2, 0), "second step is the cell behind them")
+	_assert(through_opp.planning_pos(through_runner) == _spot(2, 0), "planning position is past the opponent")
 
 	var shot_model := MatchModel.new()
 	shot_model.setup_kickoff()
@@ -564,8 +580,8 @@ func _test_move_destinations() -> void:
 	var blocked_reach := MatchRules.move_reach(
 		Vector2i(5, 4), Vector2i(1, 0), {Vector2i(6, 4): true}, 6
 	)
-	_assert(Vector2i(6, 4) not in blocked_reach, "an occupied forward tile is not a dest")
-	_assert(Vector2i(7, 4) not in blocked_reach, "a blocked first step cuts the straight path")
+	_assert(Vector2i(6, 4) in blocked_reach, "an occupied forward tile is still a dest")
+	_assert(Vector2i(7, 4) not in blocked_reach, "a body on the first step still cuts the straight path")
 	_assert(MatchRules.move_reach(Vector2i(5, 4), Vector2i(1, 0), {}, 1).is_empty(), "1 AP cannot walk")
 	var turned := MatchRules.move_reach_with_prefix_turns(Vector2i(5, 4), Vector2i(1, 0), {}, 6)
 	_assert(Vector2i(5, 5) in turned, "a 1-AP 90° turn then a step reaches the side square")
@@ -607,8 +623,8 @@ func _test_sprinting() -> void:
 		"an occupied through tile blocks the sprint"
 	)
 	_assert(
-		MatchRules.sprint_destinations(from, east, {Vector2i(7, 4): true}).is_empty(),
-		"an occupied landing blocks the sprint"
+		Vector2i(7, 4) in MatchRules.sprint_destinations(from, east, {Vector2i(7, 4): true}),
+		"an occupied landing is still a sprint dest"
 	)
 	_assert(
 		MatchRules.sprint_destinations(Vector2i(0, 0), Vector2i(-1, 0), {}).is_empty(),
@@ -699,9 +715,27 @@ func _test_sprinting() -> void:
 	var blocker := blocked.player_at(MatchRules.AWAY_KICKOFF)
 	blocker.pos = _spot(1, 0)
 	_assert(blocked.command_dests(blocked_st, "sprint").is_empty(), "a body on the through tile blocks sprint")
+	_assert(not blocked.apply_sprint(blocked_st.id, _spot(2, 0)).ok, "apply rejects a sprint through a body")
 	blocker.pos = _spot(2, 0)
-	_assert(blocked.command_dests(blocked_st, "sprint").is_empty(), "a body on the landing blocks sprint")
-	_assert(not blocked.apply_sprint(blocked_st.id, _spot(2, 0)).ok, "apply rejects a blocked sprint")
+	_assert(_spot(2, 0) in blocked.command_dests(blocked_st, "sprint"), "a body on the landing is a sprint dest")
+	blocked.scripted_attacker_wins = true
+	var sprint_fight := blocked.apply_sprint(blocked_st.id, _spot(2, 0))
+	_assert(sprint_fight.ok and sprint_fight.action == "dribble", "sprint onto an opponent is a contest")
+	_assert(blocked_st.pos == _spot(2, 0), "winning sprinter took the occupied landing")
+	_assert(blocker.pos == MatchRules.CENTER_SPOT, "losing occupant was shoved to the origin")
+	_assert(blocked_st.has_ball, "the carrier kept the ball after sprinting onto the square")
+
+	var square_sprint := MatchModel.new()
+	square_sprint.setup_kickoff()
+	var square_mid := square_sprint.player_at(_spot(0, -1))
+	var square_away := square_sprint.player_at(MatchRules.AWAY_KICKOFF)
+	square_mid.facing = Vector2i(1, 0)
+	square_away.pos = _spot(2, -1)
+	square_sprint.scripted_attacker_wins = true
+	var square_burst := square_sprint.apply_sprint(square_mid.id, square_away.pos)
+	_assert(square_burst.ok and square_burst.action == "challenge", "off-ball sprint onto a player is a square fight")
+	_assert(square_mid.pos == _spot(2, -1), "winning sprinter took the occupied landing")
+	_assert(square_away.pos == _spot(0, -1), "losing occupant was shoved to the sprint origin")
 
 	var applied := MatchModel.new()
 	applied.setup_kickoff()
@@ -979,14 +1013,100 @@ func _test_ball_travels_with_carrier() -> void:
 
 
 func _test_cannot_stack() -> void:
-	print("-- stacking")
+	print("-- occupied dests")
 	var model := MatchModel.new()
 	model.setup_kickoff()
 	var mid := model.player_at(_spot(-3, 1))
 	var dest := MatchRules.CENTER_SPOT
-	var result := model.apply_move(mid.id, dest)
-	_assert(not result.ok, "cannot step onto a teammate")
+	var teleport := model.apply_move(mid.id, dest)
+	_assert(not teleport.ok, "cannot teleport onto a teammate three tiles away")
 	_assert(mid.pos == _spot(-3, 1), "mover stayed put")
+
+	var fight := MatchModel.new()
+	fight.setup_kickoff()
+	var st := fight.player_at(MatchRules.CENTER_SPOT)
+	var mate := fight.player_at(_spot(0, -1))
+	st.facing = Vector2i(0, -1)
+	_assert(mate.pos in fight.valid_moves(st), "adjacent teammate is a legal walk dest")
+	_assert(mate.pos in fight.command_dests(st, "move"), "move highlights include the occupied teammate tile")
+	fight.scripted_attacker_wins = true
+	var won := fight.apply_move(st.id, mate.pos)
+	_assert(won.ok and won.action == "challenge", "step onto a teammate is a square fight")
+	_assert(st.pos == _spot(0, -1), "winner took the teammate's square")
+	_assert(mate.pos == MatchRules.CENTER_SPOT, "losing teammate was shoved to the origin")
+	_assert(st.has_ball and not mate.has_ball, "the carrier kept the ball through a teammate fight")
+	_assert(fight.ball.pos == st.pos, "the ball followed the carrier onto the won square")
+
+	var held := MatchModel.new()
+	held.setup_kickoff()
+	var held_st := held.player_at(MatchRules.CENTER_SPOT)
+	var held_mate := held.player_at(_spot(0, -1))
+	held_st.facing = Vector2i(0, -1)
+	held.scripted_attacker_wins = false
+	var lost := held.apply_move(held_st.id, held_mate.pos)
+	_assert(lost.ok and lost.action == "challenge", "a lost teammate fight is still a square fight")
+	_assert(not lost.contest_won, "scripted teammate fight failed")
+	_assert(held_st.pos == MatchRules.CENTER_SPOT, "failed mover stayed put")
+	_assert(held_mate.pos == _spot(0, -1), "teammate kept the square")
+
+	var cycle := MatchModel.new()
+	cycle.setup_kickoff()
+	cycle.scripted_attacker_wins = true
+	var cycle_st := cycle.player_at(MatchRules.CENTER_SPOT)
+	var cycle_away := cycle.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(cycle, cycle_away.id)
+	cycle_away.pos = _spot(1, 0)
+	var queued_step := cycle.queue_plan(cycle_st.id, {id = "move", dest = cycle_away.pos, label = "Move"})
+	_assert(queued_step.ok, "can queue a walk onto an occupied opponent tile")
+	_assert(str(queued_step.plan.get("action", "")) == "move", "the queued action stays a move")
+	cycle.end_planning()
+	var resolved := cycle.end_planning()
+	_assert(resolved.action == "resolve", "occupied-dest move cycle resolved")
+	_assert(cycle_st.pos == _spot(1, 0), "mover took the occupied square")
+	_assert(cycle_away.pos == MatchRules.CENTER_SPOT, "loser was shoved off the square")
+	_assert(cycle_st.has_ball, "the carrier kept the ball after winning the square")
+	_assert(cycle.combat_log.as_text().contains("DRIBBLE"), "resolve logs the occupancy as a dribble")
+
+	var sprint_cycle := MatchModel.new()
+	sprint_cycle.setup_kickoff()
+	sprint_cycle.scripted_attacker_wins = true
+	var sprint_st := sprint_cycle.player_at(MatchRules.CENTER_SPOT)
+	var sprint_away := sprint_cycle.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(sprint_cycle, sprint_away.id)
+	sprint_away.pos = _spot(2, 0)
+	var queued_sprint := sprint_cycle.queue_plan(sprint_st.id, {
+		id = "sprint",
+		dest = sprint_away.pos,
+		label = "Sprint",
+	})
+	_assert(queued_sprint.ok, "can queue a sprint onto an occupied opponent tile")
+	_assert(str(queued_sprint.plan.get("action", "")) == "sprint", "the queued action stays a sprint")
+	sprint_cycle.end_planning()
+	var sprint_resolved := sprint_cycle.end_planning()
+	_assert(sprint_resolved.action == "resolve", "occupied-dest sprint cycle resolved")
+	_assert(sprint_st.pos == _spot(2, 0), "sprinter took the occupied landing")
+	_assert(sprint_away.pos == MatchRules.CENTER_SPOT, "sprint-fight loser was shoved to the origin")
+	_assert(sprint_cycle.combat_log.as_text().contains("DRIBBLE"), "resolve logs the sprint occupancy as a dribble")
+
+	var pass_cycle := MatchModel.new()
+	pass_cycle.setup_kickoff()
+	pass_cycle.scripted_first_intercept_wins = false
+	var pass_st := pass_cycle.player_at(MatchRules.CENTER_SPOT)
+	var pass_away := pass_cycle.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(pass_cycle, pass_away.id)
+	pass_away.pos = _spot(2, 0)
+	var queued_pass := pass_cycle.queue_plan(pass_st.id, {
+		id = "pass",
+		dest = pass_away.pos,
+		target_id = -1,
+		label = "Pass",
+	})
+	_assert(queued_pass.ok, "can queue a pass onto an occupied opponent tile")
+	pass_cycle.end_planning()
+	var pass_resolved := pass_cycle.end_planning()
+	_assert(pass_resolved.action == "resolve", "occupied-dest pass cycle resolved")
+	_assert(pass_away.has_ball and not pass_st.has_ball, "the occupant collected the pass")
+	_assert(pass_st.pos == MatchRules.CENTER_SPOT, "passer did not move")
 
 
 func _test_attributes() -> void:
@@ -1393,7 +1513,8 @@ func _test_pass() -> void:
 	_assert(model.can_pass_to(st, near), "can pass to a teammate within range")
 	_assert(not MatchRules.in_pass_range(st.pos, gk.pos), "keeper in the net is beyond pass range")
 	_assert(not model.can_pass_to(st, gk), "cannot pass beyond the pass circle")
-	_assert(not model.can_pass_to(st, away), "cannot pass to an opponent")
+	_assert(not model.can_pass_to(st, away), "cannot pass to an opponent as a teammate target")
+	_assert(model.can_pass_to_cell(st, away.pos), "can pass to a cell an opponent is standing on")
 	_assert(not model.can_pass_to(near, st), "non-carrier cannot pass")
 	model.scripted_first_intercept_wins = false
 	var result := model.apply_pass(st.id, near.id)
@@ -1461,6 +1582,21 @@ func _test_pass() -> void:
 	_assert(back_gk.has_ball and not back_lcb.has_ball, "keeper in the net received the ball")
 	_assert(back.ball.pos == MatchRules.HOME_NET, "ball sits on the net tile")
 	_assert(back_gk.pos == MatchRules.HOME_NET, "keeper stayed in the net")
+
+	var to_opp := MatchModel.new()
+	to_opp.setup_kickoff()
+	to_opp.scripted_first_intercept_wins = false
+	var opp_st := to_opp.player_at(MatchRules.CENTER_SPOT)
+	var opp := to_opp.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(to_opp, opp.id)
+	opp.pos = _spot(2, 0)
+	_assert(to_opp.can_pass_to_cell(opp_st, opp.pos), "can pass onto an opponent's square")
+	_assert(opp.pos in to_opp.pass_cells(opp_st), "pass highlights include an occupied opponent tile")
+	var laid_opp := to_opp.apply_pass_to(opp_st.id, opp.pos)
+	_assert(laid_opp.ok and laid_opp.action == "pass", "pass to an occupied opponent square succeeds")
+	_assert(opp.has_ball and not opp_st.has_ball, "the opponent standing on the dest collected the pass")
+	_assert(to_opp.ball.pos == opp.pos, "the ball sits on the occupied dest")
+	_assert(opp_st.pos == MatchRules.CENTER_SPOT, "passer stayed put")
 
 
 func _test_intercepts() -> void:
@@ -1721,8 +1857,11 @@ func _test_swap_and_choice() -> void:
 	_assert(far.size() == 1 and far[0].id == "pass", "in-range non-adjacent teammate is pass only")
 	st.facing = Vector2i(0, -1)
 	var adjacent := model.actions_for(st, near.pos)
-	_assert(adjacent.size() == 2, "adjacent teammate offers two actions")
-	_assert(adjacent[0].id == "pass" and adjacent[1].id == "swap", "pass and swap are both offered")
+	var adjacent_ids: Array = []
+	for act in adjacent:
+		adjacent_ids.append(act.id)
+	_assert("move" in adjacent_ids, "adjacent teammate is also a walk dest")
+	_assert("pass" in adjacent_ids and "swap" in adjacent_ids, "pass and swap are both offered")
 	_assert(not model.can_swap(st, lcm), "cannot swap from 3 tiles away")
 	_assert(not model.can_swap(st, wing), "cannot swap from the wing")
 	_assert(not model.can_swap(st, away), "cannot swap with an opponent")
@@ -1746,10 +1885,18 @@ func _test_offside() -> void:
 	_assert(model.is_offside_receiver(st, mate), "teammate ahead of the last line is offside")
 	_assert(Vector2i(24, MatchRules.CENTER_Y) in model.offside_pass_cells(st), "offside target is listed")
 	var acts := model.actions_for(st, mate.pos)
-	_assert(acts.size() == 2, "adjacent offside teammate still offers pass or swap")
-	_assert(acts[0].id == "pass" and acts[1].id == "swap", "pass and swap are both offered")
-	_assert(acts[0].get("offside", false), "pass action is marked offside")
-	_assert(str(acts[0].get("label", "")).contains("offside"), "chooser labels the offside pass")
+	var act_ids: Array = []
+	for act in acts:
+		act_ids.append(act.id)
+	_assert("move" in act_ids, "adjacent offside teammate is still a walk dest")
+	_assert("pass" in act_ids and "swap" in act_ids, "pass and swap are both offered")
+	var offside_pass := {}
+	for act in acts:
+		if str(act.get("id", "")) == "pass":
+			offside_pass = act
+			break
+	_assert(offside_pass.get("offside", false), "pass action is marked offside")
+	_assert(str(offside_pass.get("label", "")).contains("offside"), "chooser labels the offside pass")
 	var preview := model.pass_preview(st, mate.pos)
 	_assert(preview.get("offside", false), "preview flags offside")
 	_assert(preview.text.contains("OFFSIDE") or preview.header.contains("OFFSIDE"), "preview names offside")
@@ -2996,11 +3143,13 @@ func _test_controller_click_flow() -> void:
 	undo_other.handle_cell_clicked(MatchRules.CENTER_SPOT)
 	undo_other.handle_cell_clicked(_spot(1, 0))
 	var other_cell := _spot(0, -1)
+	undo_other._deselect()
 	undo_other.handle_cell_clicked(other_cell)
 	var other_step: Dictionary = undo_other.handle_cell_clicked(_spot(1, -1))
 	_assert(other_step.get("action") == "queue", "second player queues a move before selected-player backspace")
 	var first_actor: PlayerState = undo_other.model.player_at(MatchRules.CENTER_SPOT)
 	var second_actor: PlayerState = undo_other.model.player_at(other_cell)
+	undo_other._deselect()
 	undo_other.handle_cell_clicked(_spot(1, 0))
 	_assert(undo_other.selected_id == first_actor.id, "reselect the first actor before backspace")
 	undo_other._unhandled_input(backspace)
@@ -3132,6 +3281,30 @@ func _test_controller_click_flow() -> void:
 	_assert(chosen_swap.get("action") == "queue", "clicking the teammate queues the swap")
 	_assert(swap_main.model.player_at(MatchRules.CENTER_SPOT).number == 9, "queued swap left #9 in place")
 	swap_main.queue_free()
+
+	var occupy_move: Node = packed.instantiate()
+	root.add_child(occupy_move)
+	occupy_move.animate_moves = false
+	occupy_move.model.player_at(MatchRules.CENTER_SPOT).facing = Vector2i(0, -1)
+	occupy_move.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	_assert(occupy_move._pending_action == "move", "move is armed before clicking an occupied teammate")
+	var occupy_click: Dictionary = occupy_move.handle_cell_clicked(_spot(0, -1))
+	_assert(occupy_click.get("action") == "queue", "clicking an occupied teammate tile queues a move")
+	_assert(str(occupy_click.plan.get("action", "")) == "move", "the queued action is a walk, not a select")
+	occupy_move.queue_free()
+
+	var occupy_pass: Node = packed.instantiate()
+	root.add_child(occupy_pass)
+	occupy_pass.animate_moves = false
+	var occupy_opp: PlayerState = occupy_pass.model.player_at(MatchRules.AWAY_KICKOFF)
+	_park_away_field(occupy_pass.model, occupy_opp.id)
+	occupy_opp.pos = _spot(2, 0)
+	occupy_pass.handle_cell_clicked(MatchRules.CENTER_SPOT)
+	occupy_pass.select_command("pass")
+	var occupy_pass_click: Dictionary = occupy_pass.handle_cell_clicked(_spot(2, 0))
+	_assert(occupy_pass_click.get("action") == "queue", "clicking an occupied opponent tile queues a pass")
+	_assert(str(occupy_pass_click.plan.get("action", "")) == "pass", "the queued action is a pass to the occupied cell")
+	occupy_pass.queue_free()
 
 	var auto_pass: Node = packed.instantiate()
 	root.add_child(auto_pass)

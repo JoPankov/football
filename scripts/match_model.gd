@@ -156,19 +156,21 @@ func valid_moves(player: PlayerState) -> Array[Vector2i]:
 	if player == null:
 		return []
 	return MatchRules.move_destinations(
-		_query_pos(player), teammate_cells(player.id), _query_facing(player)
+		_query_pos(player), {}, _query_facing(player)
 	)
 
 
 ## Cells the player can still walk to by spending leftover AP on move steps.
 ## A single prefix turn (1 AP up to 90°, 2 AP for 135°/180°) may be inserted first.
+## Teammates are absorbing dests (land on, cannot walk through). Opponents are
+## treated as empty for the walk so a tile behind them stays in reach.
 func move_reach(player: PlayerState) -> Dictionary:
 	if player == null or not can_queue(player):
 		return {}
 	return MatchRules.move_reach_with_prefix_turns(
 		_query_pos(player),
 		_query_facing(player),
-		occupied_cells(player.id),
+		teammate_cells(player.id),
 		ap_remaining(player.id)
 	)
 
@@ -183,7 +185,8 @@ func move_path(player: PlayerState, dest: Vector2i) -> Array[Vector2i]:
 	return path
 
 
-## The empty cell two tiles straight ahead of facing. AP is checked by command_dests.
+## The cell two tiles straight ahead of facing. Occupied landings are legal dests.
+## AP is checked by command_dests.
 func valid_sprints(player: PlayerState) -> Array[Vector2i]:
 	if player == null:
 		return []
@@ -645,10 +648,14 @@ func _pass_geometry_ok(passer: PlayerState, dest: Vector2i) -> bool:
 		return false
 	if MatchRules.is_back_pass(from, dest, _query_facing(passer)):
 		return false
+	if dest == MatchRules.opponent_goal(passer.team):
+		return false
 	var occupant := player_at(dest)
-	if occupant == null:
-		return not MatchRules.is_goal_tile(dest)
-	return occupant.team == passer.team and occupant.id != passer.id
+	if occupant != null and occupant.id == passer.id:
+		return false
+	if MatchRules.is_goal_tile(dest) and occupant == null:
+		return false
+	return true
 
 
 func pass_targets(passer: PlayerState) -> Array[PlayerState]:
@@ -804,35 +811,31 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 	if dest in turn_dests(player):
 		actions.append({id = "turn", label = "Turn", dest = dest})
 	var occupant := player_at(dest)
-	if occupant == null:
-		if dest in valid_moves(player):
-			var move_offside := would_collect_offside(player, dest)
-			actions.append({
-				id = "move",
-				label = "Move (offside)" if move_offside else "Move",
-				dest = dest,
-				offside = move_offside,
-			})
-		if dest in valid_sprints(player):
-			var sprint_offside := would_collect_offside(player, dest)
-			actions.append({
-				id = "sprint",
-				label = "Sprint (offside)" if sprint_offside else "Sprint",
-				dest = dest,
-				offside = sprint_offside,
-			})
-		if can_plan_pass_to_cell(player, dest):
-			actions.append({id = "pass", label = "Pass", dest = dest, target_id = -1, offside = false})
-	elif occupant.team != player.team:
-		if dest in valid_moves(player):
-			var preview := MatchRules.contest_preview(player, occupant, planning_has_ball(player))
-			actions.append({
-				id = preview.action,
-				label = preview.verb.capitalize(),
-				dest = dest,
-			})
-	else:
-		if can_plan_pass_to(player, occupant):
+	if dest in valid_moves(player):
+		var move_offside := occupant == null and would_collect_offside(player, dest)
+		actions.append({
+			id = "move",
+			label = "Move (offside)" if move_offside else "Move",
+			dest = dest,
+			offside = move_offside,
+		})
+	if dest in valid_sprints(player):
+		var sprint_offside := occupant == null and would_collect_offside(player, dest)
+		actions.append({
+			id = "sprint",
+			label = "Sprint (offside)" if sprint_offside else "Sprint",
+			dest = dest,
+			offside = sprint_offside,
+		})
+	if occupant != null and occupant.team != player.team and dest in valid_moves(player):
+		var preview := MatchRules.contest_preview(player, occupant, planning_has_ball(player))
+		actions.append({
+			id = preview.action,
+			label = preview.verb.capitalize(),
+			dest = dest,
+		})
+	if can_plan_pass_to_cell(player, dest):
+		if occupant != null and occupant.team == player.team:
 			var pass_label := "Pass (offside)" if is_offside_receiver(player, occupant) else "Pass"
 			actions.append({
 				id = "pass",
@@ -841,8 +844,10 @@ func actions_for(player: PlayerState, dest: Vector2i) -> Array[Dictionary]:
 				dest = dest,
 				offside = is_offside_receiver(player, occupant),
 			})
-		if can_swap(player, occupant):
-			actions.append({id = "swap", label = "Swap places", target_id = occupant.id, dest = dest})
+		else:
+			actions.append({id = "pass", label = "Pass", dest = dest, target_id = -1, offside = false})
+	if occupant != null and occupant.team == player.team and can_swap(player, occupant):
+		actions.append({id = "swap", label = "Swap places", target_id = occupant.id, dest = dest})
 	if can_plan_shoot(player) and dest == MatchRules.opponent_goal(player.team):
 		var leftover := ap_remaining(player.id)
 		var bonus_pct := int(round(MatchRules.shot_ap_bonus(leftover) * 100.0))
@@ -1800,6 +1805,10 @@ func apply_sprint(player_id: int, dest: Vector2i) -> Dictionary:
 	if dest not in valid_sprints(player):
 		return {ok = false, reason = "illegal_dest"}
 
+	var occupant := player_at(dest)
+	if occupant != null:
+		return _apply_contest(player, occupant, dest)
+
 	var origin := player.pos
 	var through := MatchRules.sprint_through(origin, dest)
 	var energy := MatchRules.action_energy_cost("sprint", origin, dest)
@@ -1840,8 +1849,9 @@ func apply_sprint(player_id: int, dest: Vector2i) -> Dictionary:
 
 func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) -> Dictionary:
 	var origin := player.pos
-	var is_dribble := player.has_ball
-	var is_tackle := (not player.has_ball) and occupant.has_ball
+	var same_team := player.team == occupant.team
+	var is_dribble := (not same_team) and player.has_ball
+	var is_tackle := (not same_team) and (not player.has_ball) and occupant.has_ball
 	var attacker_stat := player.live_control()
 	var defender_stat := occupant.live_control()
 	var attacker_name := "CTR"
@@ -1916,8 +1926,10 @@ func _apply_contest(player: PlayerState, occupant: PlayerState, dest: Vector2i) 
 			player.relocate(dest)
 			occupant.relocate(origin)
 			result.displaced_id = occupant.id
-			if is_dribble:
+			if player.has_ball:
 				ball.pos = dest
+			elif occupant.has_ball:
+				ball.pos = origin
 	elif (is_dribble or is_tackle) and bool(roll.get("tied", false)):
 		var bounce_cell := _bounce_ball()
 		result.contest_tied = true

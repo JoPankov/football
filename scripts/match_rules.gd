@@ -417,7 +417,8 @@ static func is_move_step(from: Vector2i, to: Vector2i, facing: Vector2i) -> bool
 	return (to - from) in move_facings(face)
 
 
-## The empty cell two tiles straight ahead. Occupied through or dest tiles block it.
+## The cell two tiles straight ahead. An occupied through tile blocks it.
+## An occupied landing is legal (resolve fights if they stay).
 static func sprint_destinations(
 	from: Vector2i,
 	facing: Vector2i,
@@ -431,7 +432,7 @@ static func sprint_destinations(
 	var dest: Vector2i = from + face * SPRINT_DISTANCE
 	if not in_bounds(through) or not in_bounds(dest):
 		return result
-	if occupied.has(through) or occupied.has(dest):
+	if occupied.has(through):
 		return result
 	result.append(dest)
 	return result
@@ -530,8 +531,10 @@ static func can_use_ball_action(has_ball: bool) -> bool:
 	return has_ball
 
 
-## Cells in `blocked` cannot be entered (teammates). Opponent cells are legal.
-## `facing` ZERO keeps all 8 dirs (geometry-only callers). Otherwise the 3-cell move cone.
+## Cells in `blocked` cannot be entered. Occupied dests are legal at planning
+## time — pass teammates as `blocked` so they absorb, and omit opponents so the
+## walk continues through them. `facing` ZERO keeps all 8 dirs (geometry-only
+## callers). Otherwise the 3-cell move cone.
 static func move_destinations(
 	from: Vector2i,
 	blocked: Dictionary,
@@ -552,7 +555,10 @@ static func move_destinations(
 	return result
 
 
-## Every empty cell a cone-walk can hit by spending at most `remaining_ap`.
+## Every cell a cone-walk can hit by spending at most `remaining_ap`.
+## Cells in `blocked` are legal dests but not through-tiles: the walk can land
+## on them (resolve fights if they stay) and cannot continue past them.
+## MatchModel passes teammates here and omits opponents (treated as empty).
 ## No turns: facing only changes by stepping. Values are `{cost, path}` where
 ## `path` is the ordered destination cells (not including `from`).
 static func move_reach(
@@ -591,9 +597,11 @@ static func move_reach(
 				cost = int(cur.cost),
 				path = cur.path,
 			}
+		if blocked.has(cur.pos) and cur.pos != from:
+			continue
 		if int(cur.cost) + MOVE_ORTHO_COST > remaining_ap:
 			continue
-		for dest in move_destinations(cur.pos, blocked, cur.facing):
+		for dest in move_destinations(cur.pos, {}, cur.facing):
 			var next_cost: int = int(cur.cost) + step_ap_cost(cur.pos, dest)
 			if next_cost > remaining_ap:
 				continue
@@ -913,14 +921,15 @@ static func contest_preview(
 	var atk := mover.live_control()
 	var deff := occupant.live_control()
 	var on_ball := mover.has_ball if mover_on_ball == null else bool(mover_on_ball)
-	if on_ball:
+	var same_team := mover.team == occupant.team
+	if not same_team and on_ball:
 		action = "dribble"
 		verb = "dribble"
 		atk_name = "CTR"
 		def_name = "DEF"
 		atk = mover.live_control()
 		deff = occupant.live_defense()
-	elif occupant.has_ball:
+	elif not same_team and occupant.has_ball:
 		action = "tackle"
 		verb = "tackle"
 		atk_name = "DEF"
@@ -928,8 +937,9 @@ static func contest_preview(
 		atk = mover.live_defense()
 		deff = occupant.live_control()
 	## Dribble and tackle ties bounce the ball; they are not attacker wins.
+	## Same-team occupancy is always a square fight, even if one holds the ball.
 	var ties_to_atk := false
-	if on_ball or occupant.has_ball:
+	if action in ["dribble", "tackle"]:
 		ties_to_atk = false
 	else:
 		ties_to_atk = attacker_wins_ties(mover, occupant, possession_team)

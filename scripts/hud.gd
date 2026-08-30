@@ -129,17 +129,26 @@ func _hint_for(
 		return model.shot_preview(selected).header
 	if pending_action == "pass" and selected != null and model.can_plan_pass_to_cell(selected, hover_cell):
 		return model.pass_preview(selected, hover_cell).header
-	if pending_action in ["dribble", "tackle", "challenge"] and selected != null and hovered != null:
+	if pending_action in ["dribble", "tackle", "challenge", "move", "sprint"] and selected != null:
 		if hover_cell in model.command_dests(selected, pending_action):
-			var planning_holder := model.planning_carrier()
-			var possession := planning_holder.team if planning_holder != null else -1
-			var contest := MatchRules.contest_preview(
-				selected,
-				hovered,
-				model.planning_has_ball(selected),
-				possession
-			)
-			return "%s  (%d AP)" % [contest.text, model.action_cost_for(selected, pending_action, hover_cell)]
+			var standing: PlayerState = hovered
+			if pending_action in ["move", "sprint"]:
+				standing = model.player_at(hover_cell)
+			if standing != null and standing.id != selected.id:
+				var planning_holder := model.planning_carrier()
+				var possession := planning_holder.team if planning_holder != null else -1
+				var contest := MatchRules.contest_preview(
+					selected,
+					standing,
+					model.planning_has_ball(selected),
+					possession
+				)
+				var prefix := "If they stay: " if pending_action in ["move", "sprint"] else ""
+				return "%s%s  (%d AP)" % [
+					prefix,
+					contest.text,
+					model.action_cost_for(selected, pending_action, hover_cell),
+				]
 	var turn_dest := (
 		selected != null
 		and hover_cell in model.command_dests(selected, "turn")
