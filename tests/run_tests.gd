@@ -50,6 +50,8 @@ func _run() -> void:
 	await _test_vs_ai()
 	_test_clone()
 	_test_ai_self_play()
+	_test_ai_sequence_search()
+	_test_ai_plan_vs_plan()
 	await _test_ai_vs_ai()
 	if _failed == 0:
 		print("ALL TESTS PASSED")
@@ -3922,6 +3924,327 @@ func _test_ai_self_play() -> void:
 	_assert(seeded_a.get("carrier_id") == seeded_b.get("carrier_id"), "seeded play_match repeats carrier")
 	_assert(seeded_a.get("ball_pos") == seeded_b.get("ball_pos"), "seeded play_match repeats ball pos")
 	_assert(seeded_a.get("turn_index") == seeded_b.get("turn_index"), "seeded play_match repeats turn index")
+
+
+func _test_ai_sequence_search() -> void:
+	print("-- ai sequence search")
+	var coach := AiCoach.new()
+	var kick := MatchModel.new()
+	kick.setup_kickoff()
+	var st: PlayerState = kick.player_at(MatchRules.CENTER_SPOT)
+	_assert(st != null, "kickoff striker exists for sequence search")
+	var command_ids := {}
+	for cmd in kick.commands_for(st):
+		command_ids[str(cmd.get("id", ""))] = true
+	_assert(command_ids.has("done"), "commands_for still lists done")
+	var candidates: Array[Dictionary] = coach._candidate_actions(kick, st, {})
+	_assert(not candidates.is_empty(), "beam candidates are non-empty at kickoff")
+	for action in candidates:
+		var kind := str(action.get("id", ""))
+		_assert(kind != "done", "beam does not expand planning-only done")
+		_assert(command_ids.has(kind), "every candidate id comes from commands_for")
+		_assert(not kick.action_for_command(st, kind, action.get("dest", st.pos)).is_empty(), "candidates are legal commands")
+
+	var unknown := coach._score(kick, st, {id = "lob", dest = st.pos + Vector2i(2, 0)}, {})
+	_assert(unknown > 0.4, "unknown forward action scores above the keep threshold")
+	var unknown_back := coach._score(kick, st, {id = "lob", dest = st.pos + Vector2i(-2, 0)}, {})
+	_assert(unknown > unknown_back, "generic score prefers a forward unknown action")
+
+	kick.current_team = MatchRules.Team.HOME
+	AiCoach.fill_plans(kick)
+	_assert_side_caps(kick, MatchRules.Team.HOME, "sequence aether kickoff")
+	_assert(kick.plans_of(st.id).size() >= 2, "carrier queues a multi-action sequence at kickoff")
+	_assert(
+		kick.ap_spent(st.id) >= 2,
+		"carrier spends more than a single 1-AP action at kickoff"
+	)
+
+	var turn_model := MatchModel.new()
+	turn_model.setup_kickoff()
+	var turn_st: PlayerState = turn_model.player_at(MatchRules.CENTER_SPOT)
+	turn_st.facing = Vector2i(-1, 0)
+	_park_away_field(turn_model)
+	_park_home_field(turn_model, turn_st.id)
+	turn_model.current_team = MatchRules.Team.HOME
+	AiCoach.fill_plans(turn_model)
+	var turned_forward := false
+	var from_x := MatchRules.CENTER_SPOT.x
+	for plan in turn_model.plans_of(turn_st.id):
+		var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+		if dest.x > from_x:
+			turned_forward = true
+		if str(plan.get("action", "")) == "turn":
+			var face := MatchRules.step_direction(MatchRules.CENTER_SPOT, dest)
+			if face.x > 0:
+				turned_forward = true
+	_assert(
+		turned_forward or turn_model.planning_pos(turn_st).x > from_x,
+		"wrong-way carrier turns or walks toward the opponent goal"
+	)
+
+	var feed := MatchModel.new()
+	feed.setup_kickoff()
+	var passer: PlayerState = feed.player_at(MatchRules.CENTER_SPOT)
+	var runner: PlayerState = feed.player_at(_spot(0, -1))
+	_assert(runner != null and runner.team == MatchRules.Team.HOME, "kickoff has a partner striker")
+	_park_away_field(feed)
+	_park_home_field(feed, passer.id)
+	passer.pos = Vector2i(20, MatchRules.CENTER_Y)
+	runner.pos = Vector2i(24, MatchRules.CENTER_Y)
+	feed.ball.pos = passer.pos
+	passer.facing = Vector2i(1, 0)
+	runner.facing = Vector2i(1, 0)
+	feed.current_team = MatchRules.Team.HOME
+	_assert(feed.can_plan_pass_to(passer, runner), "partner is in pass range for the setup")
+	var queued_pass: Dictionary = feed.queue_plan(passer.id, {
+		id = "pass",
+		label = "Pass",
+		dest = runner.pos,
+		target_id = runner.id,
+	})
+	_assert(queued_pass.get("ok", false), "pre-queued pass to the runner")
+	_assert(feed.planning_has_ball(runner), "queued pass gives the runner planning possession")
+	AiCoach.fill_plans(feed)
+	_assert_side_caps(feed, MatchRules.Team.HOME, "sequence pass-then-shot")
+	var runner_finishes := false
+	for plan in feed.home_plans:
+		if int(plan.get("player_id", -1)) != runner.id:
+			continue
+		var act := str(plan.get("action", ""))
+		var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+		if act == "shoot" or dest == MatchRules.AWAY_NET:
+			runner_finishes = true
+	_assert(runner_finishes, "runner shoots or walks the ball into the net after a planned pass")
+
+
+func _park_home_field(model: MatchModel, except_id: int = -1) -> void:
+	var park_y := 0
+	for player in model.players:
+		if player.team != MatchRules.Team.HOME or player.role == "GK":
+			continue
+		if player.id == except_id:
+			continue
+		player.pos = Vector2i(0, park_y)
+		park_y += 1
+
+
+func _test_ai_plan_vs_plan() -> void:
+	print("-- ai plan vs plan")
+	var base := MatchModel.new()
+	base.setup_kickoff()
+	base.rng.seed = 2026
+
+	var clean_home := base.clone()
+	clean_home.home_plans.clear()
+	clean_home.away_plans.clear()
+	clean_home.current_team = MatchRules.Team.HOME
+	clean_home.awaiting_other_side = false
+	AiCoach.fill_plans(clean_home)
+	var home_sig := _plan_sig(clean_home.home_plans)
+	_assert_side_caps(clean_home, MatchRules.Team.HOME, "plan-vs-plan aether kickoff")
+	_assert(clean_home.away_plans.is_empty(), "home fill_plans does not queue helix")
+	_assert(clean_home.current_team == MatchRules.Team.HOME, "home fill_plans leaves aether in the chair")
+
+	var poisoned_away := base.clone()
+	poisoned_away.home_plans.clear()
+	poisoned_away.away_plans.clear()
+	poisoned_away.current_team = MatchRules.Team.HOME
+	poisoned_away.awaiting_other_side = false
+	var helix: PlayerState = poisoned_away.player_at(MatchRules.AWAY_KICKOFF)
+	_assert(helix != null and helix.team == MatchRules.Team.AWAY, "helix striker exists to poison away_plans")
+	poisoned_away.away_plans.append({
+		player_id = helix.id,
+		team = MatchRules.Team.AWAY,
+		action = "shoot",
+		dest = MatchRules.HOME_NET,
+		ap_end = 6,
+		ap_cost = 6,
+		label = "Shoot",
+	})
+	poisoned_away.away_plans.append({
+		player_id = helix.id,
+		team = MatchRules.Team.AWAY,
+		action = "tackle",
+		dest = MatchRules.CENTER_SPOT,
+		origin = helix.pos,
+		ap_end = 2,
+		ap_cost = 2,
+		label = "Tackle",
+	})
+	var poisoned_away_sig := _plan_sig(poisoned_away.away_plans)
+	AiCoach.fill_plans(poisoned_away)
+	_assert(
+		_plan_sig(poisoned_away.home_plans) == home_sig,
+		"home fill_plans does not peek at poisoned away_plans"
+	)
+	_assert(
+		_plan_sig(poisoned_away.away_plans) == poisoned_away_sig,
+		"home fill_plans does not rewrite away_plans"
+	)
+
+	var clean_away := base.clone()
+	clean_away.home_plans.clear()
+	clean_away.away_plans.clear()
+	clean_away.current_team = MatchRules.Team.AWAY
+	clean_away.awaiting_other_side = false
+	AiCoach.fill_plans(clean_away)
+	var away_sig := _plan_sig(clean_away.away_plans)
+	_assert_side_caps(clean_away, MatchRules.Team.AWAY, "plan-vs-plan helix kickoff")
+	_assert(clean_away.home_plans.is_empty(), "away fill_plans does not queue aether")
+	_assert(clean_away.current_team == MatchRules.Team.AWAY, "away fill_plans leaves helix as current_team")
+
+	var poisoned_home := base.clone()
+	poisoned_home.home_plans.clear()
+	poisoned_home.away_plans.clear()
+	poisoned_home.current_team = MatchRules.Team.AWAY
+	poisoned_home.awaiting_other_side = false
+	var aether: PlayerState = poisoned_home.player_at(MatchRules.CENTER_SPOT)
+	poisoned_home.home_plans.append({
+		player_id = aether.id,
+		team = MatchRules.Team.HOME,
+		action = "shoot",
+		dest = MatchRules.AWAY_NET,
+		ap_end = 6,
+		ap_cost = 6,
+		label = "Shoot",
+	})
+	poisoned_home.home_plans.append({
+		player_id = aether.id,
+		team = MatchRules.Team.HOME,
+		action = "tackle",
+		dest = MatchRules.AWAY_KICKOFF,
+		origin = aether.pos,
+		ap_end = 2,
+		ap_cost = 2,
+		label = "Tackle",
+	})
+	var poisoned_home_sig := _plan_sig(poisoned_home.home_plans)
+	AiCoach.fill_plans(poisoned_home)
+	_assert(
+		_plan_sig(poisoned_home.away_plans) == away_sig,
+		"away fill_plans does not peek at poisoned home_plans"
+	)
+	_assert(
+		_plan_sig(poisoned_home.home_plans) == poisoned_home_sig,
+		"away fill_plans does not rewrite home_plans"
+	)
+
+	var rng_model := base.clone()
+	rng_model.home_plans.clear()
+	rng_model.away_plans.clear()
+	rng_model.current_team = MatchRules.Team.HOME
+	var rng_state := rng_model.rng.state
+	AiCoach.fill_plans(rng_model)
+	_assert(rng_model.rng.state == rng_state, "search rolls only on clones, not live rng")
+
+	var suicide := MatchModel.new()
+	suicide.setup_kickoff()
+	var carrier: PlayerState = suicide.player_at(MatchRules.CENTER_SPOT)
+	var tackler: PlayerState = null
+	for player in suicide.players:
+		if player.team == MatchRules.Team.AWAY and player.role in ["LCB", "RCB"]:
+			tackler = player
+			break
+	_assert(tackler != null, "suicide fixture has a helix centre back")
+	_park_home_field(suicide, carrier.id)
+	var away_y := 0
+	for player in suicide.players:
+		if player.team != MatchRules.Team.AWAY:
+			continue
+		player.pos = Vector2i(2, away_y)
+		away_y += 1
+	var mates: Array[PlayerState] = []
+	for player in suicide.players:
+		if player.team != MatchRules.Team.HOME or player.id == carrier.id or player.role == "GK":
+			continue
+		mates.append(player)
+		if mates.size() == 2:
+			break
+	_assert(mates.size() == 2, "suicide fixture has two aether blockers")
+	carrier.pos = Vector2i(18, MatchRules.CENTER_Y)
+	carrier.facing = Vector2i(1, 0)
+	suicide.ball.pos = carrier.pos
+	tackler.pos = Vector2i(19, MatchRules.CENTER_Y)
+	tackler.facing = Vector2i(-1, 0)
+	mates[0].pos = Vector2i(19, MatchRules.CENTER_Y - 1)
+	mates[1].pos = Vector2i(19, MatchRules.CENTER_Y + 1)
+	suicide.current_team = MatchRules.Team.HOME
+	suicide.home_plans.clear()
+	suicide.away_plans.clear()
+	suicide.awaiting_other_side = false
+	var seq_only := suicide.clone()
+	seq_only.home_plans.clear()
+	seq_only.away_plans.clear()
+	seq_only.current_team = MatchRules.Team.HOME
+	var coach := AiCoach.new()
+	coach._fill(seq_only)
+	var suicide_dest: Vector2i = tackler.pos
+	var seq_dribbled := false
+	for plan in seq_only.plans_of(carrier.id):
+		var act := str(plan.get("action", ""))
+		var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+		if act in ["dribble", "move"] and dest == suicide_dest:
+			seq_dribbled = true
+	_assert(seq_dribbled, "sequence search alone dribbles onto the adjacent opponent")
+	var them_board := suicide.clone()
+	them_board.home_plans.clear()
+	them_board.away_plans.clear()
+	them_board.current_team = MatchRules.Team.AWAY
+	coach._fill(them_board)
+	var them_tackles := false
+	for plan in them_board.plans_of(tackler.id):
+		if str(plan.get("action", "")) == "tackle" and plan.get("dest", Vector2i.ZERO) == carrier.pos:
+			them_tackles = true
+	_assert(them_tackles, "opponent default sequence includes the tackle")
+	AiCoach.fill_plans(suicide)
+	_assert_side_caps(suicide, MatchRules.Team.HOME, "plan-vs-plan suicide fixture")
+	var still_dribbles := false
+	for plan in suicide.plans_of(carrier.id):
+		var act := str(plan.get("action", ""))
+		var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+		if act == "dribble" and dest == suicide_dest:
+			still_dribbles = true
+		if act == "move" and dest == suicide_dest:
+			still_dribbles = true
+	_assert(not still_dribbles, "plan-vs-plan does not dribble onto the waiting tackler")
+	_assert(suicide.away_plans.is_empty(), "suicide fill does not write helix plans")
+	_assert(suicide.current_team == MatchRules.Team.HOME, "suicide fill leaves aether as current_team")
+
+	var walk := MatchModel.new()
+	walk.setup_kickoff()
+	var st: PlayerState = walk.player_at(MatchRules.CENTER_SPOT)
+	_park_home_field(walk, st.id)
+	var far_y := 0
+	for player in walk.players:
+		if player.team != MatchRules.Team.AWAY:
+			continue
+		player.pos = Vector2i(2, far_y)
+		far_y += 1
+	st.pos = Vector2i(MatchRules.GRID_WIDTH - 1, MatchRules.CENTER_Y)
+	st.facing = Vector2i(1, 0)
+	walk.ball.pos = st.pos
+	walk.current_team = MatchRules.Team.HOME
+	walk.home_plans.clear()
+	walk.away_plans.clear()
+	_assert(walk.player_at(MatchRules.AWAY_NET) == null, "walk-in net is empty")
+	AiCoach.fill_plans(walk)
+	_assert_side_caps(walk, MatchRules.Team.HOME, "plan-vs-plan walk-in")
+	var finishes := false
+	for plan in walk.plans_of(st.id):
+		var act := str(plan.get("action", ""))
+		var dest: Vector2i = plan.get("dest", Vector2i.ZERO)
+		if act == "shoot" or dest == MatchRules.AWAY_NET:
+			finishes = true
+	_assert(finishes, "walk-in or high-xG shot is queued when the opponent portfolio includes empty")
+
+	var seeded_a := _AiSelfPlay.play_match(2, 7777)
+	var seeded_b := _AiSelfPlay.play_match(2, 7777)
+	_assert(seeded_a.get("cycles") == 2 and seeded_b.get("cycles") == 2, "seeded plan-vs-plan play_match runs 2 cycles")
+	_assert(seeded_a.get("home_score") == seeded_b.get("home_score"), "seeded search repeats home score")
+	_assert(seeded_a.get("away_score") == seeded_b.get("away_score"), "seeded search repeats away score")
+	_assert(seeded_a.get("carrier_id") == seeded_b.get("carrier_id"), "seeded search repeats carrier")
+	_assert(seeded_a.get("ball_pos") == seeded_b.get("ball_pos"), "seeded search repeats ball pos")
+	_assert(seeded_a.get("turn_index") == seeded_b.get("turn_index"), "seeded search repeats turn index")
 
 
 func _test_ai_vs_ai() -> void:

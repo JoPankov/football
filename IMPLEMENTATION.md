@@ -42,7 +42,7 @@ scenes/main.tscn
       PlayerState / BallState               data (`in_flight` while a pass/shot travels)
       CombatLog                             text + fog-of-war
       TurnResolver                          cycle phases
-      AiCoach                               greedy one-side planner
+      AiCoach                               sequence search + one-cycle plan-vs-plan
       AiSelfPlay                            independent both-sides fill + play_match
 ```
 
@@ -72,7 +72,7 @@ scenes/main.tscn
 | `scripts/ball_state.gd` | `pos` + `carrier_id` (`-1` = loose); `clone()` |
 | `scripts/formation.gd` | 4-4-2 kickoff coordinates and role stat table |
 | `scripts/combat_log.gd` | Sequential log; plan lines hidden from the other team |
-| `scripts/ai_coach.gd` | Greedy one-side planner: score legal actions, queue up to 3 |
+| `scripts/ai_coach.gd` | Sequence search generates joint-plan candidates; one-cycle plan-vs-plan picks argmax E[V] |
 | `scripts/ai_self_play.gd` | Fill one side; independent both-sides fill from clones; headless `play_match` |
 | `scripts/match_controller.gd` | Scene root: input, highlights, resolve playback, hotseat / vs-AI / watch |
 | `scripts/pitch.gd` | Tile board, cell-snapped pitch markings, nets, highlights, plan arrows, pass lane |
@@ -397,10 +397,10 @@ The clone is not the same RefCounted as the original. Mutating a clone player, q
 
 `scripts/ai_self_play.gd`, `class_name AiSelfPlay`, node-free.
 
-- `fill_side(model)` — `AiCoach.fill_plans` for `model.current_team`. The coach does not peek at the other queue.
+- `fill_side(model)` — `AiCoach.fill_plans` for `model.current_team`. The coach does not peek at the other live queue.
 - `fill_both_independently(live)` — clone the live board twice, clear plans on each copy, set `current_team` to HOME on one and AWAY on the other (`awaiting_other_side = false`), fill each independently, write `home_plans` / `away_plans` onto the live model (and PLAN log lines). One side’s dests cannot influence the other side’s scoring.
 - `resolve_cycle(model)` — `TurnResolver.resolve`. Re-check legality stays in the resolver.
-- `play_match(max_cycles = 40, seed = -1)` — new `MatchModel`, Aether kickoff, optional `rng.seed` after kickoff, then loop fill-both + resolve. Always runs `max_cycles` resolves (a goal reset still counts as a cycle; greedy vs greedy may never score). No scene tree, no HUD, no tweens. Returns `{ home_score, away_score, cycles, seed, terminated = "cycles", carrier_id, ball_pos, turn_index, holder_pos }`. `seed < 0` means “leave the model’s randomized stream”. Dice are real RNG; `scripted_*` still work on clones.
+- `play_match(max_cycles = 40, seed = -1)` — new `MatchModel`, Aether kickoff, optional `rng.seed` after kickoff, then loop fill-both + resolve. Always runs `max_cycles` resolves (a goal reset still counts as a cycle; two sequence-search coaches may never score). No scene tree, no HUD, no tweens. Returns `{ home_score, away_score, cycles, seed, terminated = "cycles", carrier_id, ball_pos, turn_index, holder_pos }`. `seed < 0` means “leave the model’s randomized stream”. Dice are real RNG; `scripted_*` still work on clones.
 
 Do not switch vs-AI over to `play_match`. Vs-AI still preplans Helix on the live board and leaves Aether in the chair.
 
@@ -421,7 +421,7 @@ Flags on the controller, not the model. Do not overload `vs_ai = true` to mean b
 **Vs-AI** — human is always Aether. On each cycle `_begin_vs_ai_cycle` → `_preplan_ai`:
 
 1. `current_team = AWAY`
-2. `AiSelfPlay.fill_side(model)` — greedy, up to 3, avoids stacking dests when it can
+2. `AiSelfPlay.fill_side(model)` — sequence search plus one-cycle plan-vs-plan, up to 3 players, avoids stacking dests when it can
 3. `current_team = HOME`
 
 Helix therefore commits **before** Aether queues, on the current board, without seeing Aether’s plans. That matches simultaneous play. (In hotseat Helix plans second, but also cannot see Aether’s arrows/log.)
@@ -437,7 +437,33 @@ When Aether `end_planning`s, the controller immediately `end_planning`s again (H
 
 After a goal, `setup_kickoff` already ran inside the model. Watch fills **both** sides for that kickoff; it does not use the vs-AI “Helix locked, Aether plans” shortcut. Plan arrows, gold rings, and PLAN log lines use both teams (`CombatLog.VIEWER_ALL`). Action bar / End Turn are hidden. Hint: “Watching AI vs AI — Esc for menu.” Animation speed still applies to resolve playback. `require_end_turn` is irrelevant while watching.
 
-`AiCoach` scoring (rough): shoot ≫ walk-in goal ≫ through-pass with forward gain ≫ tackle ≫ dribble ≫ collect loose ball ≫ move toward ball / forward. Offside passes are heavily penalised. First action of a side uses a very low keep-threshold so the coach always tries to queue at least one thing. Do not change `_score` in a plumbing change.
+`AiCoach.fill_plans(model)` is still the only planner entry (`AiSelfPlay.fill_side` / vs-AI / watch all call it). It **generates** joint plans with the sequence beam, then **chooses** among a handful by playing them against a belief over the opponent’s simultaneous queue. Search is plans vs plans, not a tree of primitive AP moves. It never reads the other side’s live `home_plans` / `away_plans`.
+
+**Generate** (on clones of a snapshot, both plan arrays cleared so leftover live queues cannot leak; `current_team` is us; `awaiting_other_side = false`; already-queued *our* prefix is restored so a pre-queued pass can still feed a shot):
+
+1. For each eligible player, beam remaining-AP sequences (width 6, 8 expansions per node). The first actor is the ball carrier when they can still queue; otherwise the 5 players nearest the ball. Candidates come from `commands_for` / `command_dests` / `action_for_command` so a new action that is wired there is searched without a beam change. Pass dests are pruned to teammates plus a few forward empty squares. `done` is not expanded. A prefix that has already reached the opponent net is not expanded further.
+2. Rank a prefix by summed 1-ply `_score` plus `_prefix_bonus` (ball progress, xG if the actor can shoot, shape / GK stay-home).
+3. Commit the best sequence among players, then search again on the updated queue so a pass can feed the next actor’s shot. Dest clashes among committed sequences are penalised.
+4. Unknown action ids use `_score_generic` (forward gain / toward the ball). Add a `_score` match arm for the new action to play well. If the action relocates the piece, `planning_pos` / `planning_facing` must walk it or later AP is aimed from the old tile.
+
+Π_us (about 4–8 joint plans, duplicates skipped by the set of `(player_id, action, dest, ap_end)`): default sequence fill; 2nd-best first sequence from that same first beam (no second 3-player fill); ban the default first actor by dropping their plans from the default joint plan (full re-fill only if that would leave nothing); cheap “shoot / walk-in now” if the carrier can. Empty is **not** committed for us (Helix in vs-AI must still queue) but **is** in the opponent belief. At most **3** full sequence fills for us. Π_them (2–3): their default sequence fill from the snapshot board and the empty plan. A third variant only if it reuses a fill already ran. At most **2** full sequence fills for them. Opponent belief is generated from the snapshot, never from live plans the other side already queued.
+
+**Choose:** for each π_us, for each π_them, for N=2 dice samples: clone the snapshot, write the two queues (`duplicate(true)` plan dicts), `TurnResolver.resolve` on that clone, add `V(clone, us)`. Score is the average. Tie-break: default sequence fill, then more AP spent, then lower first player_id. Copy the winner onto the **live** model (append plan dicts + PLAN log lines). Live `current_team` stays us. Do not lock / `end_planning` / resolve. Dice use the clone’s RNG (seed+state copied by `clone()`, then `randi()` per extra sample). Do not roll `live.rng`.
+
+**V(s)** after resolve, us-perspective, live positions (not `planning_*`):
+
+- `10000 * (our_score - their_score)`
+- If that resolve awarded a goal (`reset` / score change): return the goal term plus a small kickoff-shape term. Do not search past the kickoff rebuild.
+- `18 * ball_progress` (our attack direction; 0 if they hold it; half if loose, using `ball.pos`)
+- `400 * best_xG_we_could_take_now` (max `shot_preview.goal_chance` among our players who `can_attempt_shot` from live pos with leftover AP 0)
+- `−300 * best_xG_they_could_take_now`
+- `8 * (our_energy_sum - their_energy_sum) / 100`
+- Shape: CBs/GK Chebyshev to `Formation.slots(team, team)` home cells; penalty if GK is out of our net
+- `−40` if two relocating dests in queued π_us shared a cell
+
+Weights are named constants on the coach (`_W_SCORE`, `_W_BALL`, `_W_XG_US`, `_W_XG_THEM`, `_W_ENERGY`, `_W_SHAPE`, `_W_GK_OUT`, `_W_DEST_CLASH`). This is step 2’s hand-written position eval; do not train it. Live stats only; do not parse the combat log. Helpers: `_evaluate_position`, `_rollout`, `_our_candidates` / `_their_belief`. Do not new a Node or add autoloads.
+
+1-ply `_score` (rough): shoot ≫ walk-in goal ≫ through-pass with forward gain (plus receiver xG) ≫ tackle ≫ dribble ≫ collect loose ball ≫ move toward ball / forward. Offside passes are heavily penalised. First sequence of a side uses a very low keep-threshold so the coach always tries to queue at least one thing. Budget: worst case ~5 sequence fills + ~12 resolves per `fill_plans`. Reuse one probe per beam the way `_beam_player` already does.
 
 ---
 
@@ -456,7 +482,7 @@ Almost every public function returns `{ok, action, ...}`. The log formatter and 
 
 Useful flags: `contest_won`, `contest_tied`, `bounced`, `bounce_cell`, `gained_possession`, `lost_possession`, `intercepted`, `goal`, `reset`, `hit`, `saved`, `expects_ball` (on the plan, not the event), `displaced_id` (shove/swap partner), `player_id` / `defender_id` / `receiver_id`. Tackles also carry `angle_deg` / `angle_bonus` / `angle_label`. A steal may set `facing` on the winner’s result so playback does not use the step direction.
 
-If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._apply_plan` + phase lists, `CombatLog.format_result`, controller `_present_result` / highlights, `AiCoach._score`, and tests. `sprint` is a 2-tile facing-only step: queue as one plan, resolve in the movement phase, clash with moves that share its dest.
+If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._apply_plan` + phase lists, `CombatLog.format_result`, controller `_present_result` / highlights, `AiCoach._score`, and tests. Sequence search enumerates `commands_for` automatically; `_score` still needs a case (or it uses `_score_generic`). Relocating actions must be listed in `planning_pos` / `planning_facing`. `sprint` is a 2-tile facing-only step: queue as one plan, resolve in the movement phase, clash with moves that share its dest.
 
 `AiSelfPlay.play_match` returns a different dict (not an action result): `home_score`, `away_score`, `cycles`, `seed`, `terminated` (`"cycles"` when the cap is hit), plus `carrier_id`, `ball_pos`, `turn_index`, `holder_pos` for replay asserts. Keep action keys on apply/queue/resolve results stable.
 
@@ -466,7 +492,7 @@ If you add an action, update: `commands_for`, `command_dests`, `TurnResolver._ap
 
 `tests/run_tests.gd` extends `SceneTree`, `call_deferred("_run")`, `quit(0|1)`.
 
-It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside (including delayed first-touch after a through ball)/shoot (including shot intercepts), full-flight intercepts against live positions (same-wave and earlier-wave steps onto the lane; later-wave arrivals too late), full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan, `MatchModel.clone` isolation, independent both-sides fill, seeded `play_match`, AI vs AI watch.
+It covers rules math, kickoff, contests, dribble/tackle bounce, tackle approach angle, AP waves, pass/intercept/offside (including delayed first-touch after a through ball)/shoot (including shot intercepts), full-flight intercepts against live positions (same-wave and earlier-wave steps onto the lane; later-wave arrivals too late), full plan→resolve sequences (tackle-then-pass cancel, pass-then-move carry, ground-pass collect, arrival tackles, empty end-turn), controller clicks, menu/settings, vs-AI preplan, `MatchModel.clone` isolation, independent both-sides fill, seeded `play_match`, AI vs AI watch, sequence-search candidates / pass-then-shot, plan-vs-plan no-peek / suicide-dribble / empty-belief walk-in.
 
 Controller tests instantiate `main.tscn`, set `animate_moves = false`, and often `queue_free()` the instance. They reach into HUD private fields (`_end_turn`, `_forecast`) — ugly but load-bearing.
 
@@ -488,6 +514,7 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 8. **Fog is a view filter**, not deleted data. `as_text()` with no args still contains PLAN lines.
 9. **`clone()` is a deep copy.** New player/ball RefCounteds, duplicated plans, copied RNG seed+state. Combat log omitted (empty).
 10. **Headless watch does not auto-chain** the next fill+resolve. Graphical watch chains only after `_play_resolve` finishes.
+11. **`AiCoach` does not peek.** Search copies clear both plan arrays; opponent belief is generated from the snapshot board. Poisoned `away_plans` must not change a HOME fill. Generate on clones; write the winner onto live at the end. Never `TurnResolver.resolve` the live model for search.
 
 ---
 
@@ -496,8 +523,8 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 - Fouls, cards, clock, extra time, named set pieces beyond kickoff.
 - Pass inaccuracy other than intercepts (a non-intercepted pass always arrives).
 - Substitutions, stamina recovery, injuries.
-- Network play. Hotseat is same-machine; vs-AI is local greedy Helix vs human Aether; AI vs AI is two greedy coaches with a spectator.
-- A smarter Aether / Helix coach. Watch and self-play use the same greedy `AiCoach` as vs-AI Helix. Vs-AI human is still Aether.
+- Network play. Hotseat is same-machine; vs-AI is local sequence-search Helix vs human Aether; AI vs AI is two copies of that coach with a spectator.
+- A learned position value (stage 3). Step 2 is one-cycle plan-vs-plan with a hand-written `V(s)`. Vs-AI human is still Aether.
 
 ---
 
@@ -510,7 +537,7 @@ When you change a rule, **add or extend a test in the same file**. Prefer `scrip
 | Change when an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` |
 | Change what an action **does** | `MatchModel.apply_*` |
 | Change simultaneous order / clash rules | `TurnResolver` |
-| Change Helix / watch-coach personality | `AiCoach._score` |
+| Change Helix / watch-coach personality | `AiCoach._score` / `_prefix_bonus` / `_evaluate_position` / beam and V constants |
 | Run self-play / watch mode | `ai_self_play.gd` / `match_controller.gd` (`start_ai_vs_ai`, `step_ai_vs_ai_cycle`) |
 | Change click / hotkey / animation | `match_controller.gd` |
 | Change look of the board or pieces | `pitch.gd` / `player_piece.gd` |

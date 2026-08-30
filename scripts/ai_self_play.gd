@@ -2,7 +2,7 @@ class_name AiSelfPlay
 extends RefCounted
 
 ## Node-free both-sides planner and headless match loop.
-## Uses the existing greedy AiCoach independently on clones of one snapshot.
+## Uses the existing AiCoach independently on clones of one snapshot.
 
 const DEFAULT_MAX_CYCLES := 40
 

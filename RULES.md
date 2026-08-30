@@ -58,7 +58,7 @@ Kickoff values by role:
 
 You cannot pick a fourth player.
 
-Hotseat: plan arrows, gold rings, and plan log lines are visible only to the team that queued them — including past cycles. Resolution events (who tackled whom, rolls, and results) are public. Vs AI: you play Aether; Helix is a local greedy coach that commits before you queue, without seeing your plans. Helix arrows stay hidden. **AI vs AI** is watch-only: two copies of that same greedy coach play both sides under the same simultaneous rules. You do not queue. Both teams’ arrows, gold rings, and plan lines are visible. Pieces still animate when the cycle resolves. Esc opens the menu. New Game restarts a watch match at 0–0.
+Hotseat: plan arrows, gold rings, and plan log lines are visible only to the team that queued them — including past cycles. Resolution events (who tackled whom, rolls, and results) are public. Vs AI: you play Aether; Helix is a local coach that plans full action sequences for up to three players and commits before you queue, without seeing your plans. It still considers what you might do this cycle. Helix arrows stay hidden. **AI vs AI** is watch-only: two copies of that same coach play both sides under the same simultaneous rules. You do not queue. Both teams’ arrows, gold rings, and plan lines are visible. Pieces still animate when the cycle resolves. Esc opens the menu. New Game restarts a watch match at 0–0.
 
 Highlights (after you pick an action):
 

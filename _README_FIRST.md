@@ -32,7 +32,7 @@ A feature is not done when the code runs. The same change must include a test an
 
 1. Edit the layer that owns the behaviour ([Where to edit, by job](#where-to-edit-by-job)). Keep legality in the model, dice math in `MatchRules`, cycle order in `TurnResolver`.
 2. Add or extend a test in `tests/run_tests.gd` in the same change. Prefer `scripted_*` flags on `MatchModel` over seeding RNG.
-3. Run the headless suite. If you add an **action**, also update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, and `AiCoach._score`. `done` is planning-only: skip it in the resolver.
+3. Run the headless suite. If you add an **action**, also update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, and `AiCoach._score`. Sequence search enumerates `commands_for` automatically; a `_score` case is still required for the new action to play well (otherwise it uses the generic forward/ball fallback). If the action relocates the piece, `planning_pos` / `planning_facing` must walk it or later AP in the beam will be aimed from the old tile. `done` is planning-only: skip it in the resolver.
 
 ### Docs (same change, not a follow-up)
 
@@ -82,20 +82,20 @@ A **turn-based, simultaneous-cycle, 11v11 grid football** match with a sci-fi sk
 Two sides:
 
 - **Aether** — home, cyan, attacks **+x** (left → right). Human plays Aether in hotseat and vs-AI.
-- **Helix** — away, magenta, attacks **−x**. A second hotseat player, or a local greedy `AiCoach`.
+- **Helix** — away, magenta, attacks **−x**. A second hotseat player, or a local `AiCoach` (sequence search plus one-cycle plan-vs-plan).
 
 Pitch: **26×17** tiles plus **two extra goal tiles** outside the rectangle: Aether net `(-1, 8)`, Helix net `(26, 8)`. Keepers start in the net. Distance is **Chebyshev** (`max(|dx|, |dy|)`). Facing is one of the 8 directions.
 
 Each cycle:
 
 1. Aether **queues** up to **3 players**, **6 action points** each. Nothing on the board moves.
-2. Helix does the same (in vs-AI, Helix is pre-planned *before* Aether queues, still without seeing Aether’s plans). Watch mode (`NEW AI vs AI`) fills both sides from clones of the same board; the human never queues.
+2. Helix does the same (in vs-AI, Helix is pre-planned *before* Aether queues, still without seeing Aether’s plans — it considers what Aether might do this cycle, not the live queue). Watch mode (`NEW AI vs AI`) fills both sides from clones of the same board; the human never queues.
 3. `TurnResolver` applies both queues in **six AP waves**. An action plays in the wave equal to the cumulative AP spent when it finishes: a 2-AP first step is wave 2, a later 2-AP step on the same player is wave 4, a 3-AP first step is wave 3. Empty waves do nothing. Inside a wave: turns, tackles, pass/shot **launch**, dribbles, square fights, destination clashes, moves/sprints/swaps, then the ball flies the **whole remaining path** and intercepts against live positions. Straight steps cost 2 AP, diagonal 3 AP. Sprint is 2 tiles ahead of facing: 2 AP / 3 energy straight, 3 AP / 5 energy diagonally (occupied landing is legal and contests if they stayed). Dribble, tackle, and square fight cost 5 energy. A turn costs 1 AP up to 90° and 2 AP for 135°/180°. A shot spends leftover AP for +5% ACC each and ends that player’s turn. A tackle or dribble that rolls a **numeric tie** bounces the ball to a random cell of the 3×3 around it (including staying put). Tackle success is DEF vs the carrier’s CTR after an approach-angle bonus vs their facing (front ×1, 45° ×1.25, side ×1.5, 135° ×1.75, back ×2). A player who steals with a tackle keeps their tile, takes the ball, and then faces away from the old carrier.
 4. Repeat. A goal rebuilds kickoff; the conceding side has the ball and plans first. Helix’s restart is the 180° of Aether’s 4-4-2. Vs-AI still preplans Helix invisibly and always leaves Aether in the chair — including after a Helix kickoff.
 
 The UI only **queues**. Resolution is the only place pieces, the ball, energy, and score change in a real match. Tests often call `MatchModel.apply_*` directly and skip the queue — that is intentional.
 
-There is no clock, no fouls, no substitutions, no pass inaccuracy other than intercepts. Aether AI exists only for watch and self-play (the same greedy `AiCoach` as Helix). Vs-AI still puts a human on Aether.
+There is no clock, no fouls, no substitutions, no pass inaccuracy other than intercepts. Aether AI exists only for watch and self-play (the same `AiCoach` as Helix). Vs-AI still puts a human on Aether.
 
 ---
 
@@ -112,7 +112,7 @@ scenes/main.tscn
       PlayerState / BallState               data (`in_flight` while a pass/shot travels)
       CombatLog                             text + fog-of-war
       TurnResolver                          cycle phases
-      AiCoach                               greedy one-side planner
+      AiCoach                               sequence search + one-cycle plan-vs-plan
       AiSelfPlay                            clone both-sides fill + play_match
 ```
 
@@ -170,7 +170,7 @@ When in doubt, read `MatchRules` and the tests.
 | `scripts/formation.gd` | 4-4-2 slots and role stat table |
 | `scripts/player_state.gd` / `ball_state.gd` | Data. Both have `clone()`. Ball: `carrier_id == -1` means loose |
 | `scripts/combat_log.gd` | Sequential log; plan lines hidden from the other team |
-| `scripts/ai_coach.gd` | Greedy one-side planner (Helix in vs-AI; both sides in watch/self-play) |
+| `scripts/ai_coach.gd` | Sequence search generates joint plans; one-cycle plan-vs-plan picks among them (Helix in vs-AI; both sides in watch/self-play). Search does not peek; clone before resolve. |
 | `scripts/ai_self_play.gd` | Independent both-sides fill from clones; headless `play_match` |
 | `scripts/match_controller.gd` | Scene root. Hotseat / vs-AI / AI vs AI watch |
 | `scripts/pitch.gd` / `player_piece.gd` / `ball_piece.gd` | Drawing |
@@ -192,9 +192,10 @@ HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markin
 6. **Pass range and move range are different.** Move = 1. Pass = Euclidean radius 5.
 7. **Dice use live stats** (`live_accuracy()` etc.).
 8. **Fog is a view filter**, not deleted data. `CombatLog.as_text()` with no args still contains PLAN lines.
-9. **Almost every public function returns `{ok, action, ...}`.** The log formatter and the tween code switch on `action`. Keep those keys stable. If you add an action, update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, `AiCoach._score`, and tests. `done` is planning-only: skip it in the resolver. `sprint` is one 2-tile plan, not two `move` steps.
+9. **Almost every public function returns `{ok, action, ...}`.** The log formatter and the tween code switch on `action`. Keep those keys stable. If you add an action, update `commands_for`, `command_dests`, `TurnResolver` phases, `CombatLog.format_result`, controller highlights / playback, `AiCoach._score`, and tests. Sequence search picks up new `commands_for` ids without a beam change; `_score` still needs a case (or it uses the generic fallback). If the action relocates, `planning_pos` / `planning_facing` must include it. `done` is planning-only: skip it in the resolver. `sprint` is one 2-tile plan, not two `move` steps.
 10. **`MatchModel.clone()` is a deep copy.** Players, ball, plans, RNG seed+state, and scripted flags are independent. Combat log starts empty on the clone. Mutating the clone must not change the original.
 11. **Headless watch must not auto-chain.** `animate_moves == false` runs at most one fill+resolve when tests call `step_ai_vs_ai_cycle()`. Graphical watch chains the next cycle only after `_play_resolve` finishes.
+12. **`AiCoach` does not peek.** Search copies clear both plan arrays. Opponent belief is generated from the snapshot board, not the other live queue. Generate on clones; write the winner onto live at the end. Never resolve the live model for search.
 
 ---
 
@@ -207,14 +208,14 @@ HUD and menu widgets are created in `_build()`, not in the `.tscn`. Pitch markin
 | When an action is legal to **queue** | `MatchModel.command_dests` / `can_plan_*` / `can_queue` |
 | What an action **does** | `MatchModel.apply_*` |
 | Simultaneous order / clash rules | `TurnResolver` |
-| Helix / watch-coach personality | `AiCoach._score` |
+| Helix / watch-coach personality | `AiCoach._score` / `_prefix_bonus` / `_evaluate_position` / beam and V constants |
 | Run self-play / watch mode | `ai_self_play.gd` / `match_controller.gd` (`start_ai_vs_ai`, `step_ai_vs_ai_cycle`) |
 | Click / hotkey / animation | `match_controller.gd` |
 | Board or piece look | `pitch.gd` / `player_piece.gd` |
 | HUD chrome | `hud.gd` `_build*` |
 | Persist a new option | `GameSettings` + `GameMenu` options panel |
 
-Do not pretend fouls, a clock, named set pieces beyond kickoff, substitutions, injuries, stamina recovery, or network play exist. Do not make `AiCoach` smarter in a plumbing change. Vs-AI is still human Aether + greedy Helix; watch/self-play is two greedy coaches.
+Do not pretend fouls, a clock, named set pieces beyond kickoff, substitutions, injuries, stamina recovery, or network play exist. Vs-AI is human Aether + Helix (sequence search plus one-cycle plan-vs-plan); watch/self-play is two copies of the same coach.
 
 ---
 
